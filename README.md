@@ -1,6 +1,6 @@
 # AI Companion / AI 知己
 
-开源 AI 陪伴产品。多机器人并行，每个机器人有独立人格和记忆体系。
+开源 AI 陪伴产品，支持 macOS / Windows 双平台。
 
 ## 功能特性
 
@@ -11,66 +11,90 @@
 - 性格推断拒绝（非词表过滤，基于性格推理）
 - 渐进式性格进化
 - Skill / MCP 扩展（图片 / 语音 / 视频）
-- 支持飞书 / 微信 / Telegram 多渠道接入
+- 支持飞书机器人接入
 - 支持自定义模型（MiniMax / OpenAI / Claude / Ollama）
 
-## 快速开始
+## 安装
 
-### 1. 安装依赖
+### macOS / Linux
 
 ```bash
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
+```
+
+或手动安装：
+
+```bash
+git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
+cd ai-girl-friend
 pip install -r requirements.txt
 ```
 
-### 2. 配置
+### Windows
 
-```bash
-cp config/bots.yaml.example config/bots.yaml
-cp config/models.yaml.example config/models.yaml
-# 编辑配置文件，填入 API Key
+```powershell
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 | iex
 ```
 
-### 3. 运行
+## 配置
 
 ```bash
-python src/main.py
+python -m ai_companion setup
 ```
+
+按向导提示配置 API Key、选择人格模板、配置飞书机器人。
+
+## 启动
+
+```bash
+python -m ai_companion start
+```
+
+## 命令行工具
+
+```bash
+python -m ai_companion start              # 启动
+python -m ai_companion setup             # 配置向导
+python -m ai_companion status             # 查看状态
+python -m ai_companion bot list           # 列出所有 Bot
+python -m ai_companion bot add --name xxx # 添加 Bot
+python -m ai_companion model test         # 测试模型连接
+```
+
+## 默认人格
+
+| ID | 名称 | 性格 | 简介 |
+|----|------|------|------|
+| suqing | 苏晴 | 外冷内热/傲娇 | 26岁自由插画师，嘴硬心软 |
+| aiyue | 阿月 | 活泼开朗/直接 | 22岁音乐学院学生，有点粘人 |
+
+## 自定义人格
+
+参考 `data/bots/_template/persona/` 目录下的模板创建新人格。
 
 ## 项目结构
 
 ```
 ai-companion/
-├── config/              # 配置文件
-├── data/bots/           # 各 Bot 的数据和人格
-│   └── {bot_id}/
-│       └── persona/    # 人格文件
-├── src/
-│   ├── main.py         # 入口
-│   ├── config/         # 配置加载
-│   ├── model/          # 模型适配
-│   ├── persona/        # 人格引擎
-│   ├── bot/            # Bot 实例和管理
-│   ├── memory/         # 记忆引擎
-│   ├── engine/         # 核心引擎（拒绝/主动/进化）
-│   ├── skill/          # Skill 调度
-│   └── cli/            # CLI 适配器
+├── ai_companion/           # 主包
+│   ├── __main__.py         # CLI 入口
+│   ├── main.py             # 启动逻辑
+│   ├── setup.py            # 配置向导
+│   ├── config/             # 配置加载
+│   ├── model/              # 模型适配
+│   ├── persona/            # 人格引擎
+│   ├── bot/                # Bot 管理
+│   ├── memory/             # 记忆引擎
+│   ├── engine/             # 核心引擎
+│   ├── skill/              # Skill 调度
+│   ├── cli/                # CLI 适配器
+│   └── platform/           # 平台适配
+├── config/                 # 配置文件
+├── data/bots/              # 人格和数据
+├── scripts/                # 安装脚本
+├── tests/                  # 测试
 └── requirements.txt
 ```
-
-## 开发阶段
-
-- Phase 1: 核心骨架 + CLI + MiniMax
-- Phase 2: 记忆体系
-- Phase 3: 性格拒绝
-- Phase 4: 主动唤醒
-- Phase 5: 多媒体 Skill
-- Phase 6: 飞书多 Bot
-- Phase 7: Evolution + 产品化
-
-## 默认人格
-
-- **苏晴**：外冷内热的插画师少女，傲娇，嘴硬心软
-- **阿月**：活泼开朗的音乐学院学生，直接，有点粘人
 
 ## License
 

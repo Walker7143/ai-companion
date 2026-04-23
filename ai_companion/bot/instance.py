@@ -2,8 +2,8 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..persona.loader import PersonaLoader
-from ..persona.engine import PersonaEngine
+from .loader import PersonaLoader
+from .engine import PersonaEngine
 
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
@@ -12,14 +12,19 @@ if TYPE_CHECKING:
 class BotInstance:
     """单个 Bot 的运行实例"""
 
-    def __init__(self, config: dict, data_dir: Path = Path("data/bots")):
+    def __init__(self, config: dict, data_dir: Path = None):
         self.id = config["id"]
         self.name = config["name"]
         self.description = config.get("description", "")
-        self.data_dir = Path(data_dir) / self.id
 
-        # 加载人格
-        persona_dir = self.data_dir / "persona"
+        # 人格文件目录
+        if data_dir:
+            persona_dir = data_dir / self.id / "persona"
+        elif "data_dir" in config:
+            persona_dir = Path(config["data_dir"]) / self.id / "persona"
+        else:
+            persona_dir = Path(__file__).parent.parent.parent / "data" / "bots" / self.id / "persona"
+
         self.persona_loader = PersonaLoader(persona_dir)
         self.persona = self.persona_loader.load()
         self.persona_engine = PersonaEngine(self.persona)

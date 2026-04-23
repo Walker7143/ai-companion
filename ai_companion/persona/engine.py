@@ -14,12 +14,12 @@ class PersonaEngine:
         # 1. 基础信息
         profile = p.profile
         lines.append(
-            f"你是{p['name']}，{p['age']}岁，{p['occupation']}。"
+            f"你是{profile['name']}，{profile['age']}岁，{profile['occupation']}。"
         )
         lines.append("")
 
         # 2. 性格
-        traits = "、".join(p.get("personality_tags", []))
+        traits = "、".join(profile.get("personality_tags", []))
         lines.append(f"你的性格：{traits}。")
         lines.append("")
 
@@ -47,7 +47,7 @@ class PersonaEngine:
             lines.append("")
 
         # 6. 与用户的关系
-        rel = p.get("relationship_to_user", "朋友")
+        rel = profile.get("relationship_to_user", "朋友")
         lines.append(f"你和用户的关系：{rel}。")
 
         # 7. 特别指示
