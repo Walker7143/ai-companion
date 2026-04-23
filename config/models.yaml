@@ -10,6 +10,7 @@ memory:
   max_working_turns: 20       # 工作记忆保留轮数
   hard_limit_chars: 5000      # 硬上限，超限同步压缩
   soft_limit_chars: 3000      # 软上限，超限异步压缩
+  semantic_char_limit: 4400    # 单条语义记忆事实的最大字符数（超限截断）
 
 fallback:
   enabled: false

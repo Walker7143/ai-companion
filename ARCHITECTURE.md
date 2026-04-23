@@ -187,40 +187,54 @@ python -m ai_companion uninstall
 
 ---
 
-## 三、项目结构（更新后）
+## 三、项目结构
 
 ```
-ai-companion/
-├── src/
-│   ├── __main__.py         # 入口：python -m ai_companion
+ai-companion/              # 项目根目录
+├── ai_companion/          # 主包（pip install -e . 安装）
 │   ├── __init__.py
-│   ├── main.py             # CLI 主命令
-│   ├── setup.py            # 配置向导
-│   ├── config/             # 配置加载
-│   ├── model/              # 模型适配
-│   ├── persona/            # 人格引擎
-│   ├── bot/                # Bot 实例和管理
-│   ├── memory/              # 记忆引擎
-│   ├── engine/              # 核心引擎
-│   ├── skill/              # Skill 调度
-│   └── platform/           # 平台适配
-│       ├── __init__.py
-│       ├── cli.py          # CLI 适配器
-│       ├── feishu.py       # 飞书适配器
-│       └── wechat.py       # 微信适配器
-├── scripts/
-│   ├── install.sh          # macOS/Linux 安装脚本
-│   └── install.ps1         # Windows 安装脚本
+│   ├── __main__.py         # 入口：python -m ai_companion
+│   ├── main.py             # 启动逻辑
+│   ├── setup.py            # 配置向导（TODO）
+│   ├── config/
+│   │   └── loader.py       # 配置加载
+│   ├── model/
+│   │   └── minimax_adapter.py  # MiniMax 模型适配器
+│   ├── persona/
+│   │   ├── loader.py       # 人格文件加载
+│   │   └── engine.py        # System Prompt 构建
+│   ├── bot/
+│   │   ├── instance.py      # Bot 实例（含记忆引擎集成）
+│   │   ├── manager.py       # Bot 管理器
+│   │   └── cli.py           # CLI 入口
+│   ├── memory/
+│   │   ├── engine.py        # 三层记忆引擎
+│   │   └── stores/
+│   │       ├── working.py   # 工作记忆（SQLite）
+│   │       ├── episodic.py   # 情景记忆（SQLite + jieba 分词）
+│   │       └── semantic.py   # 语义记忆（SQLite）
+│   ├── engine/              # 核心引擎（预留）
+│   ├── skill/               # Skill 调度（预留）
+│   ├── cli/
+│   │   └── adapter.py       # CLI 交互适配器（/new /memory /forget）
+│   └── platform/            # 平台适配（预留：飞书/微信）
 ├── config/
-│   ├── bots.yaml.example
-│   ├── models.yaml.example
-│   └── feishu.yaml.example
-├── data/bots/              # 人格和数据
-├── tests/                  # 测试
+│   ├── bots.yaml            # Bot 列表配置
+│   ├── models.yaml          # 模型配置
+│   └── models.yaml.example  # 模型配置示例
+├── data/bots/               # 人格和数据（per bot）
+│   ├── suqing/
+│   │   └── persona/         # 傲娇插画师人格文件
+│   └── aiyue/
+│       └── persona/         # 活泼音乐生人格文件
+├── scripts/
+│   ├── install.sh           # macOS/Linux 安装脚本
+│   ├── install.ps1          # Windows 安装脚本
+│   └── setup-embeddings.sh  # sentence-transformers 安装（可选）
+├── tests/                   # 测试（TODO）
 ├── requirements.txt
-├── setup.py                # pip install 入口
+├── setup.py
 └── README.md
-```
 
 ---
 
@@ -273,13 +287,18 @@ data/bots/{bot_id}/persona/
 
 ### 5.2 Memory Engine
 
-三层记忆：
+三层记忆（已实现）：
 
 ```
-L1: Working Memory  — 内存中，当前对话窗口
-L2: Episodic Memory — Chroma 向量存储
-L3: Semantic Memory — SQLite 结构化存储
+L1: Working Memory  — SQLite，当前会话原始消息 + 摘要压缩
+L2: Episodic Memory — SQLite + jieba 分词，中文关键词精确召回
+L3: Semantic Memory — SQLite，结构化用户事实画像
 ```
+
+**关键设计：**
+- 上下文超限自动压缩（硬上限同步压缩，软上限后台异步压缩）
+- `embedding: "none"` 时降级为 SQLite 关键词匹配（无需额外依赖）
+- `embedding: "local"` 时启用 sentence-transformers 向量召回（可选）
 
 ### 5.3 Model Adapter
 

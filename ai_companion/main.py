@@ -11,11 +11,16 @@ from .cli.adapter import CLIAdapter
 
 
 def get_data_dir() -> Path:
-    """获取用户数据目录，跨平台兼容"""
+    """获取 Bot 数据根目录，跨平台兼容"""
+    # 优先使用项目根目录下的 data/bots 目录（便于开发调试）
+    project_data = Path(__file__).parent.parent.parent / "data" / "bots"
+    if project_data.exists():
+        return project_data
+    # 其次用户目录
     if sys.platform == "win32":
-        return Path.home() / ".ai-companion"
+        return Path.home() / ".ai-companion" / "bots"
     else:
-        return Path.home() / "ai-companion"
+        return Path.home() / "ai-companion" / "bots"
 
 
 async def main(bot_filter: str = None):
@@ -53,6 +58,9 @@ async def main(bot_filter: str = None):
     # 初始化 Bot 管理器
     bot_manager = BotManager()
 
+    # 加载 memory 配置
+    memory_config = config.models.get("memory", {})
+
     # 加载所有启用的 Bot
     data_dir = get_data_dir()
     for bot_config in config.get_enabled_bots():
@@ -60,8 +68,8 @@ async def main(bot_filter: str = None):
             continue
 
         bot_config = {**bot_config, "data_dir": str(data_dir)}
-        bot = BotInstance(bot_config)
-        bot.set_model(model)
+        bot = BotInstance(bot_config, model=model, memory_config=memory_config)
+        await bot.init()
         bot_manager.register(bot)
         print(f"✓ 加载 Bot: {bot.name}")
 

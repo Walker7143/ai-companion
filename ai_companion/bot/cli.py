@@ -16,7 +16,7 @@ def handle_bot_command(command, args):
 
 
 def list_bots():
-    from src.config.loader import Config
+    from ai_companion.config.loader import Config
 
     config = Config()
     bots = config.get_enabled_bots()

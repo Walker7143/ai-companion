@@ -10,6 +10,7 @@ class Persona:
     backstory: dict
     values: dict
     speaking_style: dict
+    persona_dir: Path = None  # 用于 PersonaEngine 动态读取最新文件
 
 
 class PersonaLoader:
@@ -24,6 +25,7 @@ class PersonaLoader:
             backstory=self._load_json("backstory.json"),
             values=self._load_json("values.json"),
             speaking_style=self._load_json("speaking_style.json"),
+            persona_dir=self.dir,
         )
 
     def _load_json(self, filename: str) -> dict:

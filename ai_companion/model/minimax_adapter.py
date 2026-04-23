@@ -33,7 +33,7 @@ class MiniMaxAdapter:
             "model": self.model,
             "messages": full_messages,
             "temperature": kwargs.get("temperature", 0.8),
-            "max_tokens": kwargs.get("max_tokens", 2048),
+            "max_tokens": kwargs.get("max_tokens", 1024),
         }
 
         async with aiohttp.ClientSession() as session:
@@ -42,7 +42,14 @@ class MiniMaxAdapter:
                     text = await resp.text()
                     raise RuntimeError(f"MiniMax API error {resp.status}: {text}")
                 data = await resp.json()
-                return data["choices"][0]["message"]["content"]
+                choice = data["choices"][0]["message"]
+                # MiniMax-M2.7:
+                # content = 实际回复（发给用户的话）
+                # reasoning_content = 内部推理过程（角色内心独白等）
+                # 优先用 content，reasoning_content 仅在 content 为空时降级使用
+                ct = choice.get("content") or ""
+                rc = choice.get("reasoning_content") or ""
+                return ct if ct.strip() else rc
 
     async def embeddings(self, texts: list[str]) -> list[list[float]]:
         """调用 MiniMax embeddings API"""
