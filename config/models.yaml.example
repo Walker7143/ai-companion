@@ -1,0 +1,7 @@
+minimax:
+  api_key: "${MINIMAX_API_KEY}"
+  base_url: "https://api.minimax.chat/v1"
+  model: "MiniMax-m2.7"
+
+fallback:
+  enabled: false
