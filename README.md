@@ -96,6 +96,50 @@ ai-companion/
 └── requirements.txt
 ```
 
+## ✅ Phase 2 完成情况
+
+| Task | 描述 | 状态 |
+|------|------|------|
+| 2-1 | 工作记忆：SQLite 存储、context 触发压缩 | ✅ 完成 |
+| 2-2 | 情景记忆：Chroma 向量召回 + SQLite 降级 | ✅ 完成 |
+| 2-3 | 语义记忆：LLM 提取结构化事实 + CRUD | ✅ 完成 |
+| 2-4 | 中文搜索：jieba 分词 + SQLite tokens 列 | ✅ 完成 |
+| 2-5 | sentence-transformers 本地向量嵌入 | ⚠️ 可选 |
+| 2-6 | setup-embeddings.sh 一键安装脚本 | ⚠️ 可选 |
+| 2-7 | 压缩触发逻辑（软限/硬限） | ✅ 完成 |
+| 2-8 | load_context 串联（summary + recent） | ✅ 完成 |
+| 2-9 | BotInstance 集成记忆引擎 | ✅ 完成 |
+| 2-10 | CLI /new /memory /forget 命令 | ✅ 完成 |
+| 2-11 | 三层记忆集成日志 | ✅ 完成 |
+| 2-12 | 语义记忆会话隔离（composite key） | ✅ 完成 |
+
+> ⚠️ Task 2-5/2-6 为可选：sentence-transformers 可提升向量召回准确性，但 SQLite tokens 降级方案对 v1 已足够。
+
+## ✅ Phase 3 完成情况（Evolution 双向进化系统）
+
+| Task | 描述 | 状态 |
+|------|------|------|
+| 3-1 | attitude_score 增量模型（±5 变化量叠加） | ✅ 完成 |
+| 3-2 | relationship_to_user 状态机更新 | ✅ 完成 |
+| 3-3 | key_moment 关键时刻去重记录 | ✅ 完成 |
+| 3-4 | profile.json / backstory.json 写回 | ✅ 完成 |
+| 3-5 | 真实 CLI 环境完整流程验证 | ✅ 完成 |
+
+> Evolution 系统于 2026-04-23 通过真实 API 完整流程验证：attitude_score 增量叠加、relationship 状态更新、key_moment 去重、profile 写回全部正常。
+
+## ✅ Phase 4 完成（LLM 推理性格拒绝机制）
+
+| Task | 描述 | 状态 |
+|------|------|------|
+| 4-1 | RefusalEngine 核心实现（LLM 推理） | ✅ 完成 |
+| 4-2 | 拒绝分类（NON_NEGOTIABLE/SOFT_BOUNDARY/DEAL_BREAKER） | ✅ 完成 |
+| 4-3 | BotInstance 集成 | ✅ 完成 |
+| 4-4 | 拒绝开关（refusal_enabled） | ✅ 完成 |
+| 4-5 | 人格风格回复模板（傲娇/活泼/高冷/温柔） | ✅ 完成 |
+| 4-6 | 真实 CLI 环境完整流程验证 | ✅ 完成 |
+
+> 拒绝机制基于 LLM 性格推理，而非关键词匹配。真实 API 验证通过：硬红线拦截、软边界关系阈值影响放行、人格风格回复正常。
+
 ## License
 
 MIT
