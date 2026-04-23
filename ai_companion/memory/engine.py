@@ -81,7 +81,11 @@ class MemoryEngine:
         embedding_model = emb_cfg.get("embedding_model", "all-MiniLM-L6-v2")
         self.semantic_char_limit = emb_cfg.get("semantic_char_limit", 4400)
 
-        self.working = WorkingMemoryStore(self.memory_dir / "working.db")
+        self.working = WorkingMemoryStore(
+            self.memory_dir / "working.db",
+            soft_limit=self.soft_limit,
+            hard_limit=self.hard_limit,
+        )
         self.episodic = EpisodicStore(
             self.memory_dir / "episodic.db",
             self.memory_dir / "chroma",

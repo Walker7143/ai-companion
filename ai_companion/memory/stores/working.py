@@ -37,8 +37,10 @@ class WorkingMemoryStore:
     # 硬上限（超过此值强制压缩）
     HARD_LIMIT_CHARS = 5000
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, soft_limit: int = 3000, hard_limit: int = 5000):
         self.db_path = db_path
+        self.soft_limit = soft_limit
+        self.hard_limit = hard_limit
         self.current_session: Optional[str] = None
         # 每会话压缩计数，超过2次建议新起会话
         self._compression_counts: dict[str, int] = {}
@@ -205,14 +207,14 @@ class WorkingMemoryStore:
                 "total_chars": total_chars,
                 "compression_count": compression_count,
             }
-        if total_chars > self.HARD_LIMIT_CHARS:
+        if total_chars > self.hard_limit:
             return {
                 "ok": False,
                 "reason": "会话内容过长，可能丢失早期上下文，建议 /new 开始新会话",
                 "total_chars": total_chars,
                 "compression_count": compression_count,
             }
-        if compression_count >= 1 or total_chars > self.SOFT_LIMIT_CHARS:
+        if compression_count >= 1 or total_chars > self.soft_limit:
             return {
                 "ok": True,
                 "reason": "会话较长，继续聊可能触发压缩，建议适时 /new 开新会话",

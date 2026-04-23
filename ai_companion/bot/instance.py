@@ -106,12 +106,12 @@ class BotInstance:
 
         if refusal_response.refuse:
             # 拒绝时直接返回，不调用 LLM
-            print(f"[Refusal] 拒绝请求: {refusal_response.reason} | {refusal_response.category.value}")
+            logger.info(f"[Refusal] 拒绝请求: {refusal_response.reason} | {refusal_response.category.value}")
             return refusal_response.reply or "抱歉，我无法帮你处理这个请求。"
 
         # 2. 软边界调整（不拒绝但返回调整后的回复）
         if refusal_response.category == RefusalCategory.SOFT_BOUNDARY and refusal_response.reply:
-            print(f"[Refusal] 软边界调整: {refusal_response.reason}")
+            logger.info(f"[Refusal] 软边界调整: {refusal_response.reason}")
             # 软边界调整不阻塞请求，但会在 system prompt 中加入态度提示
             adjustment_note = f"\n\n[态度提示: {refusal_response.adjustment}]"
         else:
@@ -144,7 +144,7 @@ class BotInstance:
             task = asyncio.create_task(self.memory.on_message(user_input, response))
             task.add_done_callback(
                 lambda t: None if t.cancelled() or t.exception() is None
-                else print(f"[Memory] 写入异常: {t.exception()}")
+                else logger.error(f"[Memory] 写入异常: {t.exception()}")
             )
         else:
             # 无记忆引擎时，回退到简单逻辑
