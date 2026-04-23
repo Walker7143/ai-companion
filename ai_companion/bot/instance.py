@@ -8,6 +8,7 @@ from ..persona.loader import PersonaLoader
 from ..persona.engine import PersonaEngine
 from ..persona.refusal_engine import RefusalEngine
 from ..persona.refusal_category import RefusalCategory
+from ..proactive import ProactiveConfig, ProactiveState, ProactiveEngine, ProactiveScheduler, create_platform
 
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
@@ -71,9 +72,44 @@ class BotInstance:
         # 对话历史（用于快速回复，暂时保留）
         self.conversation_history: list[dict] = []
 
+        # ── 主动唤醒系统 ─────────────────────────────────────
+        self.proactive_config = ProactiveConfig(persona_dir)
+        self.proactive_state = ProactiveState(self.id, data_dir or Path(__file__).parent.parent.parent / "data" / "bots")
+        self.proactive_engine = ProactiveEngine(
+            bot_id=self.id,
+            config=self.proactive_config,
+            state=self.proactive_state,
+            model=model,
+            memory=self.memory,
+            personality_type=self._detect_personality_type(),
+        )
+        self.proactive_scheduler: Optional[ProactiveScheduler] = None
+        self._proactive_platform = None
+
+    def _detect_personality_type(self) -> str:
+        """检测性格类型"""
+        tags = "".join(self.persona.profile.get("personality_tags", []))
+        if "傲娇" in tags or "外冷内热" in tags:
+            return "傲娇"
+        elif "活泼" in tags or "开朗" in tags:
+            return "活泼"
+        elif "高冷" in tags:
+            return "高冷"
+        elif "温柔" in tags:
+            return "温柔"
+        return "默认"
+
     def set_model(self, model: "MiniMaxAdapter"):
         self.model = model
         self.refusal_engine.set_model(model)
+        self.proactive_engine.set_model(model)
+
+    def set_proactive_platform(self, platform_type: str = None, **kwargs):
+        """设置主动消息发送平台"""
+        ptype = platform_type or self.proactive_config.platform_type
+        self._proactive_platform = create_platform(ptype, **kwargs)
+        # 设置回调
+        self.proactive_engine._platform_sender = lambda msg: self._proactive_platform.send(self.id, msg)
 
     async def init(self):
         """初始化记忆引擎（启动时调用一次）"""
@@ -81,8 +117,14 @@ class BotInstance:
             await self.memory.init()
             if self.model:
                 self.memory.set_summarizer(self.model)
+            self.proactive_engine.set_memory(self.memory)
             self.memory.start_session()
         self._initialized = True
+
+        # 启动主动唤醒调度器
+        if self.proactive_config.is_active:
+            self.proactive_scheduler = ProactiveScheduler(self.proactive_engine)
+            await self.proactive_scheduler.start()
 
     async def handle_message(self, user_input: str) -> str:
         """处理用户消息，返回回复"""
@@ -91,6 +133,9 @@ class BotInstance:
         if not self._initialized:
             logger.warning("[BotInstance] handle_message called before init(), initializing now...")
             await self.init()
+
+        # 0. 用户发消息了，通知主动唤醒系统
+        self.proactive_engine.on_user_message_received()
 
         # 1. 拒绝检查（如果启用）
         relationship_state = None
@@ -112,10 +157,14 @@ class BotInstance:
         # 2. 软边界调整（不拒绝但返回调整后的回复）
         if refusal_response.category == RefusalCategory.SOFT_BOUNDARY and refusal_response.reply:
             logger.info(f"[Refusal] 软边界调整: {refusal_response.reason}")
-            # 软边界调整不阻塞请求，但会在 system prompt 中加入态度提示
             adjustment_note = f"\n\n[态度提示: {refusal_response.adjustment}]"
         else:
             adjustment_note = ""
+
+        # 3. 情绪触发检测
+        emotion_triggered = self._check_emotion_trigger(user_input)
+        if emotion_triggered:
+            logger.info(f"[Proactive] 情绪触发: {user_input[:30]}...")
 
         # 如果有记忆引擎，使用记忆上下文
         if self.memory:
@@ -129,44 +178,76 @@ class BotInstance:
             system_prompt = self.persona_engine.build_system_prompt()
             if ctx.get("system_suffix"):
                 system_prompt = system_prompt + "\n\n" + ctx["system_suffix"]
-            # 加入拒绝态度调整提示
             if adjustment_note:
                 system_prompt = system_prompt + adjustment_note
 
-            # 4. 构建 messages（工作记忆摘要+原始消息 + 当前输入）
+            # 4. 构建 messages
             messages = ctx.get("working_history", [])
             messages.append({"role": "user", "content": user_input})
 
             # 5. 对话
             response = await self.model.chat(messages, system_prompt)
 
-            # 6. 异步写入记忆，异常不阻塞回复
+            # 6. 异步写入记忆
             task = asyncio.create_task(self.memory.on_message(user_input, response))
             task.add_done_callback(
                 lambda t: None if t.cancelled() or t.exception() is None
                 else logger.error(f"[Memory] 写入异常: {t.exception()}")
             )
         else:
-            # 无记忆引擎时，回退到简单逻辑
             system_prompt = self.persona_engine.build_system_prompt()
             if adjustment_note:
                 system_prompt = system_prompt + adjustment_note
             messages = [{"role": "user", "content": user_input}]
             response = await self.model.chat(messages, system_prompt)
 
-        # 记录历史（用于快速回复）
+        # 记录历史
         self.conversation_history.append({"role": "user", "content": user_input})
         self.conversation_history.append({"role": "assistant", "content": response})
 
         return response
 
+    def _check_emotion_trigger(self, user_input: str) -> bool:
+        """检查是否触发了情绪关键词"""
+        if not self.proactive_config.emotion_trigger_enabled:
+            return False
+
+        keywords = self.proactive_config.emotion_keywords
+        for kw in keywords:
+            if kw in user_input:
+                # 设置延迟触发（等用户冷静一下再关心）
+                from datetime import datetime, timedelta
+                delay = timedelta(minutes=self.proactive_config.emotion_response_delay_minutes)
+                self.proactive_state.set_cooldown(f"emotion_{kw}", datetime.now() + delay)
+                return True
+        return False
+
+    def get_proactive_status(self) -> dict:
+        """获取主动唤醒状态"""
+        return {
+            "config": {
+                "enabled": self.proactive_config.enabled,
+                "mode": self.proactive_config.mode,
+                "is_active": self.proactive_config.is_active,
+                "check_interval": self.proactive_config.check_interval,
+                "idle_threshold_hours": self.proactive_config.idle_threshold_hours,
+            },
+            "state": self.proactive_engine.get_status(),
+            "scheduler": self.proactive_scheduler.get_status() if self.proactive_scheduler else None,
+        }
+
     def reset_history(self):
         """清空对话历史（同时重置工作记忆会话）"""
         self.conversation_history = []
         if self.memory:
-            self.memory.start_session()  # 开始新会话
+            self.memory.start_session()
 
     async def close(self):
         """关闭时清理资源"""
+        if self.proactive_scheduler:
+            await self.proactive_scheduler.stop()
         if self.memory:
             await self.memory.close()
+        # 关闭 MiniMax adapter 的 session
+        if self.model and hasattr(self.model, 'close'):
+            await self.model.close()

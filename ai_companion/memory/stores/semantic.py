@@ -136,11 +136,11 @@ class SemanticStore:
                 )
             """)
             # 迁移旧数据库：若无 session_id 列则添加
-            cursor = await db.execute("PRAGMA table_info(user_facts")
+            cursor = await db.execute("PRAGMA table_info(user_facts)")
             columns = [row[1] async for row in cursor]
             if "session_id" not in columns:
                 await db.execute("ALTER TABLE user_facts ADD COLUMN session_id TEXT")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_facts_session ON user_facts(session_id")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_facts_session ON user_facts(session_id)")
             await db.commit()
 
     def _trim_value(self, value: str) -> str:
