@@ -1,4 +1,4 @@
-from .loader import PersonaLoader, Persona
+from .loader import Persona
 import json
 
 

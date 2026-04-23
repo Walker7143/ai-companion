@@ -16,11 +16,14 @@
 
 import asyncio
 import json
+import logging
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 import aiosqlite
 
@@ -131,18 +134,17 @@ class MemoryEngine:
         }
         """
         sid = self._session_id or self.working.current_session
-        print(f"[Memory] load_context called, sid={sid!r}, _session_id={self._session_id!r}, working.current={self.working.current_session!r}")
+        logger.info(f"[Memory]  load_context called, sid={sid!r}, _session_id={self._session_id!r}, working.current={self.working.current_session!r}")
 
         # 工作记忆：摘要(正序) + 原始消息(正序)
         working = self.working.load_context(sid, max_working_turns=self.max_working_turns)
 
         # 情景记忆：基于当前输入召回（带 session_id 过滤，当前会话优先）
-        sid = self._session_id or self.working.current_session
         episodic = self.episodic.recall(current_input, top_k=3, session_id=sid)
 
         # 语义记忆：跨会话聚合（用户画像，跨所有会话）
         facts = await self.semantic.get_all_facts()
-        print(f"[Memory] load_context 召回语义记忆: {facts}")
+        logger.info(f"[Memory]  load_context 召回语义记忆: {facts}")
 
         # 构建 system prompt 追加内容
         suffix_parts = []
@@ -191,15 +193,15 @@ class MemoryEngine:
         )
         def _on_task_done(t):
             if t.cancelled():
-                print("[Memory] 抽取被取消")
+                logger.info("[Memory] 抽取被取消")
             elif t.exception():
                 exc = t.exception()
-                print(f"[Memory] 抽取异常: {type(exc).__name__}: {exc}")
+                logger.info(f"[Memory]  抽取异常: {type(exc).__name__}: {exc}")
                 import traceback
                 for e in (exc.exceptions if hasattr(exc, 'exceptions') else [exc]):
                     traceback.print_exception(type(e), e, e.__traceback__)
             else:
-                print(f"[Memory] 抽取完成: {t.result()}")
+                logger.info(f"[Memory]  抽取完成: {t.result()}")
                 self._log_attitude_write(t.result()[1])
 
         task.add_done_callback(_on_task_done)
@@ -208,7 +210,7 @@ class MemoryEngine:
     def _log_attitude_write(self, semantic_result):
         """attitude_score 写入日志（semantic 返回单个 dict 或 None）"""
         if isinstance(semantic_result, dict) and semantic_result.get("key") == "attitude_score":
-            print(f"[Memory]   attitude写入: {semantic_result}")
+            logger.info(f"[Memory]    attitude写入: {semantic_result}")
 
     async def maybe_compress(self):
         """

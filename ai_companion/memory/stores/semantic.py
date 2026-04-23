@@ -6,11 +6,14 @@ CRUD + LLM 抽取新事实，支持字数限制和会话隔离
 import aiosqlite
 import asyncio
 import json
+import logging
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class SemanticStore:
@@ -133,11 +136,11 @@ class SemanticStore:
                 )
             """)
             # 迁移旧数据库：若无 session_id 列则添加
-            cursor = await db.execute("PRAGMA table_info(user_facts)")
+            cursor = await db.execute("PRAGMA table_info(user_facts")
             columns = [row[1] async for row in cursor]
             if "session_id" not in columns:
                 await db.execute("ALTER TABLE user_facts ADD COLUMN session_id TEXT")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_facts_session ON user_facts(session_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_facts_session ON user_facts(session_id")
             await db.commit()
 
     def _trim_value(self, value: str) -> str:
@@ -202,7 +205,7 @@ class SemanticStore:
                 )
             rows = await cursor.fetchall()
             result = {key: value for key, value in rows}
-            print(f"[Semantic] get_all_facts(session_id={session_id!r}): {result}")
+            logger.info(f"[Semantic]  get_all_facts(session_id={session_id!r}): {result}")
             return result
 
     async def delete_fact(self, key: str, session_id: Optional[str] = None):
@@ -226,10 +229,10 @@ class SemanticStore:
         conversation_context: 最近 3 轮对话的原始文本，用于辅助判断语气/氛围。
         返回写入的事实 {"key": ..., "value": ...} 或 None。
         """
-        print(f"[Semantic] extract_and_store 开始 | ctx_len={len(conversation_context)} | user={user_input[:30]!r}")
+        logger.info(f"[Semantic]  extract_and_store 开始 | ctx_len={len(conversation_context)} | user={user_input[:30]!r}")
         summarizer = model or self._summarizer
         if not summarizer:
-            print(f"[Semantic] 无 summarizer，跳过")
+            logger.info(f"[Semantic]  无 summarizer，跳过")
             return None
 
         # attitude 单独抽取（prompt 要求输出纯数字，不再走 JSON 解析）
@@ -246,18 +249,18 @@ class SemanticStore:
                 else:
                     content = str(response)
                 content = content.strip()
-                print(f"[Semantic][attitude] LLM原始回复: {content!r}")
+                logger.info(f"[Semantic] [attitude] LLM原始回复: {content!r}")
                 # MiniMax-M2.7 的 content 包含完整推理过程，取最后一个数字才是结论
                 all_nums = re.findall(r'-?\d+', content)
                 if all_nums:
                     delta = int(all_nums[-1])  # 最后一个匹配是推理后的最终结论
                     delta = max(-5, min(5, delta))  # 限制在 ±5
-                    print(f"[Semantic][attitude] 解析结果: delta={delta} (from {all_nums})")
+                    logger.info(f"[Semantic] [attitude] 解析结果: delta={delta} (from {all_nums})")
                     return {"key": "attitude_score", "value": str(delta)}
-                print(f"[Semantic][attitude] 解析结果: 无数字")
+                logger.info(f"[Semantic] [attitude] 解析结果: 无数字")
                 return None
             except Exception as e:
-                print(f"[Semantic][attitude] 抽取异常: {e}")
+                logger.info(f"[Semantic] [attitude] 抽取异常: {e}")
                 return None
 
         # fact/relation/key_moment 用 JSON 解析
@@ -274,12 +277,12 @@ class SemanticStore:
                 else:
                     content = str(response)
                 content = content.strip()
-                print(f"[Semantic][{label}] LLM原始回复: {content[:200]!r}")
+                logger.info(f"[Semantic] [{label}] LLM原始回复: {content[:200]!r}")
                 facts = self._parse_facts(content)
-                print(f"[Semantic][{label}] 解析结果: {facts}")
+                logger.info(f"[Semantic] [{label}] 解析结果: {facts}")
                 return facts[0] if facts else None
             except Exception as e:
-                print(f"[Semantic][{label}] 抽取异常: {e}")
+                logger.info(f"[Semantic] [{label}] 抽取异常: {e}")
                 return None
 
         # 并行执行所有抽取
@@ -310,14 +313,14 @@ class SemanticStore:
                         # attitude_score 跨会话共享，不传 session_id
                         await self._apply_attitude_delta(delta, session_id=None)
                         written.append({"key": key, "value": str(delta)})
-                        print(f"[Semantic] attitude_score {delta:+d}")
+                        logger.info(f"[Semantic]  attitude_score {delta:+d}")
                     # 跳过 set_fact，由 _apply_attitude_delta 处理
                     continue
 
                 # 其余类型直接写入
                 await self.set_fact(key, str(value), session_id=session_id)
                 written.append(res)
-                print(f"[Semantic] 写入记忆: {res}")
+                logger.info(f"[Semantic]  写入记忆: {res}")
 
                 # key_moment 追加到人格文件（去重后才写）
                 if key == "key_moment":
@@ -418,7 +421,7 @@ class SemanticStore:
         # 写入时也不传 session_id，确保跨会话共享
         await self.set_fact("attitude_score", str(new_score), session_id=None)
         await self._update_attitude_profile(new_score)
-        print(f"[Semantic] attitude_score: {current_score} {delta:+d} -> {new_score}")
+        logger.info(f"[Semantic]  attitude_score: {current_score} {delta:+d} -> {new_score}")
 
     # ── 人格文件写回 ─────────────────────────────────────────
 
@@ -435,9 +438,9 @@ class SemanticStore:
                 data["key_moments"] = moments
                 with open(self._persona_backstory_path, "w") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
-                print(f"[Semantic] key_moment 已写回人格文件: {moment[:30]}...")
+                logger.info(f"[Semantic]  key_moment 已写回人格文件: {moment[:30]}...")
         except Exception as e:
-            print(f"[Semantic] 写回 key_moment 失败: {e}")
+            logger.info(f"[Semantic]  写回 key_moment 失败: {e}")
 
     async def _update_relationship(self, relationship: str):
         """将关系变化更新到人格 profile.json"""
@@ -455,9 +458,9 @@ class SemanticStore:
                 data["relationship_to_user"] = relationship
                 with open(profile_path, "w") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
-                print(f"[Semantic] relationship 已更新: {old_rel} -> {relationship}")
+                logger.info(f"[Semantic]  relationship 已更新: {old_rel} -> {relationship}")
         except Exception as e:
-            print(f"[Semantic] 写回 relationship 失败: {e}")
+            logger.info(f"[Semantic]  写回 relationship 失败: {e}")
 
     async def _update_attitude_profile(self, new_score: int):
         """将 attitude_score 变化更新到人格 profile.json"""
@@ -471,9 +474,9 @@ class SemanticStore:
             data["attitude_score"] = new_score
             with open(profile_path, "w") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"[Semantic] attitude_score 已写回 profile.json: {new_score}")
+            logger.info(f"[Semantic]  attitude_score 已写回 profile.json: {new_score}")
         except Exception as e:
-            print(f"[Semantic] 写回 attitude_score 失败: {e}")
+            logger.info(f"[Semantic]  写回 attitude_score 失败: {e}")
 
     async def close(self):
         pass
