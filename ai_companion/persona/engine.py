@@ -18,9 +18,10 @@ class PersonaEngine:
         lines = []
 
         # 1. 基础信息
-        lines.append(
-            f"你是{profile['name']}，{profile['age']}岁，{profile['occupation']}。"
-        )
+        name = profile.get('name', '未知')
+        age = profile.get('age', '?')
+        occupation = profile.get('occupation', '未知')
+        lines.append(f"你是{name}，{age}岁，{occupation}。")
         lines.append("")
 
         # 2. 性格

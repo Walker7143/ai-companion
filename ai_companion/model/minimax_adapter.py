@@ -2,14 +2,17 @@ import aiohttp
 import json
 from typing import Optional
 
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
+
 
 class MiniMaxAdapter:
     """MiniMax m2.7 模型适配器"""
 
-    def __init__(self, api_key: str, base_url: str, model: str):
+    def __init__(self, api_key: str, base_url: str, model: str, timeout: aiohttp.ClientTimeout = DEFAULT_TIMEOUT):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.timeout = timeout
 
     async def chat(
         self, messages: list[dict], system_prompt: str = "", **kwargs
@@ -36,7 +39,7 @@ class MiniMaxAdapter:
             "max_tokens": kwargs.get("max_tokens", 1024),
         }
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
             async with session.post(url, headers=headers, json=payload) as resp:
                 if resp.status != 200:
                     text = await resp.text()
@@ -60,7 +63,7 @@ class MiniMaxAdapter:
         }
         payload = {"model": "embo-01", "texts": texts}
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
             async with session.post(url, headers=headers, json=payload) as resp:
                 data = await resp.json()
                 return [item["embedding"] for item in data["data"]]

@@ -117,9 +117,6 @@ class RefusalEngine:
     3. 返回拒绝响应
     """
 
-    # 关系阈值：低于此值软边界请求会被拒绝
-    DEFAULT_RELATION_THRESHOLD = 0.5
-
     def __init__(self, bot_id: str, persona_dir: Path, enabled: bool = True):
         """
         初始化拒绝引擎

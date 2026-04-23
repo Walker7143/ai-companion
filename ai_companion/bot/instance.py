@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -10,6 +11,8 @@ from ..persona.refusal_category import RefusalCategory
 
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class BotInstance:
@@ -47,6 +50,7 @@ class BotInstance:
 
         # 模型（由 BotManager 注入）
         self.model: "MiniMaxAdapter" = model
+        self._initialized = False
 
         # 如果模型已注入，立即设置到拒绝引擎
         if model is not None:
@@ -78,11 +82,15 @@ class BotInstance:
             if self.model:
                 self.memory.set_summarizer(self.model)
             self.memory.start_session()
+        self._initialized = True
 
     async def handle_message(self, user_input: str) -> str:
         """处理用户消息，返回回复"""
         if self.model is None:
             return "[Error] 模型未初始化"
+        if not self._initialized:
+            logger.warning("[BotInstance] handle_message called before init(), initializing now...")
+            await self.init()
 
         # 1. 拒绝检查（如果启用）
         relationship_state = None
