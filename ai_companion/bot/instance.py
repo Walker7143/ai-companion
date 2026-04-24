@@ -9,6 +9,7 @@ from ..persona.engine import PersonaEngine
 from ..persona.refusal_engine import RefusalEngine
 from ..persona.refusal_category import RefusalCategory
 from ..proactive import ProactiveConfig, ProactiveState, ProactiveEngine, ProactiveScheduler, create_platform
+from ..skill import SkillDispatcher, SkillRegistry, ImageGenerationSkill, TTSSkill, MultimodalSender, create_channel
 
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
@@ -86,6 +87,29 @@ class BotInstance:
         self.proactive_scheduler: Optional[ProactiveScheduler] = None
         self._proactive_platform = None
 
+        # ── 技能系统 ─────────────────────────────────────
+        self.skill_dispatcher = SkillDispatcher()
+        self._register_skills()
+
+        self.multimodal_sender: Optional[MultimodalSender] = None
+        self._channel = None
+
+    def _register_skills(self):
+        """注册可用技能（内置 + 已安装的）"""
+        # 图片生成技能
+        self.skill_dispatcher.register(ImageGenerationSkill())
+        # TTS 技能
+        self.skill_dispatcher.register(TTSSkill())
+
+        # 从注册中心加载已安装的 Skills
+        self.skill_registry = SkillRegistry()
+        for skill_info in self.skill_registry.list_installed():
+            if skill_info.get("enabled", True):
+                skill = self.skill_registry.load_skill(skill_info["name"])
+                if skill:
+                    self.skill_dispatcher.register(skill)
+                    logger.info(f"[BotInstance] 加载已安装技能: {skill_info['name']}")
+
     def _detect_personality_type(self) -> str:
         """检测性格类型"""
         tags = "".join(self.persona.profile.get("personality_tags", []))
@@ -110,6 +134,15 @@ class BotInstance:
         self._proactive_platform = create_platform(ptype, **kwargs)
         # 设置回调
         self.proactive_engine._platform_sender = lambda msg: self._proactive_platform.send(self.id, msg)
+
+    def set_channel(self, channel_type: str = "cli", **kwargs):
+        """设置消息通道（用于多模态发送）"""
+        self._channel = create_channel(channel_type, **kwargs)
+        self.multimodal_sender = MultimodalSender(
+            bot_id=self.id,
+            channel=self._channel,
+            skill_dispatcher=self.skill_dispatcher
+        )
 
     async def init(self):
         """初始化记忆引擎（启动时调用一次）"""
@@ -235,6 +268,27 @@ class BotInstance:
             "state": self.proactive_engine.get_status(),
             "scheduler": self.proactive_scheduler.get_status() if self.proactive_scheduler else None,
         }
+
+    def get_skill_capabilities(self) -> dict:
+        """获取技能和通道能力"""
+        capabilities = {
+            "skills": {},
+            "channel": None,
+            "multimodal_sender": None,
+        }
+        for skill in self.skill_dispatcher._skills.values():
+            capabilities["skills"][skill.name] = {
+                "name": skill.name,
+                "description": skill.description,
+                "capabilities": skill.capabilities,
+                "supported_models": getattr(skill, "supported_models", []),
+            }
+        if self.multimodal_sender:
+            capabilities["channel"] = self.multimodal_sender.get_capabilities()
+            capabilities["multimodal_sender"] = {
+                "enabled": True,
+            }
+        return capabilities
 
     def reset_history(self):
         """清空对话历史（同时重置工作记忆会话）"""

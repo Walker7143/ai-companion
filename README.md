@@ -159,6 +159,75 @@ ai-companion/
 
 > 主动唤醒通过 LLM 推理判断是否应主动联系，LLM 生成符合人格的主动消息。所有参数可配置，状态持久化。
 
+## ✅ Phase 6 完成（多媒体 Skill 系统）
+
+| Task | 描述 | 状态 |
+|------|------|------|
+| 6-1 | Skill 基类 + SkillDispatcher 调度器 | ✅ 完成 |
+| 6-2 | 图片生成 Skill（ImageGenerationSkill） | ✅ 完成 |
+| 6-3 | 语音生成 Skill（TTSSkill） | ✅ 完成 |
+| 6-4 | 通道能力系统（ChannelCapability） | ✅ 完成 |
+| 6-5 | 多模态发送器（MultimodalSender） | ✅ 完成 |
+| 6-6 | 通道降级（不支持类型 → text） | ✅ 完成 |
+
+**支持的模型：**
+- 图片：DALLE、MiniMax（text_to_image API）、Stable Diffusion、自定义 HTTP API
+- 语音：Edge TTS、MiniMax TTS、Azure TTS、OpenAI TTS、自定义 HTTP API
+
+**配置示例（config/models.yaml）：**
+```yaml
+skills:
+  image_generation:
+    model: "minimax"
+    minimax:
+      model: "image-01"
+
+  tts:
+    model: "minimax"
+    minimax:
+      model: "speech-2.8-hd"
+      voice: "male-qn-qingse"
+
+channel:
+  type: "cli"
+```
+
+**自定义模型配置：**
+任何技能都支持自定义 HTTP API，只需在对应模型配置块中设置 `api_url` 和相关参数即可。支持 bearer/api_key 认证方式，支持任务轮询模式，支持配置请求体模板和响应解析路径。
+
+## ✅ Phase 7 完成（Skill 扩展系统）
+
+| Task | 描述 | 状态 |
+|------|------|------|
+| 7-1 | SkillRegistry 技能注册中心 | ✅ 完成 |
+| 7-2 | SkillInstaller 安装器 | ✅ 完成 |
+| 7-3 | skill CLI 命令 | ✅ 完成 |
+| 7-4 | BotInstance 动态加载 | ✅ 完成 |
+| 7-5 | 测试验证 | ✅ 完成 |
+
+**Skill 扩展系统让用户可以下载和安装新的 Skills 来扩展系统能力。**
+
+**CLI 命令：**
+```bash
+python -m ai_companion skill list           # 列出已安装技能
+python -m ai_companion skill install <path> # 从路径安装
+python -m ai_companion skill install <url>   # 从 URL 安装
+python -m ai_companion skill uninstall <name> # 卸载技能
+python -m ai_companion skill enable <name>  # 启用技能
+python -m ai_companion skill disable <name> # 禁用技能
+python -m ai_companion skill create <name>  # 创建技能脚手架
+python -m ai_companion skill info <name>    # 查看技能详情
+```
+
+**Skill 包格式：**
+```
+skill-my-skill/
+├── skill.json       # 元数据（名称、版本、描述、作者）
+└── my_skill.py      # 入口文件
+```
+
+**已安装技能目录：** `data/bots/_skills/`
+
 ## License
 
 MIT

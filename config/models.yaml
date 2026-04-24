@@ -9,8 +9,106 @@ memory:
   embedding_model: "all-MiniLM-L6-v2"  # sentence-transformers 模型名
   max_working_turns: 20       # 工作记忆保留轮数
   hard_limit_chars: 5000      # 硬上限，超限同步压缩
-  soft_limit_chars: 3000      # 软上限，超限异步压缩
+  soft_limit_chars: 3000      # 软上限，异步压缩
   semantic_char_limit: 4400    # 单条语义记忆事实的最大字符数（超限截断）
 
 fallback:
   enabled: false
+
+# ============================================
+# 技能系统配置
+# ============================================
+# 每个技能通过 model 字段指定默认模型类型，
+# 然后在对应模型配置块中填写参数。
+# 支持内置模型，也支持自定义 HTTP API。
+# ============================================
+
+skills:
+  image_generation:
+    model: "minimax"          # 默认模型：dalle | minimax | stable_diffusion | 自定义
+
+    # --- 内置模型 ---
+    dalle:
+      model: "dall-e-3"
+    minimax:
+      model: "image-01"
+      output_dir: "data/bots/_images"
+    stable_diffusion:
+      model: "stable-diffusion-xl"
+      api_url: "http://localhost:7860"  # Stable Diffusion WebUI API
+
+    # --- 自定义模型示例 ---
+    # custom_image:
+    #   api_url: "https://api.example.com/image"
+    #   model: "my-image-model"
+    #   method: "POST"
+    #   auth_type: "bearer"  # bearer | api_key
+    #   headers:
+    #     X-Custom-Header: "value"
+    #   body_template:
+    #     prompt: "{{prompt}}"
+    #     size: "1024x1024"
+    #   response_url_field: "data.image_url"
+
+  tts:
+    model: "minimax"         # 默认模型：minimax | edge_tts | azure_tts | openai_tts | 自定义
+
+    # --- MiniMax TTS ---
+    minimax:
+      model: "speech-2.8-hd"  # 可选: speech-2.8-hd | 2.6 | 02
+      voice: "male-qn-qingse"  # 语音ID
+      speed: 1                 # 语速 0.5-2.0
+      vol: 1                   # 音量 0-2
+      pitch: 0                # 音调 -10~10
+      sample_rate: 32000       # 采样率
+      bitrate: 128000         # 比特率
+      output_format: "hex"    # hex | url
+      output_dir: "data/bots/_audio"
+
+    # --- Edge TTS (微软，免费) ---
+    edge_tts:
+      voice: "zh-CN-XiaoxiaoNeural"  # 女声
+      # 可选: zh-CN-YunxiNeural (男声), zh-CN-XiaoyiNeural (女声)
+
+    # --- Azure TTS ---
+    azure_tts:
+      voice: "zh-CN-XiaoxiaoNeural"
+      api_url: "https://region.tts.speech.microsoft.com/cognitiveservices/v1"
+      auth_type: "api_key"
+
+    # --- OpenAI TTS ---
+    openai_tts:
+      model: "tts-1"
+      voice: "alloy"
+      api_url: "https://api.openai.com/v1/audio/speech"
+      auth_type: "bearer"
+
+    # --- 自定义模型示例 ---
+    # custom_tts:
+    #   api_url: "https://api.example.com/tts"
+    #   model: "my-tts-model"
+    #   method: "POST"
+    #   auth_type: "bearer"
+    #   response_type: "url"   # url | hex | base64 | binary
+    #   audio_field: "data.audio_url"
+    #   body_template:
+    #     text: "{{text}}"
+    #     voice: "{{voice}}"
+    #     model: "{{model}}"
+
+# ============================================
+# 通道配置
+# ============================================
+# 定义消息发送通道，不同通道支持不同媒体类型
+# ============================================
+
+channel:
+  type: "cli"                # cli | feishu | webhook
+
+  feishu:
+    webhook_url: "${FEISHU_WEBHOOK_URL}"
+
+  webhook:
+    url: "${WEBHOOK_URL}"
+    headers:                # 可选的自定义 headers
+      # Authorization: "Bearer xxx"

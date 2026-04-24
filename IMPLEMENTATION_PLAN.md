@@ -1,7 +1,7 @@
 # AI Companion — 实施计划
 
 > 每个 Task 均可独立验证，通过后才进入下一步。
-> 更新于 2026-04-23（第三次修正：Phase 3 Evolution 完成，attitude 增量模型 + 双向进化系统验证通过）
+> 更新于 2026-04-24（Phase 6 TTS bug 修复 + Phase 7 Skill 扩展系统完成）
 
 ---
 
@@ -378,18 +378,62 @@ handle_message() 正确调用:
 
 ---
 
-## 阶段 6：多媒体 Skill ❌ 未开始
+## 阶段 6：多媒体 Skill ✅ 完成
 
-| Task | 验证内容 |
-|------|---------|
-| 6-1 | Skill Dispatcher 验证 |
-| 6-2 | 图片生成 Skill 验证 |
-| 6-3 | 语音生成 Skill 验证 |
-| 6-4 | 多模态消息格式验证 |
+| Task | 验证内容 | 状态 |
+|------|---------|------|
+| 6-1 | Skill Dispatcher 实现 | ✅ 完成 |
+| 6-2 | 图片生成 Skill（ImageGenerationSkill） | ✅ 完成 |
+| 6-3 | 语音生成 Skill（TTSSkill） | ✅ 完成 |
+| 6-4 | 通道能力系统（ChannelCapability） | ✅ 完成 |
+| 6-5 | 多模态发送器（MultimodalSender） | ✅ 完成 |
+| 6-6 | 通道降级（不支持类型 → text） | ✅ 完成 |
+| 6-7 | 自定义模型扩展支持 | ✅ 完成 |
+
+**实现方式：**
+- Skill 基类 + SkillDispatcher 调度器
+- ImageGenerationSkill 支持 dalle/minimax/stable_diffusion
+- TTSSkill 支持 edge_tts/minimax/azure_tts/openai_tts
+- ChannelCapability 检测通道能力
+- MultimodalSender 协调技能执行和通道发送
+- 所有技能支持自定义模型配置（HTTP API + 认证 + 轮询）
+- 所有参数通过 `config/models.yaml` 可配置
+
+**验证结果（2026-04-24）：**
+- 图片生成 MiniMax：✓ 成功（164.5 KB PNG）
+- TTS MiniMax：✓ 成功（52.3 KB MP3）
 
 ---
 
-## 阶段 7：飞书多 Bot 接入 ❌ 未开始
+## 阶段 7：Skill 扩展系统 ✅ 完成
+
+| Task | 验证内容 | 状态 |
+|------|---------|------|
+| 7-1 | SkillRegistry 技能注册中心 | ✅ 完成 |
+| 7-2 | SkillInstaller 安装器 | ✅ 完成 |
+| 7-3 | skill CLI 命令 | ✅ 完成 |
+| 7-4 | BotInstance 动态加载 | ✅ 完成 |
+| 7-5 | 测试验证 | ✅ 完成 |
+
+**核心文件：**
+- `ai_companion/skill/registry.py` — SkillRegistry
+- `ai_companion/skill/installer.py` — SkillInstaller
+- `ai_companion/cli/skill_cmd.py` — CLI 命令
+
+**安装来源：**
+- 本地路径（目录或 .zip/.tar.gz）
+- 远程 URL（.zip）
+- Git 仓库
+
+**验证结果（2026-04-24）：**
+- `skill list` ✓
+- `skill create` ✓
+- `skill enable/disable` ✓
+- BotInstance 动态加载 ✓
+
+---
+
+## 阶段 8：飞书多 Bot 接入 ❌ 未开始
 
 | Task | 验证内容 |
 |------|---------|
@@ -399,7 +443,7 @@ handle_message() 正确调用:
 
 ---
 
-## 阶段 8：产品化 + Docker ❌ 未开始
+## 阶段 9：产品化 + Docker ❌ 未开始
 
 | Task | 验证内容 |
 |------|---------|
@@ -419,11 +463,14 @@ handle_message() 正确调用:
 | 阶段 3：性格进化 | ✅ 完成（5/5） |
 | 阶段 4：性格拒绝 | ✅ 完成（6/6） |
 | 阶段 5：主动唤醒 | ✅ 完成（12/12） |
-| 阶段 6：多媒体 Skill | ❌ 未开始 |
-| 阶段 7：飞书接入 | ❌ 未开始 |
-| 阶段 8：产品化 | ❌ 未开始 |
+| 阶段 6：多媒体 Skill | ✅ 完成（7/7） |
+| 阶段 7：Skill 扩展 | ✅ 完成（5/5） |
+| 阶段 8：飞书接入 | ❌ 未开始 |
+| 阶段 9：产品化 | ❌ 未开始 |
 
 **重大修复记录：**
 - 2026-04-23：jieba + SQLite tokens 列替换 FTS5（中文搜索）；MiniMax-M2.7 `reasoning_content` 优先策略修复语义抽取
 - 2026-04-23：Phase 3 Evolution 完成 — attitude 增量模型（re.findall 取最后数字）、relationship 状态机、key_moment 去重、profile 写回，真实 API 验证通过
 - 2026-04-23：Phase 4 RefusalEngine 重写 — LLM 推理替代关键词匹配，人格风格回复模板，BotInstance 模型注入修复，真实 CLI 环境验证通过
+- 2026-04-24：Phase 6 TTS bug 修复 — `model == "minimax"` 时正确路由到 `_generate_minimax_tts`，真实 API 验证通过（52.3 KB MP3）
+- 2026-04-24：Phase 7 完成 — SkillRegistry + SkillInstaller + skill CLI + BotInstance 动态加载，真实 API 验证通过
