@@ -161,17 +161,13 @@ class ProactiveEngine:
         else:
             return "心情不错，想和用户聊天"
 
-    def _get_relationship_level(self) -> int:
-        """从 relationship_to_user 估计关系等级"""
+    async def _get_relationship_info(self) -> tuple[int, str]:
+        """获取关系等级和描述"""
         if self.memory is None:
-            return 5  # 默认普通朋友
+            return 5, "普通朋友"
         try:
-            import asyncio
-            facts = asyncio.get_event_loop().run_until_complete(
-                self.memory.semantic.get_all_facts()
-            )
+            facts = await self.memory.semantic.get_all_facts()
             relationship = facts.get("relationship_to_user", "普通朋友")
-            # 简单映射
             mapping = {
                 "陌生网友": 1,
                 "普通朋友": 4,
@@ -179,22 +175,17 @@ class ProactiveEngine:
                 "暧昧中": 8,
                 "恋人": 10,
             }
-            return mapping.get(relationship, 5)
+            return mapping.get(relationship, 5), relationship
         except Exception:
-            return 5
+            return 5, "普通朋友"
 
-    def _get_relationship_desc(self) -> str:
-        """获取关系描述"""
-        if self.memory is None:
-            return "普通朋友"
-        try:
-            import asyncio
-            facts = asyncio.get_event_loop().run_until_complete(
-                self.memory.semantic.get_all_facts()
-            )
-            return facts.get("relationship_to_user", "普通朋友")
-        except Exception:
-            return "普通朋友"
+    async def _get_relationship_level(self) -> int:
+        level, _ = await self._get_relationship_info()
+        return level
+
+    async def _get_relationship_desc(self) -> str:
+        _, desc = await self._get_relationship_info()
+        return desc
 
     def _calc_idle_hours(self) -> float:
         """计算多久没联系了"""
@@ -211,7 +202,7 @@ class ProactiveEngine:
         # 最近对话
         if self.memory:
             try:
-                recent = await self.memory.working.get_recent_messages(count=6)
+                recent = self.memory.working.get_recent(session_id=None, turns=3)
                 if recent:
                     lines.append("最近对话：")
                     for msg in recent[-6:]:
@@ -285,17 +276,19 @@ class ProactiveEngine:
 
         # LLM 判断
         personality_tags = self._get_personality_type()
+        rel_level = await self._get_relationship_level()
+        rel_desc = await self._get_relationship_desc()
         prompt = SHOULD_CONTACT_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             age=getattr(self, "age", "?"),
             occupation=getattr(self, "occupation", "?"),
             personality_tags=personality_tags,
-            relationship_level=self._get_relationship_level(),
+            relationship_level=rel_level,
             mood_description=self._get_mood_description(),
             idle_hours=idle_hours,
             proactive_count=self.state.today_proactive_count,
             user_contacted_today="有" if self.state.last_message_time else "没有",
-            relationship_desc=self._get_relationship_desc(),
+            relationship_desc=rel_desc,
             user_facts=await self._build_context(),
             recent_context=await self._build_context(),
             idle_threshold=self.config.idle_threshold_hours,
@@ -320,11 +313,12 @@ class ProactiveEngine:
 
         personality_type = self._get_personality_type()
         feeling = self._get_mood_description()
+        rel_desc = await self._get_relationship_desc()
 
         prompt = GENERATE_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
-            relationship_desc=self._get_relationship_desc(),
+            relationship_desc=rel_desc,
             feeling_description=feeling,
             contact_reason=reason or "想和用户聊天",
         )
