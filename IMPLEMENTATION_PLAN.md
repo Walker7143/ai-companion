@@ -433,13 +433,38 @@ handle_message() 正确调用:
 
 ---
 
-## 阶段 8：飞书多 Bot 接入 ❌ 未开始
+## 阶段 8：飞书多 Bot 接入 🚧 进行中
 
-| Task | 验证内容 |
-|------|---------|
-| 7-1 | 飞书 Webhook 接收验证 |
-| 7-2 | 多 Bot 并行验证 |
-| 7-3 | 飞书消息格式统一验证 |
+| Task | 描述 | 状态 |
+|------|------|------|
+| 8-1 | WebSocket 服务（FeishuServer） | ✅ 完成 |
+| 8-2 | 消息解析（FeishuHandler） | ✅ 完成 |
+| 8-3 | 消息模型（FeishuMessage） | ✅ 完成 |
+| 8-4 | Bot 路由和映射 | ✅ 完成 |
+| 8-5 | 接入配置示例 | 🚧 待补充 |
+| 8-6 | 真实环境验证 | ❌ 待验证 |
+
+**核心文件：**
+- `ai_companion/platform/feishu/server.py` — WebSocket 服务
+- `ai_companion/platform/feishu/handler.py` — 消息处理和路由
+- `ai_companion/platform/feishu/models.py` — 飞书消息模型
+
+**依赖：**
+- `lark-oapi>=1.0.0`
+
+**配置示例（config/models.yaml）：**
+```yaml
+feishu:
+  enabled: true
+  app_id: "${FEISHU_APP_ID}"
+  app_secret: "${FEISHU_APP_SECRET}"
+
+  # Bot 映射
+  bots:
+    - bot_id: "suqing"
+      app_id: "${FEISHU_APP_ID_SUQING}"
+      app_secret: "${FEISHU_APP_SECRET_SUQING}"
+```
 
 ---
 
@@ -447,9 +472,9 @@ handle_message() 正确调用:
 
 | Task | 验证内容 |
 |------|---------|
-| 8-1 | Docker 化验证 |
-| 8-2 | 完整对话流程压测 |
-| 8-3 | 一键安装脚本跨平台验证 |
+| 9-1 | Docker 化验证 |
+| 9-2 | 完整对话流程压测 |
+| 9-3 | 一键安装脚本跨平台验证 |
 
 ---
 
@@ -465,7 +490,7 @@ handle_message() 正确调用:
 | 阶段 5：主动唤醒 | ✅ 完成（12/12） |
 | 阶段 6：多媒体 Skill | ✅ 完成（7/7） |
 | 阶段 7：Skill 扩展 | ✅ 完成（5/5） |
-| 阶段 8：飞书接入 | ❌ 未开始 |
+| 阶段 8：飞书接入 | 🚧 进行中（4/6） |
 | 阶段 9：产品化 | ❌ 未开始 |
 
 **重大修复记录：**
