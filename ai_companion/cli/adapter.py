@@ -1,7 +1,20 @@
 from rich.console import Console
 from rich.prompt import Prompt
-import re
 import sys
+
+# 初始化 readline，确保方向键工作
+def _init_readline():
+    try:
+        import readline
+        # 强制加载默认绑定
+        readline.parse_and_bind(r'"\e[D": backward-char')
+        readline.parse_and_bind(r'"\e[C": forward-char')
+        readline.parse_and_bind(r'"\e[A": previous-history')
+        readline.parse_and_bind(r'"\e[B": next-history')
+    except Exception:
+        pass
+
+_init_readline()
 
 from ..bot.manager import BotManager
 
@@ -15,39 +28,12 @@ class CLIAdapter:
         self.current_bot_id: str = None
 
     def _read_input(self) -> str:
-        """读取用户输入，过滤终端控制字符后解码"""
-        sys.stdout.write("\u001b[1m\u001b[36m你\u001b[0m")
-        sys.stdout.flush()
-        raw_bytes = sys.stdin.buffer.readline()
-        # 1. 先过滤掉所有控制字符（方向键转义序列 \x1b[D \x1b[C 等）
-        filtered = bytearray()
-        i = 0
-        while i < len(raw_bytes):
-            b = raw_bytes[i]
-            if b == 0x1b:  # ESC
-                # 跳过完整的 ANSI escape sequence（如 [D, [C, [A, [B 等方向键）
-                if i + 1 < len(raw_bytes) and raw_bytes[i + 1] == 0x5b:  # '['
-                    j = i + 2
-                    while j < len(raw_bytes) and raw_bytes[j] in (0x30-0x3f):  # 0-9, ;, <, =, >, ?
-                        j += 1
-                    if j < len(raw_bytes) and 0x40 <= raw_bytes[j] <= 0x7e:  # @-~
-                        i = j + 1
-                        continue
-                # 单独的 ESC 或无法解析的序列，跳过
-                i += 1
-                continue
-            elif b < 0x20 and b not in (0x09, 0x0a, 0x0d):  # 排除 Tab/CR/LF
-                i += 1
-                continue
-            filtered.append(b)
-            i += 1
-        # 2. 尝试多种编码解码
-        for enc in ("utf-8", "gbk", "latin-1"):
-            try:
-                return filtered.decode(enc).strip()
-            except UnicodeDecodeError:
-                continue
-        return filtered.decode("utf-8", errors="replace").strip()
+        """读取用户输入"""
+        try:
+            line = input("\u001b[1m\u001b[36m你\u001b[0m ")
+            return line.strip()
+        except (EOFError, KeyboardInterrupt):
+            raise
 
     def _select_bot(self):
         bots = self.bot_manager.list_bots()

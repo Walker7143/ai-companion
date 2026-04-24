@@ -77,11 +77,12 @@ class MiniMaxAdapter:
                 last_error = e
                 if attempt < MAX_RETRIES - 1:
                     wait_time = RETRY_BACKOFF[attempt]
-                    logger.warning(f"[MiniMax] 请求失败 (attempt {attempt + 1}/{MAX_RETRIES}): {e}, {wait_time}s 后重试")
+                    logger.debug(f"[MiniMax] 请求失败 (attempt {attempt + 1}/{MAX_RETRIES}): {e}, {wait_time}s 后重试")
                     await asyncio.sleep(wait_time)
                 continue
 
-        raise RuntimeError(f"[MiniMax] 达到最大重试次数 ({MAX_RETRIES}), 最后错误: {last_error}")
+        # 所有重试都失败后，返回错误信息由调用者处理
+        raise RuntimeError(f"网络不稳定，MiniMax 请求失败（已重试 {MAX_RETRIES} 次）")
 
     async def embeddings(self, texts: list[str]) -> list[list[float]]:
         """调用 MiniMax embeddings API，带重试"""
@@ -103,7 +104,7 @@ class MiniMaxAdapter:
                 last_error = e
                 if attempt < MAX_RETRIES - 1:
                     wait_time = RETRY_BACKOFF[attempt]
-                    logger.warning(f"[MiniMax] embeddings 失败 (attempt {attempt + 1}/{MAX_RETRIES}): {e}, {wait_time}s 后重试")
+                    logger.debug(f"[MiniMax] embeddings 失败 (attempt {attempt + 1}/{MAX_RETRIES}): {e}, {wait_time}s 后重试")
                     await asyncio.sleep(wait_time)
                 continue
 

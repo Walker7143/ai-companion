@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -219,7 +220,9 @@ class BotInstance:
             messages.append({"role": "user", "content": user_input})
 
             # 5. 对话
-            response = await self.model.chat(messages, system_prompt)
+            response = await self._chat_with_fallback(messages, system_prompt)
+            if response is None:
+                return f"抱歉，网络不稳定，请稍后再试。"
 
             # 6. 异步写入记忆
             task = asyncio.create_task(self.memory.on_message(user_input, response))
@@ -232,13 +235,23 @@ class BotInstance:
             if adjustment_note:
                 system_prompt = system_prompt + adjustment_note
             messages = [{"role": "user", "content": user_input}]
-            response = await self.model.chat(messages, system_prompt)
+            response = await self._chat_with_fallback(messages, system_prompt)
+            if response is None:
+                return f"抱歉，网络不稳定，请稍后再试。"
 
         # 记录历史
         self.conversation_history.append({"role": "user", "content": user_input})
         self.conversation_history.append({"role": "assistant", "content": response})
 
         return response
+
+    async def _chat_with_fallback(self, messages: list[dict], system_prompt: str = "") -> Optional[str]:
+        """调用模型聊天，失败时返回 None（由调用者处理友好提示）"""
+        try:
+            return await self.model.chat(messages, system_prompt)
+        except RuntimeError as e:
+            logger.error(f"[BotInstance] 对话失败: {e}")
+            return None
 
     def _check_emotion_trigger(self, user_input: str) -> bool:
         """检查是否触发了情绪关键词"""
@@ -249,7 +262,6 @@ class BotInstance:
         for kw in keywords:
             if kw in user_input:
                 # 设置延迟触发（等用户冷静一下再关心）
-                from datetime import datetime, timedelta
                 delay = timedelta(minutes=self.proactive_config.emotion_response_delay_minutes)
                 self.proactive_state.set_cooldown(f"emotion_{kw}", datetime.now() + delay)
                 return True
