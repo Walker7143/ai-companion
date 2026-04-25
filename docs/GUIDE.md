@@ -37,12 +37,16 @@ curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/script
 
 **Windows：**
 ```powershell
-# 在线安装
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing | iex
+# 国内用户（推荐使用清华镜像，更快）
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.ps1 -UseBasicParsing | iex
+.\scripts\install-cn.ps1
 
-# 本地 / Docker 模式
-.\scripts\install.ps1
-.\scripts\install.ps1 -Docker
+# 海外用户（使用官方 PyPI）
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-global.ps1 -UseBasicParsing | iex
+.\scripts\install-global.ps1
+
+# Docker 模式
+.\scripts\install-cn.ps1 -Docker
 ```
 
 **或克隆后本地安装：**

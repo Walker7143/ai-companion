@@ -318,14 +318,16 @@ cd ai-girl-friend
 ### Windows
 
 ```powershell
-# 在线安装（自动下载并执行）
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing | iex
+# 国内用户（推荐使用清华镜像，更快）
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.ps1 -UseBasicParsing | iex
+.\scripts\install-cn.ps1
 
-# 本地安装
-.\scripts\install.ps1
+# 海外用户（使用官方 PyPI）
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-global.ps1 -UseBasicParsing | iex
+.\scripts\install-global.ps1
 
 # Docker 模式
-.\scripts\install.ps1 -Docker
+.\scripts\install-cn.ps1 -Docker
 ```
 
 ### Docker
