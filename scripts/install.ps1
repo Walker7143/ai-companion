@@ -1,8 +1,20 @@
+# AI Companion 一键安装脚本
+# 使用方式:
+#   方式1: 下载后执行
+#     irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
+#   方式2: 本地执行
+#     .\install.ps1
+#   方式3: Docker 安装
+#     .\install.ps1 -Docker
+
+param(
+    [switch]$D,
+    [switch]$Docker
+)
+
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
-
-# AI Companion 一键安装脚本
 # 支持: Windows PowerShell
 #
 # 用法:
