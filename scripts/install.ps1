@@ -222,9 +222,14 @@ function Install-Local {
 
         # Try chroma-hnswlib with binary only
         Write-Host "  Installing chroma (optional)..." -ForegroundColor Gray
-        $null = & python -m pip install chroma-hnswlib aiosqlite --only-binary :all: -i https://pypi.tuna.tsinghua.edu.cn/simple 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  Warning: chroma-hnswlib skipped (needs Visual C++ Build Tools)" -ForegroundColor Yellow
+        try {
+            $ErrorActionPreference = "SilentlyContinue"
+            & python -m pip install chroma-hnswlib aiosqlite --only-binary :all: -i https://pypi.tuna.tsinghua.edu.cn/simple | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "  Warning: chroma-hnswlib skipped" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  Warning: chroma-hnswlib skipped" -ForegroundColor Yellow
         }
 
         Write-Host "[OK] Dependencies installed" -ForegroundColor Green
