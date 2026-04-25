@@ -356,7 +356,7 @@ A: `export MINIMAX_API_KEY="your_key"`
 A: 检查 `data/bots/{bot_id}/persona/proactive.json` 中 `enabled` 和 `mode`
 
 **Q: 向量嵌入不生效**
-A: 确认 `models.yaml` 中 `memory.embedding: "local"` 且安装了 sentence-transformers
+A: 确认 `models.yaml` 中 `memory.embedding: "local"`（sentence-transformers 已默认安装）
 
 **Q: 如何重置记忆？**
 A: `rm -rf ~/.ai-companion/data/bots/{bot_id}/memory/*.db`
