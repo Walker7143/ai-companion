@@ -217,14 +217,14 @@ function Install-Local {
             Write-Host "System Python is protected, creating virtual environment..." -ForegroundColor Yellow
             python -m venv $venvDir
             $venvPip = "$venvDir\Scripts\pip.exe"
-            & $venvPip install --upgrade pip -q
-            & $venvPip install -r requirements.txt -q
-            & $venvPip install -e .
+            & $venvPip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple -q
+            & $venvPip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple -q
+            & $venvPip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple -q
             Write-Host "[OK] Installed to virtual environment" -ForegroundColor Green
         } else {
             Write-Host ""
             Write-Host "Installing AI Companion command..." -ForegroundColor Yellow
-            & python -m pip install -e .
+            & python -m pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple -q
             Write-Host "[OK] AI Companion installed" -ForegroundColor Green
         }
     } finally {
