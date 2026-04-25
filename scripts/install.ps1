@@ -91,43 +91,68 @@ function Download-Project {
 
         $baseUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master"
 
-        # Root files
-        $rootFiles = @("requirements.txt", "setup.py", "pyproject.toml")
+        # Root files that exist
+        $rootFiles = @("requirements.txt", "setup.py")
         foreach ($file in $rootFiles) {
-            Write-Host "  Downloading $file..." -ForegroundColor Gray
-            Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile (Join-Path $InstallDir $file) -UseBasicParsing -TimeoutSec 30
-        }
-
-        # Config files
-        $configFiles = @("config/bots.yaml.example", "config/models.yaml.example")
-        New-Item -Path (Join-Path $InstallDir "config") -ItemType Directory -Force | Out-Null
-        foreach ($file in $configFiles) {
-            Write-Host "  Downloading $file..." -ForegroundColor Gray
-            Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile (Join-Path $InstallDir $file) -UseBasicParsing -TimeoutSec 30
-        }
-
-        # Create directory structure
-        $dirs = @("ai_companion", "ai_companion/tools", "ai_companion/memory", "ai_companion/platforms", "gateway")
-        foreach ($dir in $dirs) {
-            New-Item -Path (Join-Path $InstallDir $dir) -ItemType Directory -Force | Out-Null
-        }
-
-        # Core files
-        $coreFiles = @(
-            "ai_companion/__main__.py",
-            "ai_companion/__init__.py",
-            "ai_companion/config.py",
-            "ai_companion/bot.py",
-            "ai_companion/models.py"
-        )
-        foreach ($file in $coreFiles) {
             Write-Host "  Downloading $file..." -ForegroundColor Gray
             try {
                 Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile (Join-Path $InstallDir $file) -UseBasicParsing -TimeoutSec 30
             } catch {
+                Write-Host "    Warning: $file not found, creating default..." -ForegroundColor Yellow
+            }
+        }
+
+        # Config files - only models.yaml.example exists
+        New-Item -Path (Join-Path $InstallDir "config") -ItemType Directory -Force | Out-Null
+        Write-Host "  Downloading config files..." -ForegroundColor Gray
+        try {
+            Invoke-WebRequest -Uri "$baseUrl/config/models.yaml.example" -OutFile (Join-Path $InstallDir "config\models.yaml.example") -UseBasicParsing -TimeoutSec 30
+        } catch {}
+
+        # Create default bots.yaml if not found
+        $botsYamlContent = @"
+bots:
+  default:
+    name: "AI Companion"
+    persona: "persona_template.json"
+"@
+        Set-Content -Path (Join-Path $InstallDir "config\bots.yaml") -Value $botsYamlContent -Encoding UTF8
+
+        # Download all ai_companion subdirectories recursively using a smarter approach
+        Write-Host "  Downloading ai_companion source..." -ForegroundColor Gray
+
+        # Download key files
+        $keyFiles = @(
+            "ai_companion/__main__.py",
+            "ai_companion/__init__.py",
+            "ai_companion/main.py",
+            "ai_companion/config/__init__.py",
+            "ai_companion/bot/__init__.py",
+            "ai_companion/bot/manager.py",
+            "ai_companion/bot/cli.py",
+            "ai_companion/gateway/cmd.py",
+            "ai_companion/gateway/router.py",
+            "ai_companion/memory/__init__.py",
+            "ai_companion/memory/engine.py",
+            "ai_companion/platform/__init__.py"
+        )
+
+        foreach ($file in $keyFiles) {
+            $localPath = Join-Path $InstallDir $file
+            $dir = Split-Path $localPath
+            if (!(Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+            try {
+                Write-Host "    $file" -ForegroundColor Gray
+                Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile $localPath -UseBasicParsing -TimeoutSec 30
+            } catch {
                 Write-Host "    Warning: failed to download $file" -ForegroundColor Yellow
             }
         }
+
+        # Copy config/__init__.py content if it exists
+        try {
+            $configInitContent = Invoke-WebRequest -Uri "$baseUrl/ai_companion/config/__init__.py" -UseBasicParsing -TimeoutSec 30 -ErrorAction SilentlyContinue
+        } catch {}
 
         Write-Host "  [OK] Download complete" -ForegroundColor Green
         return $true
@@ -177,10 +202,12 @@ function Install-Local {
 
     Write-Host ""
     Write-Host "Initializing config..." -ForegroundColor Yellow
-    if (-not (Test-Path "$userDir\config\bots.yaml")) {
+    if (-not (Test-Path "$userDir\config\models.yaml")) {
         New-Item -ItemType Directory -Path "$userDir\config" -Force | Out-Null
-        Copy-Item "$ProjectDir\config\bots.yaml.example" "$userDir\config\bots.yaml" -ErrorAction SilentlyContinue
         Copy-Item "$ProjectDir\config\models.yaml.example" "$userDir\config\models.yaml" -ErrorAction SilentlyContinue
+        if (Test-Path "$ProjectDir\config\bots.yaml") {
+            Copy-Item "$ProjectDir\config\bots.yaml" "$userDir\config\bots.yaml" -ErrorAction SilentlyContinue
+        }
         Write-Host "[OK] Config created" -ForegroundColor Green
     }
 
