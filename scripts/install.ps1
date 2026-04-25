@@ -92,43 +92,56 @@ function Download-Project {
     param([string]$InstallDir)
 
     Write-Host ""
-    Write-Host "📥 下载 AI Companion 代码..." -ForegroundColor Yellow
+    Write-Host "Downloading AI Companion code..." -ForegroundColor Yellow
 
     $repoUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend"
     $tempZip = "$env:TEMP\ai-companion.zip"
 
     try {
         # 方法1: 使用 git clone
-        Write-Host "   使用 Git 克隆..." -ForegroundColor Gray
+        Write-Host "   Using Git clone..." -ForegroundColor Gray
         git clone --depth 1 $repoUrl $InstallDir 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ 代码下载完成" -ForegroundColor Green
+            Write-Host "Done!" -ForegroundColor Green
             return $true
         }
     } catch {
-        Write-Host "   Git 不可用，尝试备用方法..." -ForegroundColor Gray
+        Write-Host "   Git not available, trying alternative..." -ForegroundColor Gray
     }
 
+    # 方法2: 使用 GitHub 备选（如果 Gitee 不可用）
     try {
-        # 方法2: 下载 zip 包 (Gitee 格式)
-        $zipUrl = "$repoUrl/repository/archive/master.zip"
-        Write-Host "   下载压缩包..." -ForegroundColor Gray
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
-        Expand-Archive -Path $tempZip -DestinationPath "$env:TEMP" -Force
-        $extractedDir = "$env:TEMP\ai-girl-friend"
-        if (Test-Path $extractedDir) {
-            Copy-Item -Path "$extractedDir\*" -Destination $InstallDir -Recurse -Force
-            Remove-Item -Path $extractedDir -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item -Path $tempZip -Force -ErrorAction SilentlyContinue
-            Write-Host "✓ 代码下载完成" -ForegroundColor Green
+        Write-Host "   Trying GitHub mirror..." -ForegroundColor Gray
+        $githubUrl = "https://github.com/AIC-Framework/ai-girl-friend.git"
+        git clone --depth 1 $githubUrl $InstallDir 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Done!" -ForegroundColor Green
             return $true
         }
     } catch {
-        Write-Host "   备用方法失败: $_" -ForegroundColor Gray
+        Write-Host "   GitHub mirror failed" -ForegroundColor Gray
     }
 
-    Write-Host "❌ 无法下载项目代码，请确保已安装 Git 或网络连接正常" -ForegroundColor Red
+    # 方法3: 直接下载单个必需文件
+    try {
+        Write-Host "   Trying direct download..." -ForegroundColor Gray
+        $baseUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master"
+        $files = @("requirements.txt", "setup.py", "ai_companion/__main__.py")
+        New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
+
+        foreach ($file in $files) {
+            $fileUrl = "$baseUrl/$file"
+            $localPath = Join-Path $InstallDir $file
+            New-Item -Path (Split-Path $localPath) -ItemType Directory -Force | Out-Null
+            Invoke-WebRequest -Uri $fileUrl -OutFile $localPath -UseBasicParsing
+        }
+        Write-Host "Done!" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "   Direct download failed: $_" -ForegroundColor Gray
+    }
+
+    Write-Host "Failed to download. Please ensure Git is installed or download manually." -ForegroundColor Red
     return $false
 }
 
