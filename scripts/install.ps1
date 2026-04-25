@@ -79,14 +79,12 @@ function Test-Pip {
     }
 }
 
-# 下载项目
+# 下载项目（直接下载，无需 Git）
 function Download-Project {
     param([string]$InstallDir)
 
     Write-Host ""
     Write-Host "Downloading project to: $InstallDir" -ForegroundColor Cyan
-
-    $repoUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend"
 
     # 先清理已存在的目录
     if (Test-Path $InstallDir) {
@@ -94,53 +92,74 @@ function Download-Project {
         Remove-Item $InstallDir -Recurse -Force
     }
 
-    # 方法1: 使用 git clone
-    $hasGit = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
-    if ($hasGit) {
-        Write-Host "  Using Git clone..." -ForegroundColor Gray
-        $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1",$repoUrl,$InstallDir -NoNewWindow -Wait -PassThru
-        if ($process.ExitCode -eq 0 -and (Test-Path $InstallDir)) {
-            Write-Host "  [OK] Download complete" -ForegroundColor Green
-            return $true
-        }
-        Write-Host "  [WARN] Git clone failed" -ForegroundColor Yellow
-    } else {
-        Write-Host "  [WARN] Git not found" -ForegroundColor Yellow
-    }
-
-    # 方法2: 直接下载文件（无需 Git）
-    Write-Host "  Trying direct download..." -ForegroundColor Gray
+    # 直接下载所有必需文件
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
 
         $baseUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master"
 
-        # 需要下载的文件和目录结构
+        # 需要下载的文件列表
         $files = @(
             "requirements.txt",
             "setup.py",
             "pyproject.toml",
-            "ai_companion/__main__.py",
-            "ai_companion/__init__.py",
-            "ai_companion/config.py",
-            "ai_companion/bot.py",
-            "ai_companion/models.py"
+            "config/bots.yaml.example",
+            "config/models.yaml.example"
         )
 
+        # 递归下载目录
+        $dirs = @("ai_companion", "ai_companion/tools", "ai_companion/memory", "ai_companion/platforms", "gateway")
+
+        foreach ($dir in $dirs) {
+            $localDir = Join-Path $InstallDir $dir
+            if (!(Test-Path $localDir)) { New-Item -Path $localDir -ItemType Directory -Force | Out-Null }
+        }
+
+        # 下载根目录文件
         foreach ($file in $files) {
             $fileUrl = "$baseUrl/$file"
             $localPath = Join-Path $InstallDir $file
             $dir = Split-Path $localPath
             if (!(Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
-            Write-Host "    Downloading $file..." -ForegroundColor Gray
-            Invoke-WebRequest -Uri $fileUrl -OutFile $localPath -UseBasicParsing
+            Write-Host "  Downloading $file..." -ForegroundColor Gray
+            try {
+                Invoke-WebRequest -Uri $fileUrl -OutFile $localPath -UseBasicParsing -TimeoutSec 30
+            } catch {
+                Write-Host "    Failed to download $file, continuing..." -ForegroundColor Yellow
+            }
+        }
+
+        # 递归下载 ai_companion 目录
+        $subFiles = @(
+            "ai_companion/__main__.py",
+            "ai_companion/__init__.py",
+            "ai_companion/config.py",
+            "ai_companion/bot.py",
+            "ai_companion/models.py",
+            "ai_companion/memory/__init__.py",
+            "ai_companion/memory/situation.py",
+            "ai_companion/platforms/__init__.py",
+            "ai_companion/platforms/base.py",
+            "gateway/__init__.py",
+            "gateway/server.py"
+        )
+
+        foreach ($file in $subFiles) {
+            $fileUrl = "$baseUrl/$file"
+            $localPath = Join-Path $InstallDir $file
+            Write-Host "  Downloading $file..." -ForegroundColor Gray
+            try {
+                Invoke-WebRequest -Uri $fileUrl -OutFile $localPath -UseBasicParsing -TimeoutSec 30
+            } catch {
+                Write-Host "    Failed: $file" -ForegroundColor Yellow
+            }
         }
 
         Write-Host "  [OK] Download complete" -ForegroundColor Green
         return $true
     } catch {
-        Write-Host "  [FAIL] Direct download failed: $_" -ForegroundColor Red
+        Write-Host "  [FAIL] Download failed: $_" -ForegroundColor Red
         return $false
     }
 }
