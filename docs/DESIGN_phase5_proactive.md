@@ -1,7 +1,8 @@
 # Phase 5：主动唤醒系统设计方案
 
 > 设计日期：2026-04-24
-> 状态：✅ 已实现
+> 更新日期：2026-04-25
+> 状态：✅ 已实现 + Phase 2-4 优化完成
 
 ---
 
@@ -13,6 +14,9 @@
 - LLM 推理判断是否应该主动联系（非关键词）
 - LLM 生成符合人格的主动消息（非模板）
 - 每个 Bot 独立调度，可配置活跃或静默模式
+- Bot 具备独立人生轨迹，可分享自己的事
+- 多维情绪模型，更真实的情感表现
+- 关系深度影响行为模式
 
 ---
 
@@ -25,7 +29,7 @@
 │  ProactiveConfig      # 配置管理（可配置所有参数）         │
 │  ProactiveState       # 状态管理（持久化到 JSON）           │
 │  ProactiveScheduler   # 后台调度器（独立协程）               │
-│  ProactivePlatform    # 平台适配器（CLI/飞书/Webhook）      │
+│  LifeEngine           # Bot 人生轨迹引擎（独立运行）        │
 └─────────────────────────────────────────────────────────┘
          │
          ▼
@@ -35,6 +39,23 @@
 └─────────────────┘  └─────────────────┘
 ```
 
+### 2.1 新增组件
+
+| 组件 | 说明 |
+|------|------|
+| LifeEngine | Bot 独立人生轨迹引擎（生成日常小事、人生大事） |
+| LifeState | Bot 人生状态管理（持久化） |
+| LifeConfig | Bot 人生配置（周期、time_ratio） |
+
+### 2.2 多维情绪模型
+
+| 情绪字段 | 说明 |
+|----------|------|
+| `annoyance_level` | 生气级别（0-10） |
+| `miss_level` | 想念程度（0-10） |
+| `insecurity_level` | 不安全感（0-10） |
+| `excitement_level` | 兴奋度（0-10） |
+
 ---
 
 ## 3. 配置说明
@@ -43,11 +64,10 @@
 
 ```
 data/bots/{bot_id}/persona/proactive.json
+data/bots/{bot_id}/persona/life.json
 ```
 
-例如：`data/bots/suqing/persona/proactive.json`
-
-### 3.2 完整配置项
+### 3.2 proactive.json 完整配置项
 
 ```json
 {
@@ -76,76 +96,50 @@ data/bots/{bot_id}/persona/proactive.json
 
   "platform": {
     "type": "cli"
-  }
+  },
+
+  "preferred_contact_times": ["19:00-22:00", "12:00-13:00"],
+  "timezone": "Asia/Shanghai",
+  "random_trigger_prob": 0.05,
+  "random_trigger_min_ratio": 0.5
 }
 ```
 
-### 3.3 配置项详解
+### 3.3 proactive.json 配置项详解
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `enabled` | true | 是否启用主动唤醒 |
-| `mode` | "active" | `"active"`=活跃模式（会主动发消息），`"silent"`=静默模式 |
-| `scheduler.check_interval_seconds` | 600 | 后台检查间隔（秒），600=10分钟 |
+| `mode` | "active" | `"active"`=活跃模式，`"silent"`=静默模式 |
+| `scheduler.check_interval_seconds` | 600 | 后台检查间隔（秒） |
 | `scheduler.idle_threshold_hours` | 24 | 多久没联系触发提醒（小时） |
 | `scheduler.max_daily` | 5 | 每天最多主动消息数 |
 | `scheduler.min_interval_hours` | 4 | 两条消息最小间隔（小时） |
 | `scheduler.max_idle_days` | 7 | 超过此天数停止主动（天） |
-| `triggers.idle_reminder.enabled` | true | 是否启用空闲触发 |
-| `triggers.idle_reminder.idle_hours` | 24 | 空闲触发阈值（小时） |
-| `triggers.emotion_trigger.enabled` | true | 是否启用情绪触发 |
-| `triggers.emotion_trigger.keywords` | [...] | 情绪关键词列表 |
-| `triggers.emotion_trigger.response_delay_minutes` | 5 | 检测到情绪后延迟关心（分钟） |
-| `platform.type` | "cli" | 发送平台：`"cli"` / `"feishu"` / `"webhook"` |
+| `preferred_contact_times` | ["19:00-22:00"] | 黄金时段（只有此时段主动） |
+| `timezone` | "Asia/Shanghai" | 时区 |
+| `random_trigger_prob` | 0.05 | 随机提前触发概率（5%） |
+| `random_trigger_min_ratio` | 0.5 | 随机触发最低空闲比例 |
 
-### 3.4 配置示例
+### 3.4 life.json 配置项
 
-#### 示例 1：活跃模式（默认）
 ```json
 {
-  "enabled": true,
-  "mode": "active",
-  "scheduler": {
-    "check_interval_seconds": 600,
-    "idle_threshold_hours": 24
-  }
+  "daily_interval_seconds": 3600,
+  "major_interval_seconds": 21600,
+  "time_ratio": 1,
+  "max_events": 20,
+  "max_context_bits": 2000
 }
 ```
 
-#### 示例 2：静默模式（不主动发消息）
-```json
-{
-  "enabled": true,
-  "mode": "silent"
-}
-```
-
-#### 示例 3：高频率模式（5分钟检查，最多10条/天）
-```json
-{
-  "enabled": true,
-  "mode": "active",
-  "scheduler": {
-    "check_interval_seconds": 300,
-    "idle_threshold_hours": 12,
-    "max_daily": 10,
-    "min_interval_hours": 2
-  }
-}
-```
-
-#### 示例 4：配置情绪关键词
-```json
-{
-  "triggers": {
-    "emotion_trigger": {
-      "enabled": true,
-      "keywords": ["不开心", "难过", "郁闷", "累", "沮丧", "失落", "焦虑"],
-      "response_delay_minutes": 3
-    }
-  }
-}
-```
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `daily_interval_seconds` | 3600 | 日常事件检查间隔（秒） |
+| `major_interval_seconds` | 21600 | 人生大事检查间隔（秒） |
+| `time_ratio` | 1 | 时间比率（1=Bot时间=现实时间） |
+| `max_events` | 20 | 最多保留事件数 |
+| `max_context_bits` | 2000 | 最多占用 token 数 |
 
 ---
 
@@ -155,33 +149,65 @@ data/bots/{bot_id}/persona/proactive.json
 
 ```
 data/bots/{bot_id}/proactive_state.json
+data/bots/{bot_id}/life_state.json
 ```
 
-### 4.2 状态内容
+### 4.2 proactive_state.json 完整内容
 
 ```json
 {
-  "last_message_time": "2026-04-24T10:30:00",
-  "last_proactive_time": "2026-04-24T09:00:00",
+  "last_message_time": "2026-04-25T10:30:00",
+  "last_proactive_time": "2026-04-25T09:00:00",
   "annoyance_level": 2,
   "today_proactive_count": 2,
-  "last_reset_date": "2026-04-24",
+  "last_reset_date": "2026-04-25",
   "total_proactive_sent": 45,
   "last_emotion_trigger_time": null,
-  "cooldowns": {}
+  "cooldowns": {},
+  "last_opening_style": "在吗？",
+  "miss_level": 5,
+  "insecurity_level": 3,
+  "excitement_level": 4,
+  "last_user_reply_time": null,
+  "unreplied_count": 0,
+  "user_active_hours": {"20": 5, "21": 3},
+  "previous_absence_days": 0,
+  "just_reactivated": false
 }
 ```
 
-### 4.3 状态说明
+### 4.3 proactive_state.json 状态说明
 
 | 字段 | 说明 |
 |------|------|
 | `last_message_time` | 用户最后发消息时间 |
 | `last_proactive_time` | Bot 最后主动发消息时间 |
-| `annoyance_level` | 生气级别（0-10），用户冷落 Bot 时上升 |
+| `annoyance_level` | 生气级别（0-10） |
+| `miss_level` | 想念程度（0-10） |
+| `insecurity_level` | 不安全感（0-10） |
+| `excitement_level` | 兴奋度（0-10） |
 | `today_proactive_count` | 今日已主动发消息数（每日重置） |
 | `total_proactive_sent` | 累计主动发消息数 |
-| `cooldowns` | 各触发器的冷却时间 |
+| `last_opening_style` | 上次使用的开场白（rotation 用） |
+| `last_user_reply_time` | 用户最后回复时间 |
+| `unreplied_count` | 未回复消息数 |
+| `user_active_hours` | 用户活跃时间统计 {"20": 5, ...} |
+| `previous_absence_days` | 上次冷落天数 |
+| `just_reactivated` | 是否刚重新激活（假不在意） |
+
+### 4.4 life_state.json 内容
+
+```json
+{
+  "life_events": [...],
+  "major_life_events": [...],
+  "bot_mood": "平静",
+  "bot_current_activity": "在家休息",
+  "bot_age_days": 0,
+  "last_daily_tick": null,
+  "last_major_tick": null
+}
+```
 
 ---
 
@@ -191,32 +217,74 @@ data/bots/{bot_id}/proactive_state.json
 
 ```
 1. enabled == true 且 mode == "active"
-2. today_proactive_count < max_daily
-3. annoyance_level < 9（生气时不主动）
-4. 不在冷却中
-5. idle_hours >= idle_threshold_hours
+2. 黄金时段检查（非黄金时段不触发）
+3. 不连续触发（30%概率通过，保持矜持）
+4. 关系深度调整（根据关系调整 idle_threshold 和 max_daily）
+5. today_proactive_count < max_daily
+6. annoyance_level < 9（生气时不主动）
+7. 不在冷却中
+8. idle_hours >= adjusted_idle_threshold（关系调整后）
+9. 梯度沉默检查（30天+进入休眠）
 ```
 
-### 5.2 LLM 判断
+### 5.2 关系深度行为差异
+
+| 关系等级 | idle_threshold | max_daily | 行为特征 |
+|----------|---------------|-----------|---------|
+| 陌生网友 (1-3) | 2x | ÷3 | 很矜持，只有大事才发消息 |
+| 普通朋友 (4-5) | 1x | 1x | 偶尔主动，一周1-2次 |
+| 好朋友 (6-7) | 0.7x | 1.5x | 一周2-3次，可以随便聊天 |
+| 恋人 (8-10) | 0.5x | 2x | 可以撒娇、要求见面、频繁互动 |
+
+### 5.3 梯度沉默策略
+
+| 冷落时长 | Bot 行为 |
+|----------|---------|
+| 0-7天 | 正常触发 |
+| 7-14天 | 30%概率触发 |
+| 14-30天 | 10%概率触发 |
+| 30天以上 | 进入休眠，不主动 |
+
+### 5.4 黄金时段
+
+只在配置的黄金时段内触发主动消息：
+- 默认：`["19:00-22:00", "12:00-13:00"]`
+- 时区：`Asia/Shanghai`
+
+### 5.5 随机提前触发
+
+- 5% 概率随机提前触发
+- 需达到 `idle_threshold * 0.5` 以上才可能触发
+
+### 5.6 LLM 判断
 
 通过 LLM 推理判断是否应该主动联系，综合考虑：
 - 关系深度（1=陌生，10=恋人）
-- 心情状态（根据 annoyance_level）
+- 心情状态（多维情绪：annoyance/miss/insecurity/excitement）
 - 距离上次聊天时间
 - 今天已发消息数
+- 关系行为特征
 
-### 5.3 LLM 生成消息
+### 5.7 LLM 生成消息（结构化输出）
 
-根据 Bot 性格和当前情况生成符合人格的主动消息：
-- 傲娇：「哼，好久不见呢，你是不是把我忘了？...才不是，我只是刚好想起你而已。」
-- 温柔：「最近怎么样？好久没聊了，有点想你。」
-- 活泼：「哈喽！！最近怎么样！！想你了～」
+```json
+{
+  "opening": "开场白/称呼",
+  "topic": "话题内容或空字符串",
+  "ending": "结尾语"
+}
+```
 
-### 5.4 情绪触发
+组合成最终消息，如：「嗨，今天天气不错，有空聊聊」
 
-检测用户输入中的情绪关键词：
-- 用户说「不开心」「难过」「累」等
-- 延迟 response_delay_minutes 后主动关心
+### 5.8 开场白场景选择
+
+| 场景 | 条件 | 示例 |
+|------|------|------|
+| default | 正常 | "在吗？" |
+| short_no_reply | 1次未回复 | "怎么不理我..." |
+| long_no_reply | ≥2次未回复 或 刚重新激活 | "你是不是把我忘了？" |
+| with_topic | 有可分享的生活事件 | "对了，我突然想起..." |
 
 ---
 
@@ -224,16 +292,52 @@ data/bots/{bot_id}/proactive_state.json
 
 | 条件 | 限制 |
 |------|------|
-| 每日上限 | max_daily（默认5条） |
+| 每日上限 | max_daily（关系调整后） |
 | 最小间隔 | min_interval_hours（默认4小时） |
-| 生气降级 | annoyance >= 7 时，max_daily 降为 1 |
-| 最大空闲 | max_idle_days（默认7天）后停止主动 |
+| 关系调整 | 根据关系等级调整阈值 |
+| 梯度沉默 | 30天以上进入休眠 |
+| 不连续触发 | 70%概率折扣（保持矜持） |
 
 ---
 
-## 7. 平台适配
+## 7. 冷落后重新激活
 
-### 7.1 支持的平台
+当用户长时间冷落后终于回复时：
+1. Bot 标记 `just_reactivated = True`
+2. Bot 使用"假不在意"语气（long_no_reply 场景）
+3. 用户继续互动后恢复正常语气
+
+---
+
+## 8. Bot 人生轨迹（LifeEngine）
+
+### 8.1 周期
+
+| 周期 | 间隔 | 作用 |
+|------|------|------|
+| 短周期 | 1h Bot时间 | 判断是否生成日常小事 |
+| 长周期 | 6h Bot时间 | 判断是否有人生大事 |
+
+### 8.2 事件分类
+
+| 类型 | 说明 | 影响 |
+|------|------|------|
+| 日常小事 | 低概率生成 | 保存在 life_events，可遗忘 |
+| 人生大事 | 触发人格更新 | 更新 persona 文件，影响性格 |
+
+### 8.3 time_ratio 效果
+
+| time_ratio | Bot 1天=现实 | 适用场景 |
+|------------|-------------|---------|
+| 1 | 1天 | 正常体验 |
+| 24 | 1小时 | 加速体验 |
+| 100 | 4分钟 | 快速验证 |
+
+---
+
+## 9. 平台适配
+
+### 9.1 支持的平台
 
 | 平台 | 说明 |
 |------|------|
@@ -241,75 +345,19 @@ data/bots/{bot_id}/proactive_state.json
 | `feishu` | 飞书，通过 Webhook 发送 |
 | `webhook` | 通用 Webhook |
 
-### 7.2 配置平台
-
-```json
-{
-  "platform": {
-    "type": "cli"
-  }
-}
-```
-
-或通过代码设置：
-```python
-bot.set_proactive_platform("cli")
-bot.set_proactive_platform("feishu", webhook_url="https://...")
-```
-
 ---
 
-## 8. 与 BotInstance 集成
+## 10. 与 BotInstance 集成
 
 ```python
 # Bot 初始化时自动加载配置
 bot = BotInstance(config, model=model)
-await bot.init()  # 启动主动唤醒调度器
+await bot.init()  # 启动主动唤醒调度器 + LifeEngine
 
 # 获取状态
 status = bot.get_proactive_status()
 
 # 用户发消息时自动更新状态
 await bot.handle_message("你好")
-# → annoyance_level 下降，last_message_time 更新
-```
-
----
-
-## 9. 验证结果
-
-| Test | 功能 | 结果 |
-|------|------|------|
-| 1 | ProactiveConfig 配置加载 | ✅ |
-| 2 | ProactiveState 状态持久化 | ✅ |
-| 3 | BotInstance 初始化 + 调度器启动 | ✅ |
-| 4 | 用户发消息后状态更新（消气） | ✅ |
-| 5 | 情绪触发检测 | ✅ |
-| 6 | LLM 判断不应联系（刚发过消息） | ✅ |
-| 7 | LLM 判断应联系（25小时idle） | ✅ |
-| 8 | LLM 生成傲娇风格消息 | ✅ |
-| 9 | 限流（达每日上限） | ✅ |
-| 10 | 生气降级（annoyance=9） | ✅ |
-| 11 | 冷却机制 | ✅ |
-| 12 | 获取状态 | ✅ |
-| 13 | 静默模式 | ✅ |
-
----
-
-## 10. LLM 判断示例
-
-```
-输入状态：
-- idle_hours: 25.0
-- relationship: 普通朋友
-- annoyance_level: 0
-- today_proactive_count: 0
-
-LLM 判断结果：
-- should_contact: True
-- reason: 傲娇关心
-- urgency: medium
-
-生成消息：
-「哼，好久不见呢，你是不是把我忘了？...才不是，我只是刚好想起你而已。」
+# → annoyance_level 下降，miss_level 下降，record_user_activity()
 ```

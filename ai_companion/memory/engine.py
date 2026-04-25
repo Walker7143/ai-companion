@@ -31,6 +31,14 @@ from .stores.episodic import EpisodicStore
 from .stores.semantic import SemanticStore
 from .stores.working import WorkingMemoryStore
 
+# 上下文压缩器（可选）
+try:
+    from ..context import ContextCompressor
+    CONTEXT_COMPRESSOR_AVAILABLE = True
+except ImportError:
+    CONTEXT_COMPRESSOR_AVAILABLE = False
+    ContextCompressor = None
+
 
 class MemoryEngine:
     """
@@ -79,7 +87,7 @@ class MemoryEngine:
         self.max_summaries = self.config.get("max_summaries", self.DEFAULT_MAX_SUMMARIES)
 
         # embedding 配置
-        emb_cfg = self.config.get("memory", {})
+        emb_cfg = self.config
         embedding_mode = emb_cfg.get("embedding", "none")
         embedding_model = emb_cfg.get("embedding_model", "all-MiniLM-L6-v2")
         self.semantic_char_limit = emb_cfg.get("semantic_char_limit", 4400)
@@ -105,6 +113,14 @@ class MemoryEngine:
         self._summarizer: Optional[object] = None
         self._compress_task: Optional[asyncio.Task] = None
 
+        # 上下文压缩器（默认关闭，保持向后兼容）
+        context_cfg = self.config.get("context", {}).get("compressor", {})
+        if CONTEXT_COMPRESSOR_AVAILABLE and context_cfg.get("enabled", False):
+            self._compressor = ContextCompressor(context_cfg)
+            logger.info(f"[MemoryEngine] ContextCompressor 已启用")
+        else:
+            self._compressor = None
+
     def set_summarizer(self, summarizer):
         """注入 LLM 适配器（用于压缩摘要和语义抽取）"""
         self._summarizer = summarizer
@@ -114,6 +130,9 @@ class MemoryEngine:
     def start_session(self, session_id: str = None):
         self._session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
         self.working.start_session(self._session_id)
+        # 重置上下文压缩器
+        if self._compressor:
+            self._compressor.reset()
 
     # ── 公开接口 ─────────────────────────────────────────────
 
@@ -266,6 +285,12 @@ class MemoryEngine:
 
     async def _do_compress(self):
         """执行压缩"""
+        # 如果启用了 ContextCompressor，使用新压缩逻辑
+        if self._compressor is not None and self._summarizer is not None:
+            await self._do_compress_with_context()
+            return
+
+        # 使用原有压缩逻辑
         if self._summarizer is None:
             await self.working.compress(session_id=self._session_id, summarizer=None)
         else:
@@ -287,6 +312,38 @@ class MemoryEngine:
                 session_id=self._session_id,
                 summarizer=_Summarizer()
             )
+
+    async def _do_compress_with_context(self):
+        """使用 ContextCompressor 执行压缩"""
+        # 获取所有消息
+        messages = self.working.get_all_messages(self._session_id)
+        if not messages:
+            return
+
+        # 构建 summarizer 包装
+        class _Summarizer:
+            async def summarize_old_conversation(self, text: str) -> str:
+                prompt = MemoryEngine.COMPRESS_PROMPT.format(
+                    old_messages_text=text
+                )
+                response = await self._summarizer.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    system_prompt=None,
+                )
+                raw = response.get("content") or response.get("reasoning_content") if isinstance(response, dict) else str(response)
+                return raw[:500] if raw else text[:200]
+
+        # 执行压缩
+        success = await self._compressor.compress(messages, _Summarizer())
+        if success:
+            summary = self._compressor.get_last_summary()
+            if summary:
+                await self.working.apply_summary(summary, self._session_id)
+                logger.info(f"[MemoryEngine] ContextCompressor 压缩成功，摘要长度: {len(summary)}")
+        else:
+            # 压缩未触发或失败，使用原有逻辑
+            logger.info("[MemoryEngine] ContextCompressor 未触发压缩，回退到原有逻辑")
+            await self.working.compress(session_id=self._session_id, summarizer=_Summarizer())
 
         self._compress_task = None
 

@@ -5,12 +5,23 @@ minimax:
   max_context_chars: 8000   # 模型上下文上限（字符数），超限触发压缩
 
 memory:
-  embedding: "none"          # "local" | "none"
+  embedding: "local"          # "local" | "none"
   embedding_model: "all-MiniLM-L6-v2"  # sentence-transformers 模型名
   max_working_turns: 20       # 工作记忆保留轮数
   hard_limit_chars: 5000      # 硬上限，超限同步压缩
   soft_limit_chars: 3000      # 软上限，异步压缩
   semantic_char_limit: 4400    # 单条语义记忆事实的最大字符数（超限截断）
+
+# ============================================
+# 上下文压缩配置
+# ============================================
+context:
+  compressor:
+    enabled: false           # 是否启用新的上下文压缩器（默认关闭，保持向后兼容）
+    threshold_percent: 0.75   # 触发压缩的上下文比例（75% 时触发）
+    tail_token_budget: 4000   # 尾部保留 token 数
+    protect_first_n: 2         # 保护前 N 条消息不被压缩
+    model_context: 128000      # 模型上下文上限
 
 fallback:
   enabled: false

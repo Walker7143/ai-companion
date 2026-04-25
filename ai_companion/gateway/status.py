@@ -19,7 +19,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from hermes_constants import get_hermes_home
+from .constants import get_hermes_home
 from typing import Any, Optional
 
 if sys.platform == "win32":

@@ -1,0 +1,34 @@
+{
+  "enabled": true,
+  "mode": "active",
+  "scheduler": {
+    "check_interval_seconds": 600,
+    "idle_threshold_hours": 24,
+    "max_daily": 5,
+    "min_interval_hours": 4,
+    "max_idle_days": 7
+  },
+  "triggers": {
+    "idle_reminder": {
+      "enabled": true,
+      "idle_hours": 24
+    },
+    "emotion_trigger": {
+      "enabled": true,
+      "keywords": [
+        "不开心",
+        "难过",
+        "累",
+        "生气",
+        "烦",
+        "郁闷",
+        "沮丧"
+      ],
+      "response_delay_minutes": 5
+    }
+  },
+  "platform": {
+    "type": "cli",
+    "webhook_url": null
+  }
+}

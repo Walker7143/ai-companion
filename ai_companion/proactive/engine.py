@@ -9,6 +9,7 @@ ProactiveEngine - 主动唤醒引擎（LLM 推理）
 
 import json
 import logging
+import random
 import re
 from datetime import datetime, timedelta
 from typing import Optional, TYPE_CHECKING
@@ -36,6 +37,7 @@ SHOULD_CONTACT_PROMPT = """【角色】
 
 【用户相关信息】
 你们的关系描述：{relationship_desc}
+关系行为特征：{relationship_behavior}
 用户的事实/偏好：{user_facts}
 
 【最近对话上下文】
@@ -71,48 +73,137 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 你现在的感受：{feeling_description}
 你想主动联系用户，原因：{contact_reason}
 
+【Bot 最近发生的事（可选择是否分享）】
+{bot_life_context}
+
 【消息要求】
 根据你的性格和当前感受，写出你想对用户说的一句话。
 要求：
 - 符合你的性格（傲娇/温柔/活泼/高冷）
 - 自然、口语化，不要太正式
-- 1-3句话即可
-- 不要太长
+- 如果有话题，可以自然地带入
+- 结尾可以表达期待
 
-直接输出消息内容，不要加引号或解释。"""
+【输出格式】
+输出一个 JSON 对象：
+{{"opening": "开场白/称呼", "topic": "话题内容或空字符串", "ending": "结尾语"}}
+
+只输出 JSON，不要其他内容。"""
 
 # 性格消息模板（fallback 用）
 PERSONALITY_MESSAGES = {
-    "傲娇": [
-        "...在吗？",
-        "你是不是把我忘了？",
-        "哼，这么久不联系我。",
-        "...算了，没什么。",
-    ],
-    "温柔": [
-        "最近怎么样？",
-        "在忙什么呀？",
-        "想你了～",
-        "今天过得顺利吗？",
-    ],
-    "活泼": [
-        "哈喽！！在吗！！",
-        "想你了～！",
-        "在干嘛呢～",
-        "诶嘿～有没有想我呀～",
-    ],
-    "高冷": [
-        "在？",
-        "有事找你。",
-        "...",
-        "最近怎么样。",
-    ],
-    "默认": [
-        "在吗？",
-        "最近怎么样？",
-        "想和你聊聊天。",
-        "在干嘛呢？",
-    ],
+    "傲娇": {
+        "default": [
+            "...在吗？",
+            "你是不是把我忘了？",
+            "哼，这么久不联系我。",
+            "...算了，没什么。",
+        ],
+        "long_no_reply": [  # 很久没回复
+            "你该不会把我忘了吧？",
+            "...我也不想主动的。",
+            "算了，反正你也不在意。",
+        ],
+        "short_no_reply": [  # 短时间没回复
+            "在干嘛呀？",
+            "怎么不理我...",
+            "诶，有空吗？",
+        ],
+        "with_topic": [  # 有话题时
+            "对了，我突然想起...",
+            "有件事想跟你说～",
+            "...你知道吗，最近...",
+        ],
+    },
+    "温柔": {
+        "default": [
+            "最近怎么样？",
+            "在忙什么呀？",
+            "想你了～",
+            "今天过得顺利吗？",
+        ],
+        "long_no_reply": [
+            "你是不是很忙呀？",
+            "好久没聊了，有点想你...",
+            "最近还好吗？",
+        ],
+        "short_no_reply": [
+            "在吗～",
+            "刚刚在想你～",
+            "嗨～",
+        ],
+        "with_topic": [
+            "对了，昨天...",
+            "有件事想跟你分享～",
+            "你知道吗，今天...",
+        ],
+    },
+    "活泼": {
+        "default": [
+            "哈喽！！在吗！！",
+            "想你了～！",
+            "在干嘛呢～",
+            "诶嘿～有没有想我呀～",
+        ],
+        "long_no_reply": [
+            "你干嘛去了啦！",
+            "好久不见！想我了吗！",
+            "喂喂喂！！在吗！！",
+        ],
+        "short_no_reply": [
+            "诶～怎么啦～",
+            "在不在在不在！",
+            "哈喽哈喽！！",
+        ],
+        "with_topic": [
+            "诶诶诶！告诉你个事！",
+            "对了对了！",
+            "等等，我有话说！",
+        ],
+    },
+    "高冷": {
+        "default": [
+            "在？",
+            "有事找你。",
+            "...",
+            "最近怎么样。",
+        ],
+        "long_no_reply": [
+            "你是不是很忙。",
+            "算了。",
+            "随你。",
+        ],
+        "short_no_reply": [
+            "在吗。",
+            "有空吗。",
+            "。",
+        ],
+        "with_topic": [
+            "有件事。",
+            "跟你说下。",
+            "听好了。",
+        ],
+    },
+    "默认": {
+        "default": [
+            "在吗？",
+            "最近怎么样？",
+            "想和你聊聊天。",
+            "在干嘛呢？",
+        ],
+        "long_no_reply": [
+            "好久不见了。",
+            "最近还好吗？",
+        ],
+        "short_no_reply": [
+            "在吗～",
+            "嗨～",
+        ],
+        "with_topic": [
+            "对了...",
+            "有件事想跟你说。",
+        ],
+    },
 }
 
 
@@ -149,17 +240,50 @@ class ProactiveEngine:
     def set_memory(self, memory: "MemoryEngine"):
         self.memory = memory
 
+    def set_life_engine(self, life_engine):
+        """注入 LifeEngine 引用"""
+        self.life_engine = life_engine
+
     def _get_mood_description(self) -> str:
-        """根据生气级别描述心情"""
-        level = self.state.annoyance_level
-        if level >= 7:
-            return "有点失落和不满，觉得用户不够关心自己"
-        elif level >= 4:
-            return "有点冷淡，但还没完全放弃"
-        elif level >= 1:
-            return "稍微有点不开心"
-        else:
-            return "心情不错，想和用户聊天"
+        """根据多维情绪模型描述心情"""
+        annoyance = self.state.annoyance_level
+        miss = self.state.miss_level
+        insecurity = self.state.insecurity_level
+        excitement = self.state.excitement_level
+
+        # 组合情绪描述
+        parts = []
+
+        # 生气/不满
+        if annoyance >= 7:
+            parts.append("有点失落和不满，觉得用户不够关心自己")
+        elif annoyance >= 4:
+            parts.append("有点冷淡，但还没完全放弃")
+        elif annoyance >= 1:
+            parts.append("稍微有点不开心")
+
+        # 想念
+        if miss >= 7:
+            parts.append("很想念用户")
+        elif miss >= 4:
+            parts.append("有点想念")
+
+        # 不安全感
+        if insecurity >= 7:
+            parts.append("有点担心用户是不是不喜欢自己了")
+        elif insecurity >= 4:
+            parts.append("隐隐有点不安")
+
+        # 兴奋度
+        if excitement >= 7:
+            parts.append("最近有兴奋的事想分享")
+        elif excitement >= 4:
+            parts.append("心情不错")
+
+        if not parts:
+            return "心情平静"
+
+        return "，".join(parts)
 
     async def _get_relationship_info(self) -> tuple[int, str]:
         """获取关系等级和描述"""
@@ -269,10 +393,24 @@ class ProactiveEngine:
         if self.state.is_cooldown_active("idle_reminder"):
             return ProactiveDecision(False, "冷却中")
 
+        # 关系深度调整
+        rel_adjustment = await self._get_relationship_adjustment()
+        adjusted_idle_threshold = rel_adjustment["idle_threshold"]
+        adjusted_max_daily = rel_adjustment["max_daily"]
+
         # 检查时间
         idle_hours = self._calc_idle_hours()
-        if idle_hours < self.config.idle_threshold_hours:
+        if idle_hours < adjusted_idle_threshold:
             return ProactiveDecision(False, f"还没到触发时间({idle_hours:.1f}h)")
+
+        # 检查每日上限（关系调整后）
+        if self.state.today_proactive_count >= adjusted_max_daily:
+            return ProactiveDecision(False, f"已达每日上限({adjusted_max_daily})")
+
+        # 梯度沉默检查
+        silence_decision = self._check_gradient_silence(idle_hours)
+        if silence_decision:
+            return silence_decision
 
         # LLM 判断
         personality_tags = self._get_personality_type()
@@ -289,9 +427,10 @@ class ProactiveEngine:
             proactive_count=self.state.today_proactive_count,
             user_contacted_today="有" if self.state.last_message_time else "没有",
             relationship_desc=rel_desc,
+            relationship_behavior=rel_adjustment["behavior"],
             user_facts=await self._build_context(),
             recent_context=await self._build_context(),
-            idle_threshold=self.config.idle_threshold_hours,
+            idle_threshold=adjusted_idle_threshold,
             max_idle_days=self.config.max_idle_days,
         )
 
@@ -308,12 +447,34 @@ class ProactiveEngine:
 
     async def generate_message(self, reason: str = "") -> str:
         """让 LLM 生成主动消息"""
+        # 判断场景
+        has_topic = False
+        if hasattr(self, 'life_engine') and self.life_engine:
+            shareable_events = self.life_engine.state.get_recent_shareable_events(limit=2)
+            has_topic = len(shareable_events) > 0
+
+        # 根据是否有话题选择场景
+        if has_topic:
+            scenario = "with_topic"
+        else:
+            scenario = self._select_opening_scenario()
+
         if self.model is None:
-            return self._get_fallback_message()
+            return self._get_fallback_message(scenario)
 
         personality_type = self._get_personality_type()
         feeling = self._get_mood_description()
         rel_desc = await self._get_relationship_desc()
+
+        # 获取 Bot 可分享的生活事件
+        bot_life_context = ""
+        if hasattr(self, 'life_engine') and self.life_engine:
+            shareable_events = self.life_engine.state.get_recent_shareable_events(limit=2)
+            if shareable_events:
+                event = shareable_events[0]
+                bot_life_context = f"{event.description}"
+                if event.topic_prompt:
+                    bot_life_context += f"\n可以这样提起：{event.topic_prompt}"
 
         prompt = GENERATE_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
@@ -321,6 +482,7 @@ class ProactiveEngine:
             relationship_desc=rel_desc,
             feeling_description=feeling,
             contact_reason=reason or "想和用户聊天",
+            bot_life_context=bot_life_context,
         )
 
         try:
@@ -328,10 +490,44 @@ class ProactiveEngine:
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=None
             )
+            # 尝试解析结构化输出
+            message = self._parse_structured_message(response)
+            if message:
+                return message
             return self._clean_message(response)
         except Exception as e:
             logger.error(f"[ProactiveEngine] LLM 生成消息失败: {e}")
-            return self._get_fallback_message()
+            return self._get_fallback_message(scenario)
+
+    def _parse_structured_message(self, content: str) -> Optional[str]:
+        """解析结构化消息输出，组合成最终消息"""
+        content = content.strip()
+
+        # 提取 JSON
+        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content, re.DOTALL)
+        if not json_match:
+            return None
+
+        try:
+            data = json.loads(json_match.group())
+            opening = data.get("opening", "")
+            topic = data.get("topic", "")
+            ending = data.get("ending", "")
+
+            # 组合消息
+            parts = []
+            if opening:
+                parts.append(opening)
+            if topic:
+                parts.append(topic)
+            if ending:
+                parts.append(ending)
+
+            message = "，".join(parts) if parts else None
+            return message
+        except (json.JSONDecodeError, Exception) as e:
+            logger.debug(f"[ProactiveEngine] 解析结构化消息失败: {e}")
+            return None
 
     def _parse_decision(self, content: str) -> ProactiveDecision:
         """解析 LLM 的判断结果"""
@@ -359,6 +555,79 @@ class ProactiveEngine:
 
         return ProactiveDecision(False, "解析失败", "low")
 
+    async def _get_relationship_adjustment(self) -> dict:
+        """根据关系深度调整触发参数
+
+        关系等级 -> 行为特征:
+        - 陌生网友 (1-3): 很少主动，很矜持，只有大事才发消息
+        - 普通朋友 (4-5): 偶尔主动，一周1-2次
+        - 好朋友 (6-7): 一周2-3次，可以随便聊天
+        - 恋人 (8-10): 可以撒娇、要求见面、频繁互动
+        """
+        rel_level = await self._get_relationship_level()
+
+        # 默认配置
+        default_idle = self.config.idle_threshold_hours
+        default_max_daily = self.config.max_daily
+
+        if rel_level <= 3:
+            # 陌生网友：非常矜持，提高阈值，减少频率
+            return {
+                "idle_threshold": default_idle * 2,  # 2倍空闲才触发
+                "max_daily": max(1, default_max_daily // 3),  # 最多1/3次
+                "behavior": "很矜持，只有大事才发消息"
+            }
+        elif rel_level <= 5:
+            # 普通朋友：标准行为
+            return {
+                "idle_threshold": default_idle,
+                "max_daily": default_max_daily,
+                "behavior": "偶尔主动，一周1-2次"
+            }
+        elif rel_level <= 7:
+            # 好朋友：降低阈值，增加频率
+            return {
+                "idle_threshold": int(default_idle * 0.7),  # 0.7倍空闲
+                "max_daily": int(default_max_daily * 1.5),  # 1.5倍
+                "behavior": "一周2-3次，可以随便聊天"
+            }
+        else:
+            # 恋人：更低阈值，更多互动
+            return {
+                "idle_threshold": int(default_idle * 0.5),  # 0.5倍空闲
+                "max_daily": default_max_daily * 2,  # 2倍
+                "behavior": "可以撒娇、要求见面、频繁互动"
+            }
+
+    def _check_gradient_silence(self, idle_hours: float) -> Optional[ProactiveDecision]:
+        """梯度沉默检查
+
+        根据用户冷落 Bot 的时长，采用不同的行为策略：
+        - 0-7天：正常触发
+        - 7-14天：降低频率（30%概率触发）
+        - 14-30天：几乎不主动（10%概率触发），只发节假日
+        - 30天以上：进入休眠，不主动
+        """
+        idle_days = idle_hours / 24
+
+        if idle_days > 30:
+            # 30天以上：休眠
+            return ProactiveDecision(False, "已进入休眠状态")
+        elif idle_days > 14:
+            # 14-30天：10%概率触发
+            if random.random() > 0.1:
+                return ProactiveDecision(False, "长时间未联系，降低主动频率")
+            # 仍然触发，但标记为低优先级
+            return None  # 继续正常流程
+        elif idle_days > 7:
+            # 7-14天：30%概率触发
+            if random.random() > 0.3:
+                return ProactiveDecision(False, "短期未联系，保持矜持")
+            return None  # 继续正常流程
+
+        # 0-7天：正常触发
+        return None
+
     def _clean_message(self, content: str) -> str:
         """清理 LLM 生成的消息"""
         content = content.strip()
@@ -370,12 +639,57 @@ class ProactiveEngine:
         content = re.sub(r'\s*```$', '', content)
         return content
 
-    def _get_fallback_message(self) -> str:
-        """获取 fallback 消息（性格模板）"""
+    def _get_fallback_message(self, scenario: str = "default") -> str:
+        """获取 fallback 消息（性格模板），根据场景选择，使用 rotation 避免重复"""
         personality_type = self._get_personality_type()
-        templates = PERSONALITY_MESSAGES.get(personality_type, PERSONALITY_MESSAGES["默认"])
-        # 简单选择第一个
-        return templates[0]
+        personality_templates = PERSONALITY_MESSAGES.get(personality_type, PERSONALITY_MESSAGES["默认"])
+
+        # 根据场景选择模板列表
+        if isinstance(personality_templates, dict):
+            templates = personality_templates.get(scenario, personality_templates.get("default", []))
+        else:
+            templates = personality_templates
+
+        if not templates:
+            templates = ["在吗？"]
+
+        # 使用 rotation 机制避免连续使用同一开场白
+        last_style = getattr(self.state, 'last_opening_style', "") or ""
+        if last_style and last_style in templates:
+            idx = templates.index(last_style)
+            next_idx = (idx + 1) % len(templates)
+        else:
+            next_idx = 0
+
+        chosen = templates[next_idx]
+        self.state.last_opening_style = chosen
+        return chosen
+
+    def _select_opening_scenario(self) -> str:
+        """根据当前状态选择开场白场景"""
+        # 检查未回复情况
+        unreplied = getattr(self.state, 'unreplied_count', 0)
+
+        # 获取空闲时间
+        idle_hours = self._calc_idle_hours()
+
+        # 判断是否刚重新激活（假不在意）
+        just_reactivated = getattr(self.state, 'just_reactivated', False)
+
+        # 判断场景
+        if just_reactivated:
+            # 用户终于回复了，假装不在意
+            return "long_no_reply"
+        if unreplied >= 2:
+            # 多次未回复，用 long_no_reply
+            return "long_no_reply"
+        elif unreplied == 1:
+            # 一次未回复，用 short_no_reply
+            return "short_no_reply"
+        elif idle_hours >= 72:  # 3天以上
+            return "long_no_reply"
+        else:
+            return "default"
 
     async def check_and_maybe_remind(self) -> Optional[str]:
         """检查并可能发送主动消息，返回消息内容或 None"""
@@ -387,6 +701,11 @@ class ProactiveEngine:
             return None
 
         if self.state.today_proactive_count >= self.config.max_daily:
+            return None
+
+        # 不连续触发：70% 概率折扣，保持矜持
+        if random.random() > 0.3:
+            logger.debug("[ProactiveEngine] 不连续触发检查，未通过矜持概率")
             return None
 
         # LLM 判断
@@ -407,6 +726,8 @@ class ProactiveEngine:
     async def _send_proactive_message(self, message: str):
         """发送主动消息并更新状态"""
         self.state.increment_proactive()
+        # Bot 主动发消息后，用户没回复则增加未回复计数
+        self.state.unreplied_count = self.state.unreplied_count + 1
 
         # 设置冷却（根据最小间隔）
         cooldown_end = datetime.now() + timedelta(hours=self.config.min_interval_hours)
@@ -414,11 +735,29 @@ class ProactiveEngine:
 
         logger.info(f"[ProactiveEngine] 发送主动消息: {message[:50]}...")
 
-    def on_user_message_received(self):
-        """用户发消息时调用"""
+    def on_user_message_received(self, has_real_content: bool = True):
+        """用户发消息时调用
+
+        Args:
+            has_real_content: 用户消息是否有实质内容
+                              True=真正回复，清除冷却
+                              False=只是戳一下，缩短冷却
+        """
         self.state.on_user_message()
-        # 清除主动联系冷却（用户主动联系后，更新触发意愿）
-        self.state.clear_cooldown("idle_reminder")
+        # 记录用户活跃时间
+        self.state.record_user_activity()
+
+        # 根据是否真正回复决定冷却策略
+        if has_real_content:
+            # 真正回复，清除冷却
+            self.state.clear_cooldown("idle_reminder")
+            # 用户真正回复了，重置未回复计数
+            self.state.unreplied_count = 0
+            # 清除冷落重新激活标记（已经重新激活了）
+            self.state.just_reactivated = False
+        else:
+            # 只是戳一下，缩短冷却2小时
+            self.state.decrement_cooldown("idle_reminder", hours=2)
 
     def get_status(self) -> dict:
         """获取当前状态（供调试/显示用）"""

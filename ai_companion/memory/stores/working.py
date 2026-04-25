@@ -321,5 +321,57 @@ class WorkingMemoryStore:
         conn.close()
         return count
 
+    def get_all_messages(self, session_id: Optional[str] = None) -> list[dict]:
+        """获取会话所有消息（包括压缩和未压缩的）
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            消息列表，每条包含 role 和 content
+        """
+        sid = session_id or self.current_session
+        if not sid:
+            return []
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.execute("""
+            SELECT role, content, compressed FROM messages
+            WHERE session_id = ?
+            ORDER BY id ASC
+        """, (sid,))
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"role": r[0], "content": r[1], "compressed": r[2]} for r in rows]
+
+    async def apply_summary(self, summary: str, session_id: Optional[str] = None) -> bool:
+        """应用结构化摘要到工作记忆
+
+        Args:
+            summary: 结构化摘要文本
+            session_id: 会话 ID
+
+        Returns:
+            是否成功
+        """
+        sid = session_id or self.current_session
+        if not sid:
+            return False
+
+        # 标记所有未压缩消息为已压缩
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE messages SET compressed = 1 WHERE session_id = ? AND compressed = 0", (sid,))
+
+        # 写入新摘要
+        conn.execute(
+            "INSERT INTO summaries (session_id, summary, message_count) VALUES (?, ?, ?)",
+            (sid, summary, -1)  # -1 表示这是结构化摘要
+        )
+        conn.commit()
+        conn.close()
+
+        # 累加压缩计数
+        self._compression_counts[sid] = self._compression_counts.get(sid, 0) + 1
+        return True
+
     async def close(self):
         pass

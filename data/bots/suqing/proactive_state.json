@@ -1,10 +1,14 @@
 {
-  "last_message_time": "2026-04-24T00:57:51.217384",
+  "last_message_time": "2026-04-24T14:42:31.415262",
   "last_proactive_time": null,
   "annoyance_level": 0,
   "today_proactive_count": 0,
   "last_reset_date": "2026-04-24",
   "total_proactive_sent": 0,
   "last_emotion_trigger_time": null,
-  "cooldowns": {}
+  "cooldowns": {
+    "emotion_难过": "2026-04-24T09:34:07.308245",
+    "emotion_累": "2026-04-24T09:27:32.799091"
+  },
+  "last_check_time": "2026-04-24T14:42:10.918966"
 }

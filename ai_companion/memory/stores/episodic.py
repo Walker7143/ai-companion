@@ -131,18 +131,19 @@ class EpisodicStore:
             """, (sid, summary, content, tokens, 0.6))
             await db.commit()
 
-        # Chroma 写入（失败不影响主流程）
-        try:
-            collection = self._get_chroma()
-            embedding = self._get_embedding(summary)
-            collection.add(
-                ids=[str(datetime.now().timestamp())],
-                embeddings=[embedding],
-                documents=[f"{summary}\n\n原始：{content}"],
-                metadatas=[{"summary": summary, "session_id": sid}]
-            )
-        except Exception:
-            pass
+        # Chroma 写入（仅在 embedding_mode="local" 时）
+        if self.embedding_mode == "local":
+            try:
+                collection = self._get_chroma()
+                embedding = self._get_embedding(summary)
+                collection.add(
+                    ids=[str(datetime.now().timestamp())],
+                    embeddings=[embedding],
+                    documents=[f"{summary}\n\n原始：{content}"],
+                    metadatas=[{"summary": summary, "session_id": sid}]
+                )
+            except Exception:
+                pass
 
     async def _llm_extract(self, user_input: str, bot_output: str) -> str:
         """用 LLM 生成情景摘要"""
@@ -188,16 +189,18 @@ class EpisodicStore:
     def recall(self, query: str, top_k: int = 3,
                session_id: Optional[str] = None) -> list[dict]:
         """
-        语义召回：jieba tokens LIKE → Chroma → summary/content LIKE 降级。
+        语义召回：Chroma → jieba tokens → summary/content LIKE 降级。
         session_id 不为空时只召回该会话的记忆。
+        embedding_mode="local" 时启用 Chroma 向量召回（语义优先）。
         """
-        # 1. 优先 jieba tokens LIKE 搜索
-        results = self._tokens_recall(query, top_k, session_id)
-        if results:
-            return results
+        # 1. Chroma 向量召回（语义优先，embedding_mode="local" 时）
+        if self.embedding_mode == "local":
+            results = self._chroma_recall(query, top_k, session_id)
+            if results:
+                return results
 
-        # 2. Chroma 向量召回
-        results = self._chroma_recall(query, top_k, session_id)
+        # 2. jieba tokens LIKE 搜索（中文关键词）
+        results = self._tokens_recall(query, top_k, session_id)
         if results:
             return results
 

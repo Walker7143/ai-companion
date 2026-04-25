@@ -40,6 +40,12 @@ class ProactiveConfig:
             "type": "cli",  # "cli" | "feishu" | "webhook"
             "webhook_url": None,
         },
+        # 黄金时段配置
+        "preferred_contact_times": ["19:00-22:00", "12:00-13:00"],
+        "timezone": "Asia/Shanghai",
+        # 随机触发配置
+        "random_trigger_prob": 0.05,  # 5% 概率随机提前
+        "random_trigger_min_ratio": 0.5,  # 至少达到 idle_threshold 的 50% 才可能随机触发
     }
 
     def __init__(self, persona_dir: Path):
@@ -142,6 +148,22 @@ class ProactiveConfig:
     @property
     def webhook_url(self) -> Optional[str]:
         return self._config.get("platform", {}).get("webhook_url")
+
+    @property
+    def preferred_contact_times(self) -> list:
+        return self._config.get("preferred_contact_times", ["19:00-22:00", "12:00-13:00"])
+
+    @property
+    def timezone(self) -> str:
+        return self._config.get("timezone", "Asia/Shanghai")
+
+    @property
+    def random_trigger_prob(self) -> float:
+        return self._config.get("random_trigger_prob", 0.05)
+
+    @property
+    def random_trigger_min_ratio(self) -> float:
+        return self._config.get("random_trigger_min_ratio", 0.5)
 
     def update(self, key: str, value):
         """动态更新配置项"""

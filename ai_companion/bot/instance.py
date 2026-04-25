@@ -158,6 +158,7 @@ class BotInstance:
         # 启动主动唤醒调度器
         if self.proactive_config.is_active:
             self.proactive_scheduler = ProactiveScheduler(self.proactive_engine)
+            self.proactive_scheduler.set_dependencies(self.model, self.memory)
             await self.proactive_scheduler.start()
 
     async def handle_message(self, user_input: str) -> str:
