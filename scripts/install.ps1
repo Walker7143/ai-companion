@@ -80,6 +80,16 @@ function Test-Pip {
     }
 }
 
+# 获取 pip 安装命令（处理 externally-managed-environment）
+function Get-PipCommand {
+    # pip 25+ 已移除 --break-system-packages，使用 --user 代替
+    $testResult = & python -m pip install -e . --dry-run 2>&1
+    if ($testResult -match "externally-managed-environment") {
+        return "python -m pip install --user"
+    }
+    return "python -m pip install"
+}
+
 # 本地安装
 function Install-Local {
     Write-Host ""
@@ -96,6 +106,7 @@ function Install-Local {
 
     # pip 检查
     Test-Pip
+    $pipCmd = Get-PipCommand
 
     # 用户数据目录
     $userDir = "$env:USERPROFILE\.ai-companion"
@@ -118,8 +129,28 @@ function Install-Local {
     # 安装依赖
     Write-Host ""
     Write-Host "📦 安装 Python 依赖..." -ForegroundColor Yellow
-    python -m pip install -r requirements.txt -q
+    & python -m pip install -r requirements.txt -q
     Write-Host "✓ 依赖安装完成" -ForegroundColor Green
+
+    # 安装 AI Companion（全局命令）
+    Write-Host ""
+    Write-Host "📦 安装 AI Companion（全局命令）..." -ForegroundColor Yellow
+    $venvDir = "$userDir\.venv"
+    $testResult = & python -m pip install -e . --dry-run 2>&1
+
+    if ($testResult -match "externally-managed-environment") {
+        Write-Host "   系统 Python 受保护，创建虚拟环境..." -ForegroundColor Yellow
+        python -m venv $venvDir
+        $venvPip = "$venvDir\Scripts\pip.exe"
+        & $venvPip install --upgrade pip -q
+        & $venvPip install -r requirements.txt -q
+        & $venvPip install -e .
+        Write-Host "✓ AI Companion 已安装到虚拟环境: $venvDir" -ForegroundColor Green
+        Write-Host "   激活虚拟环境: $venvDir\Scripts\activate.bat" -ForegroundColor Gray
+    } else {
+        & python -m pip install -e .
+        Write-Host "✓ AI Companion 命令已安装: ai-companion" -ForegroundColor Green
+    }
 
     Write-Host ""
     Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
@@ -130,7 +161,8 @@ function Install-Local {
     Write-Host "     编辑 $userDir\config\models.yaml" -ForegroundColor Gray
     Write-Host ""
     Write-Host "  2. 启动:" -ForegroundColor Yellow
-    Write-Host "     python -m ai_companion start" -ForegroundColor Gray
+    Write-Host "     ai-companion setup" -ForegroundColor Gray
+    Write-Host "     ai-companion start" -ForegroundColor Gray
     Write-Host ""
     Write-Host "  配置目录: $userDir" -ForegroundColor Gray
     Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan

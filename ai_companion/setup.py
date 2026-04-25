@@ -38,7 +38,7 @@ async def run_setup():
     console.print(f"[dim]数据目录: {data_dir}[/dim]\n")
 
     # Step 1: API Key 配置
-    console.print("[bold]步骤 1/5:[/bold] 模型配置")
+    console.print("[bold]步骤 1/6:[/bold] 模型配置")
     console.print("-" * 40)
 
     console.print("可选模型:")
@@ -126,7 +126,7 @@ async def run_setup():
         console.print("[dim]跳过模型配置保存[/dim]\n")
 
     # Step 2: 创建 Bot(s)
-    console.print("[bold]步骤 2/5:[/bold] 创建 Bot")
+    console.print("[bold]步骤 2/6:[/bold] 创建 Bot")
     console.print("-" * 40)
 
     templates = [
@@ -202,13 +202,109 @@ async def run_setup():
     (config_dir / "bots.yaml").write_text(yaml.dump(bots_config, allow_unicode=True))
     console.print(f"✓ Bot 列表已更新 ({len(created_bots)} 个)\n")
 
-    # Step 3: 飞书配置
-    console.print("[bold]步骤 3/5:[/bold] 飞书配置")
+    # Step 3: 主动唤醒配置
+    console.print("[bold]步骤 3/6:[/bold] 主动唤醒配置")
     console.print("-" * 40)
 
-    if Confirm.ask("是否配置飞书机器人?", default=False):
-        app_id = Prompt.ask("请输入 App ID (cli_xxxxx)")
-        app_secret = Prompt.ask("请输入 App Secret", password=True)
+    if Confirm.ask("是否启用 Bot 主动唤醒功能?", default=True):
+        default_idle = Prompt.ask("空闲触发阈值（小时）", default="24")
+        default_max_daily = Prompt.ask("每日最大主动消息数", default="5")
+        default_min_interval = Prompt.ask("最小发送间隔（小时）", default="3")
+
+        console.print("\n发送平台:")
+        console.print("  1. CLI       - 终端输出（默认）")
+        console.print("  2. 飞书     - 通过飞书机器人发送")
+        console.print("  3. Webhook   - 通过 Webhook 发送")
+
+        platform_choice = Prompt.ask("选择发送平台", choices=["1", "2", "3"], default="1")
+        platform_map = {"1": "cli", "2": "feishu", "3": "webhook"}
+        platform_type = platform_map[platform_choice]
+        console.print(f"选择: [green]{platform_choice}[/green]")
+
+        console.print("\n主动唤醒模式:")
+        console.print("  1. idle     - 空闲触发（用户沉默后主动联系）")
+        console.print("  2. active   - 活跃模式（更积极主动）")
+        console.print("  3. silent   - 静默模式（不主动发送）")
+
+        mode_choice = Prompt.ask("选择模式", choices=["1", "2", "3"], default="1")
+        mode_map = {"1": "idle", "2": "active", "3": "silent"}
+        proactive_mode = mode_map[mode_choice]
+
+        proactive_config = {
+            "enabled": True,
+            "mode": proactive_mode,
+            "check_interval": 60,
+            "idle_threshold_hours": int(default_idle),
+            "min_interval_hours": int(default_min_interval),
+            "max_daily": int(default_max_daily),
+            "emotion_trigger_enabled": True,
+            "emotion_keywords": ["难过", "伤心", "生气", "委屈", "累"],
+            "emotion_response_delay_minutes": 30,
+            "platform_type": platform_type,
+        }
+
+        # 为每个创建的 Bot 更新 proactive.json
+        for b in created_bots:
+            proactive_path = data_dir / "data" / "bots" / b["id"] / "persona" / "proactive.json"
+            if proactive_path.exists():
+                existing = yaml.safe_load(proactive_path.read_text()) or {}
+                existing.update(proactive_config)
+                proactive_path.write_text(yaml.dump(existing, allow_unicode=True, sort_keys=False))
+            console.print(f"✓ [green]{b['name']}[/green] 主动唤醒已配置")
+        console.print("[dim]可在 data/bots/{bot_id}/persona/proactive.json 中进一步调整[/dim]\n")
+    else:
+        console.print("[dim]跳过主动唤醒配置[/dim]\n")
+
+    # Step 4: Bot 人生轨迹配置
+    console.print("[bold]步骤 4/6:[/bold] Bot 人生轨迹配置")
+    console.print("-" * 40)
+
+    if Confirm.ask("是否启用 Bot 人生轨迹（LifeEngine）?", default=True):
+        daily_interval = Prompt.ask("日常事件检查间隔（秒）", default="3600")
+        major_interval = Prompt.ask("人生大事检查间隔（秒）", default="21600")
+        time_ratio = Prompt.ask("时间加速比率（1=现实时间）", default="1")
+
+        life_config = {
+            "daily_interval_seconds": int(daily_interval),
+            "major_interval_seconds": int(major_interval),
+            "time_ratio": int(time_ratio),
+            "max_events": 20,
+            "max_context_bits": 2000
+        }
+
+        for b in created_bots:
+            life_path = data_dir / "data" / "bots" / b["id"] / "persona" / "life.json"
+            if life_path.exists():
+                existing = yaml.safe_load(life_path.read_text()) or {}
+                existing.update(life_config)
+                life_path.write_text(yaml.dump(existing, allow_unicode=True, sort_keys=False))
+            console.print(f"✓ [green]{b['name']}[/green] 人生轨迹已配置")
+        console.print("[dim]可在 data/bots/{bot_id}/persona/life.json 中进一步调整[/dim]\n")
+    else:
+        console.print("[dim]跳过人生轨迹配置[/dim]\n")
+
+    # Step 5: 飞书配置
+    console.print("[bold]步骤 5/6:[/bold] 飞书配置")
+    console.print("-" * 40)
+
+    # 加载现有飞书配置（用于默认值）
+    config_path = config_dir / "config.yaml"
+    config_data = {}
+    existing_feishu = {}
+    if config_path.exists():
+        try:
+            config_data = yaml.safe_load(config_path.read_text()) or {}
+            existing_feishu = config_data.get("platforms", {}).get("feishu", {}) or {}
+        except Exception:
+            pass
+
+    if Confirm.ask("是否配置飞书机器人?", default=bool(existing_feishu)):
+        # 获取现有值作为默认值
+        existing_extra = existing_feishu.get("extra", {}) or {}
+        existing_routing = existing_feishu.get("routing", {}) or {}
+
+        app_id = Prompt.ask("请输入 App ID (cli_xxxxx)", default=existing_extra.get("app_id", ""))
+        app_secret = Prompt.ask("请输入 App Secret", password=True, default="")
 
         console.print("\n连接模式:")
         console.print("  1. WebSocket - 长连接（推荐，生产环境使用）")
@@ -216,15 +312,16 @@ async def run_setup():
         connection_mode = Prompt.ask(
             "\n请选择连接模式",
             choices=["1", "2"],
-            default="1"
+            default="1" if existing_extra.get("connection_mode") != "webhook" else "2"
         )
         connection_mode = "websocket" if connection_mode == "1" else "webhook"
 
         if connection_mode == "webhook":
-            webhook_host = Prompt.ask("Webhook 监听地址", default="0.0.0.0")
-            webhook_port = Prompt.ask("Webhook 监听端口", default="8765")
+            webhook_host = Prompt.ask("Webhook 监听地址", default=existing_extra.get("webhook_host", "0.0.0.0"))
+            webhook_port = Prompt.ask("Webhook 监听端口", default=str(existing_extra.get("webhook_port", 8765)))
         else:
-            webhook_host, webhook_port = None, None
+            webhook_host = None
+            webhook_port = None
 
         # 群组策略
         console.print("\n群组策略:")
@@ -233,36 +330,33 @@ async def run_setup():
         console.print("  3. blacklist - 黑名单除外")
         console.print("  4. admin_only - 仅管理员")
 
-        policy_choice = Prompt.ask("请选择策略", choices=["1", "2", "3", "4"], default="2")
+        existing_policy = existing_extra.get("group_policy", "allowlist")
+        policy_num = {"open": "1", "allowlist": "2", "blacklist": "3", "admin_only": "4"}.get(existing_policy, "2")
+        policy_choice = Prompt.ask("请选择策略", choices=["1", "2", "3", "4"], default=policy_num)
         policy_map = {"1": "open", "2": "allowlist", "3": "blacklist", "4": "admin_only"}
         group_policy = policy_map[policy_choice]
 
-        allowed_users = []
+        allowed_users = list(existing_extra.get("allowed_users", []))
         if group_policy in ("allowlist", "blacklist", "admin_only"):
-            console.print("\n请输入允许的用户 Open ID（留空结束）:")
+            console.print("\n允许的用户 Open ID（留空结束，输入 . 保留现有）:")
             while True:
                 user = Prompt.ask("用户 Open ID", default="")
                 if not user:
                     break
+                if user == ".":
+                    break
                 allowed_users.append(user)
 
-        admins = []
+        admins = list(existing_extra.get("admins", []))
         if group_policy == "admin_only":
-            console.print("\n请输入管理员 Open ID（留空结束）:")
+            console.print("\n管理员 Open ID（留空结束，输入 . 保留现有）:")
             while True:
                 admin = Prompt.ask("管理员 Open ID", default="")
                 if not admin:
                     break
+                if admin == ".":
+                    break
                 admins.append(admin)
-
-        # 飞书配置写入 config_dir / config.yaml
-        config_path = config_dir / "config.yaml"
-        config_data = {}
-        if config_path.exists():
-            try:
-                config_data = yaml.safe_load(config_path.read_text()) or {}
-            except Exception:
-                pass
 
         # 确保 platforms 结构存在
         if "platforms" not in config_data:
@@ -272,14 +366,15 @@ async def run_setup():
         else:
             config_data["platforms"]["feishu"]["enabled"] = True
 
-        # 更新飞书配置
-        feishu_extra = {
-            "app_id": app_id,
-            "app_secret": app_secret,
-            "domain": "feishu",
-            "connection_mode": connection_mode,
-            "group_policy": group_policy,
-        }
+        # 更新飞书配置（合并新旧值）
+        feishu_extra = dict(existing_extra)
+        if app_id:
+            feishu_extra["app_id"] = app_id
+        if app_secret:
+            feishu_extra["app_secret"] = app_secret
+        feishu_extra["domain"] = "feishu"
+        feishu_extra["connection_mode"] = connection_mode
+        feishu_extra["group_policy"] = group_policy
 
         if webhook_host:
             feishu_extra["webhook_host"] = webhook_host
@@ -298,35 +393,42 @@ async def run_setup():
         console.print("  1. dedicated - 所有消息发给指定的一个 Bot")
         console.print("  2. chat_routed - 根据群聊 ID 匹配不同 Bot")
 
-        routing_choice = Prompt.ask("请选择路由模式", choices=["1", "2"], default="1")
+        existing_mode = existing_routing.get("mode", "dedicated")
+        routing_choice = Prompt.ask("请选择路由模式", choices=["1", "2"], default="1" if existing_mode == "dedicated" else "2")
         routing_mode = "dedicated" if routing_choice == "1" else "chat_routed"
 
-        routing_config = {"mode": routing_mode}
+        routing_config = dict(existing_routing)
+        routing_config["mode"] = routing_mode
 
         if routing_mode == "dedicated":
+            existing_bot_id = existing_routing.get("bot_id", "")
             if created_bots:
-                console.print(f"\n请选择 Bot（默认: {created_bots[0]['name']}）:")
+                console.print(f"\n请选择 Bot（默认: {existing_bot_id or created_bots[0]['name']}）:")
                 for i, b in enumerate(created_bots, 1):
                     console.print(f"  {i}. {b['name']} ({b['id']})")
                 bot_choice = Prompt.ask("选择", choices=[str(i) for i in range(1, len(created_bots) + 1)], default="1")
                 routing_config["bot_id"] = created_bots[int(bot_choice) - 1]["id"]
         else:  # chat_routed
-            # 默认 bot
             if created_bots:
-                console.print(f"\n请选择默认 Bot（未匹配群聊时使用，默认: {created_bots[0]['name']}）:")
+                existing_default_bot = existing_routing.get("default_bot", "")
+                console.print(f"\n请选择默认 Bot（默认: {existing_default_bot or created_bots[0]['name']}）:")
                 for i, b in enumerate(created_bots, 1):
                     console.print(f"  {i}. {b['name']} ({b['id']})")
                 bot_choice = Prompt.ask("选择", choices=[str(i) for i in range(1, len(created_bots) + 1)], default="1")
                 routing_config["default_bot"] = created_bots[int(bot_choice) - 1]["id"]
 
-            # 群聊映射
-            console.print("\n群聊 ID -> Bot 映射（留空结束）:")
+            existing_group_map = existing_routing.get("group_bot_map", {})
+            console.print("\n群聊 ID -> Bot 映射（留空结束，输入 . 保留现有）:")
             console.print("  格式: oc_xxxxx1,bot_id")
-            console.print("  例如: oc_xxxxx1,aiyue")
             group_bot_map = {}
+            for chat_id, bot_id in existing_group_map.items():
+                console.print(f"  现有: {chat_id} -> {bot_id}")
             while True:
                 line = Prompt.ask("映射")
                 if not line:
+                    break
+                if line == ".":
+                    group_bot_map = dict(existing_group_map)
                     break
                 parts = line.split(",")
                 if len(parts) == 2:
@@ -344,8 +446,8 @@ async def run_setup():
     else:
         console.print("✗ 跳过飞书配置\n")
 
-    # Step 4: 环境变量配置（可选）
-    console.print("[bold]步骤 4/5:[/bold] 环境变量配置")
+    # Step 6: 环境变量配置（可选）
+    console.print("[bold]步骤 6/6:[/bold] 环境变量配置")
     console.print("-" * 40)
 
     # 检查是否已有 .env
@@ -412,7 +514,7 @@ async def run_setup():
         console.print("✗ 跳过\n")
 
     # Step 5: 完成
-    console.print("[bold]步骤 5/5:[/bold] 完成")
+    console.print("[bold]步骤 7/7:[/bold] 完成")
     console.print("-" * 40)
 
     console.print("\n[bold]创建的 Bots:[/bold]")

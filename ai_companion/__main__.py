@@ -25,10 +25,6 @@ from pathlib import Path
 _project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(_project_root))
 
-# 确保 gateway 模块可以正确导入 (Hermes 风格的顶级模块结构)
-# 这样 ai_companion.gateway.platforms.feishu 中的 `from gateway.config import ...` 可以工作
-import gateway
-
 
 def main():
     from ai_companion.main import main as start_main

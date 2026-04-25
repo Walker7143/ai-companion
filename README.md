@@ -28,24 +28,20 @@
 ### 安装
 
 ```bash
-# 克隆项目
+# 一键安装（自动选择 Docker 或本地）
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
+
+# 或克隆后本地安装
 git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
 cd ai-girl-friend
-
-# 安装依赖
-pip install -r requirements.txt
-
-# 设置 API Key
-export MINIMAX_API_KEY="your_api_key_here"
-
-# 启动 CLI 对话
-python -m ai_companion start
+./scripts/install.sh
 ```
 
 ### 首次配置
 
 ```bash
-python -m ai_companion setup
+source ~/.ai-companion/.venv/bin/activate  # 如果使用了虚拟环境
+ai-companion setup
 ```
 
 ---

@@ -1,17 +1,17 @@
 #!/bin/bash
 #
 # AI Companion 一键安装脚本
-# 支持: macOS, Linux
+# 支持: macOS, Linux, Windows (WSL)
 #
 # 用法:
-#   ./install.sh          # 本地安装（默认）
-#   ./install.sh --docker # Docker 安装
-#   ./install.sh -d       # Docker 安装
+#   ./install.sh          # 自动选择最佳安装方式
+#   ./install.sh --docker # 强制使用 Docker
+#   ./install.sh --local  # 强制本地安装（需要 Python 3.11+）
 #
 
 set -e
 
-INSTALL_MODE="local"
+INSTALL_MODE="auto"
 
 # 解析参数
 while [[ $# -gt 0 ]]; do
@@ -20,11 +20,16 @@ while [[ $# -gt 0 ]]; do
             INSTALL_MODE="docker"
             shift
             ;;
+        -l|--local)
+            INSTALL_MODE="local"
+            shift
+            ;;
         -h|--help)
-            echo "用法: $0 [-d|--docker] [-h|--help]"
+            echo "用法: $0 [-d|--docker] [-l|--local] [-h|--help]"
             echo ""
             echo "选项:"
-            echo "  -d, --docker    使用 Docker 方式安装"
+            echo "  -d, --docker    使用 Docker 方式安装（推荐，最简单）"
+            echo "  -l, --local     本地安装（需要 Python 3.11+）"
             echo "  -h, --help      显示帮助信息"
             exit 0
             ;;
@@ -36,55 +41,42 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "═══════════════════════════════════════════"
-echo "  AI Companion 安装脚本"
+echo "  AI Companion 一键安装"
 echo "═══════════════════════════════════════════"
 echo ""
 
 # 检测 Docker
 check_docker() {
     if command -v docker &> /dev/null; then
-        if docker info &> /dev/null; then
+        if docker info &> /dev/null 2>&1; then
             echo "✓ Docker 已就绪"
             return 0
-        else
-            echo "⚠️  Docker 已安装但当前用户无权限"
-            echo "   请运行: sudo dockerd 或将用户加入 docker 组"
-            return 1
         fi
-    else
-        return 1
     fi
+    return 1
 }
 
-# 检测 Python
-check_python() {
+# 检测 Python（仅检测，不终止）
+check_python_quiet() {
     if command -v python3 &> /dev/null; then
         PYTHON_CMD="python3"
     elif command -v python &> /dev/null; then
         PYTHON_CMD="python"
     else
-        echo "❌ 未检测到 Python 3.11+"
-        echo "请先安装 Python: https://www.python.org/downloads/"
         return 1
     fi
 
-    VERSION=$($PYTHON_CMD --version | cut -d' ' -f2 | cut -d'.' -f1,2)
-    if [ "$(echo "$VERSION < 3.11" | bc)" = "1" ]; then
-        echo "❌ Python 版本过低: $VERSION (需要 3.11+)"
-        echo "请升级 Python: https://www.python.org/downloads/"
+    VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
+    if [ "$(echo "$VERSION < 3.11" | bc 2>/dev/null || echo "1")" = "1" ]; then
         return 1
     fi
-    echo "✓ Python $VERSION"
     return 0
 }
 
-# 检测 pip
-check_pip() {
-    if ! $PYTHON_CMD -m pip --version &> /dev/null; then
-        echo "📦 安装 pip..."
-        $PYTHON_CMD -m ensurepip --upgrade
-    fi
-    echo "✓ pip 已就绪"
+# 检测 pip 是否可用（能正常安装包）
+check_pip_works() {
+    $PYTHON_CMD -m pip install --dry-run anything 2>&1 | grep -q "externally-managed-environment" && return 1
+    return 0
 }
 
 # 获取用户数据目录
@@ -94,16 +86,36 @@ get_user_dir() {
 
 # 本地安装
 install_local() {
+    PYTHON_CMD=""
+    if command -v python3 &> /dev/null; then
+        PYTHON_CMD="python3"
+    elif command -v python &> /dev/null; then
+        PYTHON_CMD="python"
+    fi
+
     echo ""
     echo "📦 本地安装模式"
     echo ""
 
-    if ! check_python; then
-        echo "❌ 本地安装需要 Python 3.11+"
-        echo "请安装 Python 或使用 Docker 模式: $0 --docker"
+    if [ -z "$PYTHON_CMD" ]; then
+        echo "❌ 未检测到 Python 3.11+"
+        echo ""
+        echo "请先安装 Python（推荐 anaconda）："
+        echo "  macOS: brew install python"
+        echo "  Linux: sudo apt install python3 python3-pip"
+        echo "  Windows: 下载 https://www.python.org/downloads/"
+        echo ""
+        echo "或使用 Docker 模式: $0 --docker"
         exit 1
     fi
-    check_pip
+
+    VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
+    if [ "$(echo "$VERSION < 3.11" | bc 2>/dev/null || echo "1")" = "1" ]; then
+        echo "❌ Python 版本过低: $VERSION (需要 3.11+)"
+        echo "请升级 Python: https://www.python.org/downloads/"
+        exit 1
+    fi
+    echo "✓ Python $VERSION"
 
     echo ""
     echo "📁 创建用户数据目录..."
@@ -112,10 +124,23 @@ install_local() {
     mkdir -p "$USER_DIR/logs"
     echo "✓ 数据目录: $USER_DIR"
 
+    # 创建虚拟环境
     echo ""
-    echo "📦 安装依赖..."
-    pip install -r requirements.txt --quiet
-    echo "✓ 依赖安装完成"
+    echo "📦 创建 Python 虚拟环境..."
+    $PYTHON_CMD -m venv "$USER_DIR/.venv"
+    VENV_PIP="$USER_DIR/.venv/bin/pip"
+    $VENV_PIP install --upgrade pip -q
+    echo "✓ 虚拟环境已创建: $USER_DIR/.venv"
+
+    echo ""
+    echo "📦 安装项目依赖..."
+    $VENV_PIP install -r requirements.txt -q
+    echo "✓ 项目依赖安装完成"
+
+    echo ""
+    echo "📦 安装 AI Companion..."
+    $VENV_PIP install -e .
+    echo "✓ AI Companion 已安装"
 
     echo ""
     echo "⚙️  初始化配置..."
@@ -128,15 +153,15 @@ install_local() {
 
     echo ""
     echo "═══════════════════════════════════════════"
-    echo "✓ 本地安装完成！"
+    echo "✓ 安装完成！"
     echo ""
     echo "下一步:"
-    echo "  1. 配置 API Key:"
-    echo "     cp config/models.yaml.example config/models.yaml"
-    echo "     # 编辑 config/models.yaml 填入你的 API Key"
+    echo "  1. 运行配置向导:"
+    echo "     source $USER_DIR/.venv/bin/activate"
+    echo "     ai-companion setup"
     echo ""
     echo "  2. 启动:"
-    echo "     python -m ai_companion start"
+    echo "     ai-companion start"
     echo ""
     echo "  配置目录: $USER_DIR"
     echo "═══════════════════════════════════════════"
@@ -196,5 +221,17 @@ case $INSTALL_MODE in
         ;;
     local)
         install_local
+        ;;
+    auto)
+        # 自动选择：优先 Docker，否则本地
+        if check_docker; then
+            echo "检测到 Docker，将使用 Docker 模式安装（推荐）"
+            echo ""
+            install_docker
+        else
+            echo "未检测到 Docker 或无权限，将使用本地安装"
+            echo ""
+            install_local
+        fi
         ;;
 esac

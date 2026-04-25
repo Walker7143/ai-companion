@@ -1,5 +1,7 @@
 from rich.console import Console
 from rich.prompt import Prompt
+import asyncio
+import random
 import sys
 
 # 初始化 readline，确保方向键工作
@@ -17,6 +19,7 @@ def _init_readline():
 _init_readline()
 
 from ..bot.manager import BotManager
+from ..gateway.sentence_splitter import SentenceSplitter
 
 
 class CLIAdapter:
@@ -130,6 +133,16 @@ class CLIAdapter:
             bot = self.bot_manager.get_bot(self.current_bot_id)
             try:
                 response = await bot.handle_message(user_input)
-                self.console.print(f"[bold pink]{bot.name}[/bold pink]: {response}\n")
+                sentences = SentenceSplitter.split(response)
+                if sentences:
+                    # Print bot name prefix only before the first sentence
+                    self.console.print(f"[bold pink]{bot.name}[/bold pink]: {sentences[0]}")
+                    for i in range(1, len(sentences)):
+                        # Random delay between sentences (1-2 seconds)
+                        await asyncio.sleep(random.uniform(1.0, 2.0))
+                        self.console.print(sentences[i])
+                    self.console.print()  # Blank line after response
+                else:
+                    self.console.print(f"[bold pink]{bot.name}[/bold pink]:\n")
             except Exception as e:
                 self.console.print(f"[red]Error:[/red] {e}\n")

@@ -25,7 +25,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+# 添加 vendor 目录到 path（gateway.xxx imports）
+_vendor_dir = Path(__file__).parent.parent.parent / "_vendor"
+sys.path.insert(0, str(_vendor_dir))
+sys.path.insert(0, str(_vendor_dir / "gw_framework"))
+sys.path.insert(0, str(_vendor_dir / "gw_framework" / "platforms"))
 
 logger = logging.getLogger(__name__)
 

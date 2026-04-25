@@ -48,6 +48,7 @@ user is seen through different apps in the future.
 from __future__ import annotations
 
 import asyncio
+import random
 import hashlib
 import hmac
 import itertools
@@ -56,6 +57,7 @@ import logging
 import mimetypes
 import os
 import re
+import sys
 import threading
 import time
 import uuid
@@ -68,6 +70,12 @@ from typing import Any, Dict, List, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+# 添加 vendor 目录到 path（gateway.xxx imports）
+_vendor_dir = Path(__file__).parent.parent.parent / "_vendor"
+sys.path.insert(0, str(_vendor_dir))
+sys.path.insert(0, str(_vendor_dir / "gw_framework"))
+sys.path.insert(0, str(_vendor_dir / "gw_framework" / "platforms"))
 
 # aiohttp/websockets are independent optional deps — import outside lark_oapi
 # so they remain available for tests and webhook mode even if lark_oapi is missing.
@@ -126,8 +134,8 @@ except ImportError:
 FEISHU_WEBSOCKET_AVAILABLE = websockets is not None
 FEISHU_WEBHOOK_AVAILABLE = aiohttp is not None
 
-from gateway.config import Platform, PlatformConfig
-from gateway.platforms.base import (
+from ai_companion.gateway.config import Platform, PlatformConfig
+from ai_companion.gateway.platforms.base import (
     BasePlatformAdapter,
     MessageEvent,
     MessageType,
@@ -139,8 +147,9 @@ from gateway.platforms.base import (
     cache_audio_from_bytes,
     cache_image_from_bytes,
 )
-from gateway.status import acquire_scoped_lock, release_scoped_lock
+from ai_companion.gateway.status import acquire_scoped_lock, release_scoped_lock
 from ..constants import get_hermes_home
+from ..sentence_splitter import SentenceSplitter, get_delay_for_sentence
 
 logger = logging.getLogger(__name__)
 
@@ -1638,50 +1647,76 @@ class FeishuAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
-        """Send a Feishu message."""
+        """Send a Feishu message, splitting long responses into gradual sentence-by-sentence delivery."""
         if not self._client:
             return SendResult(success=False, error="Not connected")
 
         formatted = self.format_message(content)
-        chunks = self.truncate_message(formatted, self.MAX_MESSAGE_LENGTH)
+
+        # Split into sentences for gradual sending
+        sentences = SentenceSplitter.split(formatted)
+
+        if not sentences:
+            return SendResult(success=False, error="Empty content")
+
         last_response = None
+        total_sentences = len(sentences)
 
         try:
-            for chunk in chunks:
-                msg_type, payload = self._build_outbound_payload(chunk)
-                try:
-                    response = await self._feishu_send_with_retry(
-                        chat_id=chat_id,
-                        msg_type=msg_type,
-                        payload=payload,
-                        reply_to=reply_to,
-                        metadata=metadata,
-                    )
-                except Exception as exc:
-                    if msg_type != "post" or not _POST_CONTENT_INVALID_RE.search(str(exc)):
-                        raise
-                    logger.warning("[Feishu] Invalid post payload rejected by API; falling back to plain text")
-                    response = await self._feishu_send_with_retry(
-                        chat_id=chat_id,
-                        msg_type="text",
-                        payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
-                        reply_to=reply_to,
-                        metadata=metadata,
-                    )
-                if (
-                    msg_type == "post"
-                    and not self._response_succeeded(response)
-                    and _POST_CONTENT_INVALID_RE.search(str(getattr(response, "msg", "") or ""))
-                ):
-                    logger.warning("[Feishu] Post payload rejected by API response; falling back to plain text")
-                    response = await self._feishu_send_with_retry(
-                        chat_id=chat_id,
-                        msg_type="text",
-                        payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
-                        reply_to=reply_to,
-                        metadata=metadata,
-                    )
-                last_response = response
+            for idx, sentence in enumerate(sentences):
+                # For each sentence: if it exceeds max length, truncate it first
+                if len(sentence) > self.MAX_MESSAGE_LENGTH:
+                    chunks = self.truncate_message(sentence, self.MAX_MESSAGE_LENGTH)
+                else:
+                    chunks = [sentence]
+
+                # reply_to only for the FIRST message (Feishu auto-threads subsequent ones)
+                use_reply_to = reply_to if idx == 0 else None
+
+                for chunk in chunks:
+                    msg_type, payload = self._build_outbound_payload(chunk)
+                    try:
+                        response = await self._feishu_send_with_retry(
+                            chat_id=chat_id,
+                            msg_type=msg_type,
+                            payload=payload,
+                            reply_to=use_reply_to,
+                            metadata=metadata,
+                        )
+                    except Exception as exc:
+                        if msg_type != "post" or not _POST_CONTENT_INVALID_RE.search(str(exc)):
+                            raise
+                        logger.warning("[Feishu] Invalid post payload rejected by API; falling back to plain text")
+                        response = await self._feishu_send_with_retry(
+                            chat_id=chat_id,
+                            msg_type="text",
+                            payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
+                            reply_to=use_reply_to,
+                            metadata=metadata,
+                        )
+                    if (
+                        msg_type == "post"
+                        and not self._response_succeeded(response)
+                        and _POST_CONTENT_INVALID_RE.search(str(getattr(response, "msg", "") or ""))
+                    ):
+                        logger.warning("[Feishu] Post payload rejected by API response; falling back to plain text")
+                        response = await self._feishu_send_with_retry(
+                            chat_id=chat_id,
+                            msg_type="text",
+                            payload=json.dumps({"text": _strip_markdown_to_plain_text(chunk)}, ensure_ascii=False),
+                            reply_to=use_reply_to,
+                            metadata=metadata,
+                        )
+                    last_response = response
+
+                    # After first chunk of first sentence, clear reply_to for next sentences
+                    use_reply_to = None
+
+                # Add delay between sentences based on sentence length, but not after the last one
+                if idx < total_sentences - 1:
+                    delay = get_delay_for_sentence(sentence)
+                    logger.debug("[Feishu] Gradual send: sleeping %.1fs before next sentence (%d chars)", delay, len(sentence))
+                    await asyncio.sleep(delay)
 
             return self._finalize_send_result(last_response, "send failed")
         except Exception as exc:

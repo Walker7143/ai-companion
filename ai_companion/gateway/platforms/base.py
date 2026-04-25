@@ -17,7 +17,12 @@ import subprocess
 import sys
 import uuid
 from abc import ABC, abstractmethod
+from pathlib import Path
 from urllib.parse import urlsplit
+
+# 添加 vendor 目录到 path（gateway.xxx imports）
+_vendor_dir = Path(__file__).parent.parent.parent / "_vendor"
+sys.path.insert(0, str(_vendor_dir))
 
 from utils import normalize_proxy_url
 
@@ -245,6 +250,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 from gateway.config import Platform, PlatformConfig
 from gateway.session import SessionSource, build_session_key
 from ..constants import get_hermes_dir
+from ..sentence_splitter import SentenceSplitter, get_delay_for_sentence
 
 
 GATEWAY_SECRET_CAPTURE_UNSUPPORTED_MESSAGE = (
@@ -1089,6 +1095,66 @@ class BasePlatformAdapter(ABC):
             SendResult with success status and message ID
         """
         pass
+
+    async def send_gradually(
+        self,
+        chat_id: str,
+        content: str,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """
+        Send a message sentence-by-sentence with human-like delays between sentences.
+
+        Uses SentenceSplitter to split content into natural sentences, then
+        sends each one separately. Delay between sentences is based on sentence
+        length: short sentences (<=5 chars) get 0-1s delay, longer sentences
+        get 1.5-3s delay. The reply_to is only applied to the first sentence;
+        subsequent sentences are sent without reply_to (platforms like Feishu
+        auto-thread subsequent messages).
+
+        This mimics human typing patterns where messages arrive incrementally
+        rather than all at once.
+
+        Args:
+            chat_id: The chat/channel ID to send to
+            content: Message content (may be markdown)
+            reply_to: Optional message ID to reply to (only for first sentence)
+            metadata: Additional platform-specific options
+
+        Returns:
+            SendResult with success status and message ID of the last sentence
+        """
+        sentences = SentenceSplitter.split(content)
+
+        if not sentences:
+            return SendResult(success=False, error="Empty content")
+
+        last_result = None
+        total = len(sentences)
+
+        for idx, sentence in enumerate(sentences):
+            # reply_to only for the first sentence
+            use_reply_to = reply_to if idx == 0 else None
+
+            result = await self.send(
+                chat_id=chat_id,
+                content=sentence,
+                reply_to=use_reply_to,
+                metadata=metadata,
+            )
+            last_result = result
+
+            # Delay between sentences, but not after the last one
+            if idx < total - 1:
+                delay = random.uniform(min_delay, max_delay)
+                logger.debug(
+                    "[%s] send_gradually: sleeping %.1fs before next sentence (%d/%d)",
+                    self.name, delay, idx + 1, total,
+                )
+                await asyncio.sleep(delay)
+
+        return last_result or SendResult(success=False, error="No sentences sent")
 
     # Default: the adapter treats ``finalize=True`` on edit_message as a
     # no-op and is happy to have the stream consumer skip redundant final
