@@ -36,6 +36,28 @@ pip install -r requirements.txt
 irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 | iex
 ```
 
+### Docker 安装（可选）
+
+如果需要 Docker 方式部署：
+
+```bash
+# macOS / Linux
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --docker
+
+# 或手动
+git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
+cd ai-girl-friend
+./scripts/install.sh --docker
+```
+
+Windows:
+```powershell
+# 使用管理员权限运行 PowerShell
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 | iex -Docker
+```
+
+Docker 方式会自动构建镜像并提示配置。
+
 ## 配置
 
 ```bash

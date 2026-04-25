@@ -1,0 +1,34 @@
+# AI Companion Docker Compose 配置
+# 使用方式:
+#   docker-compose up        # 前台运行
+#   docker-compose up -d     # 后台运行
+#   docker-compose down      # 停止服务
+
+services:
+  ai-companion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-companion
+    # 前台运行模式，显示日志
+    stdin_open: true
+    tty: true
+    # 环境变量（敏感信息建议使用 .env 文件）
+    environment:
+      - PYTHONUNBUFFERED=1
+      # 飞书配置（如需启用飞书机器人）
+      # - FEISHU_APP_ID=your_app_id
+      # - FEISHU_APP_SECRET=your_app_secret
+      # - FEISHU_CONNECTION_MODE=websocket
+    # 配置文件挂载（保持数据持久化）
+    volumes:
+      # 挂载配置目录
+      - ./config:/app/config:ro
+      # 挂载数据目录（记忆、人格等）
+      - ./data:/app/data
+      # 挂载网关会话目录（如需要）
+      # - ~/.hermes:/root/.hermes
+    # 网络模式（支持连接外部服务）
+    network_mode: host
+    # 重启策略
+    restart: unless-stopped

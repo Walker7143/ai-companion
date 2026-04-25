@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 虚拟环境
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# 测试文件
+test_*.py
+*.test.py
+tests/
+
+# 文档
+*.md
+!requirements.txt
+
+# 数据文件（运行时生成）
+*.db
+*.db-journal
+data/
+gateway/
+
+# 本地配置
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Window
+Thumbs.db
+ehthumbs.db
+
+# 其他
+*.log
+*.tmp
+.cache/
