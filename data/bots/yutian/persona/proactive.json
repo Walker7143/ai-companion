@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "mode": "idle",
+  "check_interval": 30,
+  "idle_threshold_hours": 24,
+  "min_interval_hours": 3,
+  "max_daily": 5,
+  "emotion_trigger_enabled": true,
+  "emotion_keywords": ["累", "难过", "不舒服", "心情不好"],
+  "emotion_response_delay_minutes": 10,
+  "platform_type": "cli",
+  "personality_type": "阳光"
+}

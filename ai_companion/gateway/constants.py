@@ -1,6 +1,8 @@
 """
-本地化的 Hermes 兼容函数
-将 hermes_cli/hermes_constants 的依赖替换为本地实现
+Gateway 常量与路径工具。
+
+提供 get_hermes_home() / get_hermes_dir() / display_hermes_home() 等接口，
+供 gateway 各模块统一使用 AI Companion 的主目录路径。
 """
 
 import os
@@ -8,7 +10,7 @@ from pathlib import Path
 
 
 def get_hermes_home() -> Path:
-    """获取 AI Companion 主目录（等效于 hermes 的 get_hermes_home）
+    """获取 AI Companion 主目录。
 
     优先使用环境变量 AI_COMPANION_HOME，否则默认 ~/.ai-companion/
     """

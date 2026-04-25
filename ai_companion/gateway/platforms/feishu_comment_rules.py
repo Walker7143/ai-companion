@@ -3,8 +3,8 @@ Feishu document comment access-control rules.
 
 3-tier rule resolution: exact doc > wildcard "*" > top-level > code defaults.
 Each field (enabled/policy/allow_from) falls back independently.
-Config: ~/.hermes/feishu_comment_rules.json (mtime-cached, hot-reload).
-Pairing store: ~/.hermes/feishu_comment_pairing.json.
+Config: ~/.ai-companion/feishu_comment_rules.json (mtime-cached, hot-reload).
+Pairing store: ~/.ai-companion/feishu_comment_pairing.json.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from hermes_constants import get_hermes_home
+from .constants import get_hermes_home
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +351,7 @@ def _main() -> int:
     import sys
 
     try:
-        from hermes_cli.env_loader import load_hermes_dotenv
+        from ai_companion._vendor.gw_cli.env_loader import load_hermes_dotenv
         load_hermes_dotenv()
     except Exception:
         pass

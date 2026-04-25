@@ -233,6 +233,7 @@ class ProactiveEngine:
         self.memory = memory
         self.personality_type = personality_type
         self._scheduler_task = None
+        self._platform_sender = None  # 设置为主动消息发送回调
 
     def set_model(self, model: "MiniMaxAdapter"):
         self.model = model
@@ -733,7 +734,15 @@ class ProactiveEngine:
         cooldown_end = datetime.now() + timedelta(hours=self.config.min_interval_hours)
         self.state.set_cooldown("idle_reminder", cooldown_end)
 
-        logger.info(f"[ProactiveEngine] 发送主动消息: {message[:50]}...")
+        # 调用平台发送消息
+        if self._platform_sender:
+            try:
+                await self._platform_sender(message)
+                logger.info(f"[ProactiveEngine] 主动消息已发送: {message[:50]}...")
+            except Exception as e:
+                logger.error(f"[ProactiveEngine] 发送主动消息失败: {e}")
+        else:
+            logger.warning(f"[ProactiveEngine] 未配置 platform_sender，消息未发送: {message[:50]}...")
 
     def on_user_message_received(self, has_real_content: bool = True):
         """用户发消息时调用

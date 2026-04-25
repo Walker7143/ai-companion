@@ -463,8 +463,8 @@ def load_gateway_config() -> GatewayConfig:
 
     Priority (highest to lowest):
     1. Environment variables
-    2. ~/.hermes/config.yaml (primary user-facing config)
-    3. ~/.hermes/gateway.json (legacy — provides defaults under config.yaml)
+    2. ~/.ai-companion/config.yaml (primary user-facing config)
+    3. ~/.ai-companion/gateway.json (legacy — provides defaults under config.yaml)
     4. Built-in defaults
     """
     _home = get_hermes_home()
@@ -824,7 +824,7 @@ def _validate_gateway_config(config: "GatewayConfig") -> None:
     # without changing placeholder values get a clear startup error instead
     # of a confusing "auth failed" from the platform API.
     try:
-        from hermes_cli.auth import has_usable_secret
+        from ai_companion._vendor.gw_cli.auth import has_usable_secret
     except ImportError:
         has_usable_secret = None  # type: ignore[assignment]
 

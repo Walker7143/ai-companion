@@ -13,7 +13,7 @@ from ..proactive import ProactiveConfig, ProactiveState, ProactiveEngine, Proact
 from ..skill import SkillDispatcher, SkillRegistry, ImageGenerationSkill, TTSSkill, MultimodalSender, create_channel
 
 if TYPE_CHECKING:
-    from ..model.minimax_adapter import MiniMaxAdapter
+    from ..model.adapters.base import ModelAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class BotInstance:
     """单个 Bot 的运行实例"""
 
-    def __init__(self, config: dict, model: "MiniMaxAdapter" = None,
+    def __init__(self, config: dict, model: "ModelAdapter" = None,
                  memory_config: dict = None, data_dir: Path = None,
                  refusal_enabled: bool = True):
         self.id = config["id"]
@@ -52,7 +52,7 @@ class BotInstance:
         )
 
         # 模型（由 BotManager 注入）
-        self.model: "MiniMaxAdapter" = model
+        self.model: "ModelAdapter" = model
         self._initialized = False
 
         # 如果模型已注入，立即设置到拒绝引擎
@@ -124,7 +124,7 @@ class BotInstance:
             return "温柔"
         return "默认"
 
-    def set_model(self, model: "MiniMaxAdapter"):
+    def set_model(self, model: "ModelAdapter"):
         self.model = model
         self.refusal_engine.set_model(model)
         self.proactive_engine.set_model(model)

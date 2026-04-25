@@ -55,36 +55,75 @@ async def run_setup():
     )
 
     model_map = {
-        "1": ("MiniMax", "abab6.5s-chat", "https://api.minimax.chat/v1"),
-        "2": ("OpenAI", "gpt-4o", "https://api.openai.com/v1"),
-        "3": ("Claude", "claude-3-opus-20240229", "https://api.anthropic.com/v1"),
-        "4": ("Ollama (本地)", "qwen2.5-14b", "http://localhost:11434/v1"),
-        "5": ("自定义", "", ""),
+        "1": ("minimax", "MiniMax", "abab6.5s-chat", "https://api.minimax.chat/v1"),
+        "2": ("openai", "OpenAI", "gpt-4o", "https://api.openai.com/v1"),
+        "3": ("claude", "Claude", "claude-3-opus-20240229", "https://api.anthropic.com/v1"),
+        "4": ("ollama", "Ollama (本地)", "qwen2.5-14b", "http://localhost:11434/v1"),
+        "5": ("custom", "自定义", "", ""),
     }
 
-    provider, default_model, default_url = model_map[model_choice]
-    console.print(f"选择: [green]{provider}[/green]")
+    provider_key, provider_name, default_model, default_url = model_map[model_choice]
+    console.print(f"选择: [green]{provider_name}[/green]")
 
-    api_key = Prompt.ask("请输入 API Key", password=True)
-
-    if model_choice == "5":
-        custom_url = Prompt.ask("请输入 API URL", default="https://api.example.com/v1")
-        custom_model = Prompt.ask("请输入模型名称")
-    else:
-        custom_url = default_url
-        custom_model = Prompt.ask("模型名称", default=default_model)
-
-    # 保存到用户数据目录
+    # 检查现有配置
     config_dir = data_dir / "config"
     config_dir.mkdir(exist_ok=True)
+    models_config_path = config_dir / "models.yaml"
 
-    models_config = f"""minimax:
+    existing_config = {}
+    if models_config_path.exists():
+        try:
+            import yaml
+            existing_config = yaml.safe_load(models_config_path.read_text()) or {}
+            console.print("[dim]发现现有模型配置，将以此为默认值[/dim]")
+        except Exception:
+            pass
+
+    existing_api_key = existing_config.get(provider_key, {}).get("api_key", "") if isinstance(existing_config.get(provider_key), dict) else existing_config.get("api_key", "")
+    existing_base_url = existing_config.get(provider_key, {}).get("base_url", "") if isinstance(existing_config.get(provider_key), dict) else ""
+    existing_model = existing_config.get(provider_key, {}).get("model", "") if isinstance(existing_config.get(provider_key), dict) else ""
+
+    # 读取现有 API Key（如果有的话，用作默认）
+    existing_minimax_key = ""
+    if models_config_path.exists():
+        try:
+            import yaml
+            existing_models = yaml.safe_load(models_config_path.read_text()) or {}
+            existing_minimax_key = existing_models.get("minimax", {}).get("api_key", "") if isinstance(existing_models.get("minimax"), dict) else ""
+        except Exception:
+            pass
+
+    api_key_prompt = Prompt.ask(
+        "[dim]请输入 API Key（直接回车保留现有配置）[/dim]",
+        password=True,
+        default=""
+    )
+
+    # 只有用户输入了内容才更新
+    if api_key_prompt.strip():
+        api_key = api_key_prompt
+    else:
+        api_key = existing_minimax_key
+        console.print("[dim]保留现有 API Key[/dim]")
+
+    if model_choice == "5":
+        custom_url = Prompt.ask("请输入 API URL", default=existing_base_url or "https://api.example.com/v1")
+        custom_model = Prompt.ask("请输入模型名称", default=existing_model or "custom-model")
+    else:
+        custom_url = default_url
+        custom_model = Prompt.ask("模型名称", default=existing_model or default_model)
+
+    # 如果有提供新配置，则更新
+    if api_key.strip() or custom_model.strip():
+        models_config = f"""{provider_key}:
   api_key: "{api_key}"
   base_url: "{custom_url}"
   model: "{custom_model}"
 """
-    (config_dir / "models.yaml").write_text(models_config)
-    console.print("✓ 模型配置已保存\n")
+        (config_dir / "models.yaml").write_text(models_config)
+        console.print("✓ 模型配置已保存\n")
+    else:
+        console.print("[dim]跳过模型配置保存[/dim]\n")
 
     # Step 2: 创建 Bot(s)
     console.print("[bold]步骤 2/5:[/bold] 创建 Bot")
@@ -93,6 +132,8 @@ async def run_setup():
     templates = [
         ("suqing", "苏晴", "外冷内热的插画师少女，傲娇，嘴硬心软"),
         ("aiyue", "阿月", "活泼开朗的音乐学院学生，直接，有点粘人"),
+        ("chenxing", "陈行", "沉稳内敛的程序员，话少但可靠，高冷但温柔"),
+        ("yutian", "雨天", "阳光开朗的健身教练，热情直接，有点占有欲"),
     ]
 
     console.print("可选人格模板:")
@@ -110,11 +151,11 @@ async def run_setup():
 
         bot_choice = Prompt.ask(
             "请选择人格模板",
-            choices=["1", "2", "3"],
-            default="3"
+            choices=["1", "2", "3", "4", "5"],
+            default="5"
         )
 
-        if bot_choice == "3":
+        if bot_choice == "5":
             # 自定义 Bot
             bot_id = Prompt.ask("请输入 Bot ID (英文唯一标识)")
             bot_name = Prompt.ask("请输入 Bot 名称")
@@ -319,25 +360,51 @@ async def run_setup():
 
     # 询问是否写入环境变量
     if Confirm.ask("是否将配置写入 .env 文件（推荐）?", default=True):
-        # 写入必要的环境变量
-        env_lines = [
-            f'MINIMAX_API_KEY="{api_key}"',
-        ]
+        # 写入必要的环境变量（不覆盖已有值）
+        env_lines = []
 
+        # API Key - 只在用户输入了新值时才写入
+        if api_key.strip():
+            env_lines.append(f'MINIMAX_API_KEY="{api_key}"')
+        elif existing_env.get("MINIMAX_API_KEY"):
+            console.print("[dim]保留现有 MINIMAX_API_KEY[/dim]")
+        else:
+            env_lines.append(f'MINIMAX_API_KEY=""')
+
+        # 默认 Bot
         if created_bots:
             first_bot = created_bots[0]["id"]
-            env_lines.append(f'DEFAULT_BOT_ID="{first_bot}"')
+            if first_bot:
+                env_lines.append(f'DEFAULT_BOT_ID="{first_bot}"')
+        elif existing_env.get("DEFAULT_BOT_ID"):
+            console.print("[dim]保留现有 DEFAULT_BOT_ID[/dim]")
 
-        # 飞书环境变量
+        # 飞书环境变量 - 只在新配置存在时才写入
         feishu_extra = config_data.get("platforms", {}).get("feishu", {}).get("extra", {})
         if feishu_extra.get("app_id"):
             env_lines.append(f'FEISHU_APP_ID="{feishu_extra["app_id"]}"')
+        elif existing_env.get("FEISHU_APP_ID"):
+            console.print("[dim]保留现有 FEISHU_APP_ID[/dim]")
+
         if feishu_extra.get("app_secret"):
             env_lines.append(f'FEISHU_APP_SECRET="{feishu_extra["app_secret"]}"')
+        elif existing_env.get("FEISHU_APP_SECRET"):
+            console.print("[dim]保留现有 FEISHU_APP_SECRET[/dim]")
+
         if feishu_extra.get("connection_mode"):
             env_lines.append(f'FEISHU_CONNECTION_MODE="{feishu_extra["connection_mode"]}"')
+        elif existing_env.get("FEISHU_CONNECTION_MODE"):
+            console.print("[dim]保留现有 FEISHU_CONNECTION_MODE[/dim]")
+
         if feishu_extra.get("group_policy"):
             env_lines.append(f'FEISHU_GROUP_POLICY="{feishu_extra["group_policy"]}"')
+        elif existing_env.get("FEISHU_GROUP_POLICY"):
+            console.print("[dim]保留现有 FEISHU_GROUP_POLICY[/dim]")
+
+        # 保留原有但不在本次更新的变量
+        for key, value in existing_env.items():
+            if key not in [line.split("=")[0] for line in env_lines if "=" in line]:
+                env_lines.append(f'{key}={value}')
 
         env_path.write_text("\n".join(env_lines) + "\n")
         console.print(f"✓ 环境变量已保存到 {env_path}\n")

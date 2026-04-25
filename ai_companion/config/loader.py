@@ -64,13 +64,48 @@ class Config:
     def get_enabled_bots(self) -> list[dict]:
         return [b for b in self.bots.get("bots", []) if b.get("enabled", True)]
 
-    def get_model_config(self) -> dict:
-        cfg = self.models.get("minimax", {})
-        return {
-            "api_key": cfg.get("api_key", ""),
-            "base_url": cfg.get("base_url", "https://api.minimax.chat/v1"),
-            "model": cfg.get("model", "MiniMax-m2.7"),
+    def get_model_config(self, provider: str = None) -> dict:
+        """
+        获取模型配置
+
+        Args:
+            provider: 指定 provider，None 则使用配置的默认 provider
+
+        Returns:
+            包含 api_key, base_url, model 等的配置字典
+        """
+        # 获取默认 provider
+        if provider is None:
+            provider = self.models.get("model", {}).get("provider", "minimax")
+
+        # 获取该 provider 的配置
+        provider_config = self.models.get(provider, {})
+
+        # 基础配置
+        config = {
+            "provider": provider,
+            "api_key": provider_config.get("api_key", ""),
+            "base_url": provider_config.get("base_url", ""),
+            "model": provider_config.get("model", ""),
         }
+
+        # 添加全局默认参数（如果没有在 provider 配置中指定）
+        global_config = self.models.get("model", {})
+        for key in ("temperature", "max_tokens"):
+            if key not in provider_config and key in global_config:
+                config[key] = global_config[key]
+
+        # 移除空值
+        return {k: v for k, v in config.items() if v}
+
+    def get_provider_config(self, provider: str) -> dict:
+        """获取指定 provider 的完整配置"""
+        return self.models.get(provider, {})
+
+    @property
+    def default_provider(self) -> str:
+        """获取默认 provider"""
+        return self.models.get("model", {}).get("provider", "minimax")
 
     @property
     def config(self) -> dict:

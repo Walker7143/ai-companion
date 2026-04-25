@@ -1,9 +1,57 @@
+# ============================================
+# 模型配置
+# ============================================
+# 设置默认 provider，其他 provider 也会被读取
+# ============================================
+model:
+  provider: "minimax"          # 默认 provider: minimax | openai | claude | ollama | custom
+  temperature: 0.8            # 全局默认温度
+  max_tokens: 1024            # 全局默认最大 token
+
+# ============================================
+# MiniMax
+# ============================================
 minimax:
   api_key: "${MINIMAX_API_KEY}"
   base_url: "https://api.minimax.chat/v1"
   model: "MiniMax-M2.7"
-  max_context_chars: 8000   # 模型上下文上限（字符数），超限触发压缩
 
+# ============================================
+# OpenAI
+# ============================================
+openai:
+  api_key: "${OPENAI_API_KEY}"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
+
+# ============================================
+# Claude (Anthropic)
+# ============================================
+claude:
+  api_key: "${ANTHROPIC_API_KEY}"
+  base_url: "https://api.anthropic.com/v1"
+  model: "claude-sonnet-4-20250514"
+
+# ============================================
+# Ollama (本地)
+# ============================================
+ollama:
+  base_url: "http://localhost:11434"
+  model: "qwen2.5:7b"
+
+# ============================================
+# 自定义模型
+# ============================================
+custom:
+  - name: "deepseek-chat"
+    api_url: "https://api.deepseek.com/v1/chat/completions"
+    model: "deepseek-chat"
+    auth_type: "bearer"
+    api_key: "${DEEPSEEK_API_KEY}"
+
+# ============================================
+# 记忆系统配置
+# ============================================
 memory:
   embedding: "local"          # "local" | "none"
   embedding_model: "all-MiniLM-L6-v2"  # sentence-transformers 模型名
@@ -29,16 +77,10 @@ fallback:
 # ============================================
 # 技能系统配置
 # ============================================
-# 每个技能通过 model 字段指定默认模型类型，
-# 然后在对应模型配置块中填写参数。
-# 支持内置模型，也支持自定义 HTTP API。
-# ============================================
-
 skills:
   image_generation:
     model: "minimax"          # 默认模型：dalle | minimax | stable_diffusion | 自定义
 
-    # --- 内置模型 ---
     dalle:
       model: "dall-e-3"
     minimax:
@@ -46,80 +88,44 @@ skills:
       output_dir: "data/bots/_images"
     stable_diffusion:
       model: "stable-diffusion-xl"
-      api_url: "http://localhost:7860"  # Stable Diffusion WebUI API
-
-    # --- 自定义模型示例 ---
-    # custom_image:
-    #   api_url: "https://api.example.com/image"
-    #   model: "my-image-model"
-    #   method: "POST"
-    #   auth_type: "bearer"  # bearer | api_key
-    #   headers:
-    #     X-Custom-Header: "value"
-    #   body_template:
-    #     prompt: "{{prompt}}"
-    #     size: "1024x1024"
-    #   response_url_field: "data.image_url"
+      api_url: "http://localhost:7860"
 
   tts:
-    model: "minimax"         # 默认模型：minimax | edge_tts | azure_tts | openai_tts | 自定义
+    model: "minimax"
 
-    # --- MiniMax TTS ---
     minimax:
-      model: "speech-2.8-hd"  # 可选: speech-2.8-hd | 2.6 | 02
-      voice: "male-qn-qingse"  # 语音ID
-      speed: 1                 # 语速 0.5-2.0
-      vol: 1                   # 音量 0-2
-      pitch: 0                # 音调 -10~10
-      sample_rate: 32000       # 采样率
-      bitrate: 128000         # 比特率
-      output_format: "hex"    # hex | url
+      model: "speech-2.8-hd"
+      voice: "male-qn-qingse"
+      speed: 1
+      vol: 1
+      pitch: 0
+      sample_rate: 32000
+      bitrate: 128000
+      output_format: "hex"
       output_dir: "data/bots/_audio"
 
-    # --- Edge TTS (微软，免费) ---
     edge_tts:
-      voice: "zh-CN-XiaoxiaoNeural"  # 女声
-      # 可选: zh-CN-YunxiNeural (男声), zh-CN-XiaoyiNeural (女声)
+      voice: "zh-CN-XiaoxiaoNeural"
 
-    # --- Azure TTS ---
     azure_tts:
       voice: "zh-CN-XiaoxiaoNeural"
       api_url: "https://region.tts.speech.microsoft.com/cognitiveservices/v1"
       auth_type: "api_key"
 
-    # --- OpenAI TTS ---
     openai_tts:
       model: "tts-1"
       voice: "alloy"
       api_url: "https://api.openai.com/v1/audio/speech"
       auth_type: "bearer"
 
-    # --- 自定义模型示例 ---
-    # custom_tts:
-    #   api_url: "https://api.example.com/tts"
-    #   model: "my-tts-model"
-    #   method: "POST"
-    #   auth_type: "bearer"
-    #   response_type: "url"   # url | hex | base64 | binary
-    #   audio_field: "data.audio_url"
-    #   body_template:
-    #     text: "{{text}}"
-    #     voice: "{{voice}}"
-    #     model: "{{model}}"
-
 # ============================================
 # 通道配置
 # ============================================
-# 定义消息发送通道，不同通道支持不同媒体类型
-# ============================================
-
 channel:
-  type: "cli"                # cli | feishu | webhook
+  type: "cli"
 
   feishu:
     webhook_url: "${FEISHU_WEBHOOK_URL}"
 
   webhook:
     url: "${WEBHOOK_URL}"
-    headers:                # 可选的自定义 headers
-      # Authorization: "Bearer xxx"
