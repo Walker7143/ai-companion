@@ -110,13 +110,13 @@ function Download-Project {
     }
 
     try {
-        # 方法2: 下载 zip 包
-        $zipUrl = "$repoUrl/-/archive/master/ai-girl-friend-master.zip"
+        # 方法2: 下载 zip 包 (Gitee 格式)
+        $zipUrl = "$repoUrl/archive/refs/heads/master.zip"
         Write-Host "   下载压缩包..." -ForegroundColor Gray
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
         Expand-Archive -Path $tempZip -DestinationPath "$env:TEMP" -Force
-        $extractedDir = "$env:TEMP\ai-girl-friend-master"
+        $extractedDir = "$env:TEMP\ai-girl-friend"
         if (Test-Path $extractedDir) {
             Copy-Item -Path "$extractedDir\*" -Destination $InstallDir -Recurse -Force
             Remove-Item -Path $extractedDir -Recurse -Force -ErrorAction SilentlyContinue
