@@ -1,348 +1,237 @@
 # AI Companion / AI 知己
 
-开源 AI 陪伴产品，支持 macOS / Windows 双平台。
+开源 AI 陪伴产品，支持 macOS / Windows 双平台。每个机器人有独立人格和记忆体系，能像真人一样与你互动。
 
 ## 功能特性
 
-- 多 Bot 并行（协程）
-- 独立人格体系（profile + backstory + values + speaking_style）
-- 三层记忆引擎（工作记忆 / 情景记忆 / 语义记忆）
-- 主动唤醒（想念提醒 / 生气机制 / 随机戳戳）
-- 性格推断拒绝（非词表过滤，基于性格推理）
-- 渐进式性格进化
-- Skill / MCP 扩展（图片 / 语音 / 视频）
-- 支持飞书机器人接入
-- 支持自定义模型（MiniMax / OpenAI / Claude / Ollama）
+- **独立人格**：每个 Bot 有独特的性格、背景故事和说话风格
+- **三层记忆**：工作记忆（当前会话）+ 情景记忆（重要经历）+ 语义记忆（用户画像）
+- **主动唤醒**：会主动找你聊天、提醒你事情、偶尔撒撒娇
+- **性格进化**：根据你们的互动，关系会逐渐加深
+- **性格推断拒绝**：基于性格判断该不该回答，不是简单的关键词过滤
+- **多媒体技能**：支持图片生成、语音合成
+- **飞书集成**：连接飞书机器人，通过微信/飞书与 AI 对话
+- **多模型支持**：MiniMax / OpenAI / Claude / Ollama
 
 ## 安装
 
-### macOS / Linux
+### 方式一：本地安装（推荐）
 
+**macOS / Linux：**
 ```bash
 curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
 ```
 
 或手动安装：
-
 ```bash
 git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
 cd ai-girl-friend
 pip install -r requirements.txt
 ```
 
-### Windows
-
+**Windows：**
 ```powershell
 irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 | iex
 ```
 
-### Docker 安装（可选）
-
-如果需要 Docker 方式部署：
+### 方式二：Docker 安装
 
 ```bash
 # macOS / Linux
 curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --docker
 
-# 或手动
-git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
-cd ai-girl-friend
-./scripts/install.sh --docker
-```
-
-Windows:
-```powershell
-# 使用管理员权限运行 PowerShell
+# Windows (管理员权限 PowerShell)
 irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 | iex -Docker
 ```
 
-Docker 方式会自动构建镜像并提示配置。
-
 ## 配置
 
+### 首次配置
+
+运行配置向导：
 ```bash
 python -m ai_companion setup
 ```
 
-按向导提示配置 API Key、选择人格模板、配置飞书机器人。
+按提示设置：
+1. API Key（从 MiniMax/OpenAI 等平台获取）
+2. 选择人格模板
+3. 飞书机器人配置（可选）
+
+### 手动配置
+
+配置文件位于 `~/.ai-companion/config/`：
+
+**models.yaml** - 模型配置：
+```yaml
+minimax:
+  api_key: "${MINIMAX_API_KEY}"  # 或直接填写你的 API Key
+  base_url: "https://api.minimax.chat/v1"
+  model: "MiniMax-M2.7"
+```
+
+**bots.yaml** - Bot 列表：
+```yaml
+bots:
+  - id: suqing
+    name: 苏晴
+    enabled: true
+  - id: aiyue
+    name: 阿月
+    enabled: true
+```
+
+### 环境变量配置
+
+也可以通过环境变量配置敏感信息：
+```bash
+export MINIMAX_API_KEY="your_api_key"
+export FEISHU_APP_ID="your_feishu_app_id"
+export FEISHU_APP_SECRET="your_feishu_app_secret"
+```
 
 ## 启动
 
-```bash
-python -m ai_companion start
-```
-
-## 命令行工具
-
 ### 本地对话
+```bash
+python -m ai_companion start              # 启动（选择默认 Bot）
+python -m ai_companion start --bot suqing  # 指定 Bot
+```
+
+### 飞书网关服务
+```bash
+python -m ai_companion gateway start        # 后台启动
+python -m ai_companion gateway start --sync  # 前台启动（显示日志）
+python -m ai_companion gateway stop         # 停止
+python -m ai_companion gateway logs         # 查看日志
+python -m ai_companion gateway status        # 查看状态
+```
+
+## 内置命令
+
+在对话界面可以使用以下命令：
+- `/new` - 开始新会话
+- `/memory` - 查看记忆状态
+- `/forget <key>` - 删除某条记忆
+- `quit` - 退出
+
+## 飞书机器人配置详解
+
+### 环境变量方式
 
 ```bash
-python -m ai_companion start              # 启动本地 CLI 对话
-python -m ai_companion start --bot aiyue  # 只启动指定 Bot
+export FEISHU_APP_ID="cli_xxxxx"
+export FEISHU_APP_SECRET="xxxxx"
+export FEISHU_CONNECTION_MODE="websocket"  # websocket 或 webhook
 ```
 
-### 网关服务（连接飞书）
-
-```bash
-python -m ai_companion gateway start        # 异步启动（后台运行）
-python -m ai_companion gateway start --sync  # 同步启动（显示日志）
-python -m ai_companion gateway stop         # 停止网关
-python -m ai_companion gateway restart      # 重启网关
-python -m ai_companion gateway restart --sync  # 同步重启
-python -m ai_companion gateway replace       # 替换网关（先停止旧实例再启动新实例）
-python -m ai_companion gateway replace --sync  # 同步替换
-python -m ai_companion gateway logs         # 查看网关日志
-python -m ai_companion gateway logs -n 100  # 查看最新100行
-python -m ai_companion gateway status       # 查看网关状态
-```
-
-### 其他
-
-```bash
-python -m ai_companion setup             # 配置向导
-python -m ai_companion status             # 查看状态
-python -m ai_companion bot list           # 列出所有 Bot
-python -m ai_companion bot add --name xxx # 添加 Bot
-python -m ai_companion model test         # 测试模型连接
-```
-
-## 飞书机器人配置
-
-### 路由模式
-
-在 `~/.ai-companion/config/config.yaml` 中配置：
-
-**dedicated 模式**（专用，一对一）：
-```yaml
-platforms:
-  feishu:
-    routing:
-      mode: dedicated
-      bot_id: aiyue  # 所有消息发给这个 Bot
-```
-
-**chat_routed 模式**（群聊路由，一对多）：
-```yaml
-platforms:
-  feishu:
-    routing:
-      mode: chat_routed
-      default_bot: suqing  # 默认 Bot
-      group_bot_map:
-        "oc_群ID1": aiyue   # 不同群聊发给不同 Bot
-        "oc_群ID2": suqing
-```
-
-### 完整配置示例
+### config.yaml 方式
 
 ```yaml
 platforms:
   feishu:
     enabled: true
     extra:
-      app_id: cli_xxxxx
-      app_secret: xxxxx
-      connection_mode: websocket
+      app_id: "cli_xxxxx"
+      app_secret: "xxxxx"
+      connection_mode: "websocket"
     routing:
-      mode: dedicated
-      bot_id: aiyue
+      mode: "dedicated"  # dedicated（专用）或 chat_routed（群聊路由）
+      bot_id: "suqing"
 ```
 
-## 默认人格
+### 路由模式
+
+**dedicated 模式**（一对一）：
+```yaml
+routing:
+  mode: dedicated
+  bot_id: suqing  # 所有消息发给苏晴
+```
+
+**chat_routed 模式**（群聊）：
+```yaml
+routing:
+  mode: chat_routed
+  default_bot: suqing  # 默认 Bot
+  group_bot_map:
+    "oc群ID1": aiyue    # 群1 给阿月
+    "oc群ID2": suqing    # 群2 给苏晴
+```
+
+### 群组策略
+
+```yaml
+extra:
+  group_policy: "open"  # open/allowlist/blacklist/admin_only/disabled
+  allowed_users:
+    - "user_open_id_1"
+    - "user_open_id_2"
+```
+
+## 内置人格
 
 | ID | 名称 | 性格 | 简介 |
 |----|------|------|------|
-| suqing | 苏晴 | 外冷内热/傲娇 | 26岁自由插画师，嘴硬心软 |
-| aiyue | 阿月 | 活泼开朗/直接 | 22岁音乐学院学生，有点粘人 |
+| suqing | 苏晴 | 傲娇 | 26岁自由插画师，嘴硬心软 |
+| aiyue | 阿月 | 活泼 | 22岁音乐学院学生，有点粘人 |
 
 ## 自定义人格
 
-参考 `data/bots/_template/persona/` 目录下的模板创建新人格。
-
-## 项目结构
+在 `data/bots/_template/persona/` 有模板，复制并修改可创建新人格：
 
 ```
-ai-companion/
-├── ai_companion/           # 主包
-│   ├── __main__.py         # CLI 入口
-│   ├── main.py             # 启动逻辑
-│   ├── setup.py            # 配置向导
-│   ├── config/             # 配置加载
-│   ├── model/              # 模型适配
-│   ├── persona/            # 人格引擎
-│   ├── bot/                # Bot 管理
-│   ├── memory/             # 记忆引擎
-│   ├── engine/             # 核心引擎
-│   ├── skill/              # Skill 调度
-│   ├── cli/                # CLI 适配器
-│   └── platform/           # 平台适配
-├── config/                 # 配置文件
-├── data/bots/              # 人格和数据
-├── scripts/                # 安装脚本
-├── tests/                  # 测试
-└── requirements.txt
+data/bots/mybot/persona/
+├── profile.json        # 基础档案（名字、年龄、职业等）
+├── backstory.json      # 人生经历
+├── values.json         # 价值观和底线
+├── speaking_style.json # 说话风格
+└── emotional_rules.json # 情绪规则
 ```
 
-## ✅ Phase 2 完成情况
+## Skill 扩展
 
-| Task | 描述 | 状态 |
-|------|------|------|
-| 2-1 | 工作记忆：SQLite 存储、context 触发压缩 | ✅ 完成 |
-| 2-2 | 情景记忆：Chroma 向量召回 + SQLite 降级 | ✅ 完成 |
-| 2-3 | 语义记忆：LLM 提取结构化事实 + CRUD | ✅ 完成 |
-| 2-4 | 中文搜索：jieba 分词 + SQLite tokens 列 | ✅ 完成 |
-| 2-5 | sentence-transformers 本地向量嵌入 | ⚠️ 可选 |
-| 2-6 | setup-embeddings.sh 一键安装脚本 | ⚠️ 可选 |
-| 2-7 | 压缩触发逻辑（软限/硬限） | ✅ 完成 |
-| 2-8 | load_context 串联（summary + recent） | ✅ 完成 |
-| 2-9 | BotInstance 集成记忆引擎 | ✅ 完成 |
-| 2-10 | CLI /new /memory /forget 命令 | ✅ 完成 |
-| 2-11 | 三层记忆集成日志 | ✅ 完成 |
-| 2-12 | 语义记忆会话隔离（composite key） | ✅ 完成 |
+AI Companion 支持安装额外技能：
 
-> ⚠️ Task 2-5/2-6 为可选：sentence-transformers 可提升向量召回准确性，但 SQLite tokens 降级方案对 v1 已足够。
-
-## ✅ Phase 3 完成情况（Evolution 双向进化系统）
-
-| Task | 描述 | 状态 |
-|------|------|------|
-| 3-1 | attitude_score 增量模型（±5 变化量叠加） | ✅ 完成 |
-| 3-2 | relationship_to_user 状态机更新 | ✅ 完成 |
-| 3-3 | key_moment 关键时刻去重记录 | ✅ 完成 |
-| 3-4 | profile.json / backstory.json 写回 | ✅ 完成 |
-| 3-5 | 真实 CLI 环境完整流程验证 | ✅ 完成 |
-
-> Evolution 系统于 2026-04-23 通过真实 API 完整流程验证：attitude_score 增量叠加、relationship 状态更新、key_moment 去重、profile 写回全部正常。
-
-## ✅ Phase 4 完成（LLM 推理性格拒绝机制）
-
-| Task | 描述 | 状态 |
-|------|------|------|
-| 4-1 | RefusalEngine 核心实现（LLM 推理） | ✅ 完成 |
-| 4-2 | 拒绝分类（NON_NEGOTIABLE/SOFT_BOUNDARY/DEAL_BREAKER） | ✅ 完成 |
-| 4-3 | BotInstance 集成 | ✅ 完成 |
-| 4-4 | 拒绝开关（refusal_enabled） | ✅ 完成 |
-| 4-5 | 人格风格回复模板（傲娇/活泼/高冷/温柔） | ✅ 完成 |
-| 4-6 | 真实 CLI 环境完整流程验证 | ✅ 完成 |
-
-> 拒绝机制基于 LLM 性格推理，而非关键词匹配。真实 API 验证通过：硬红线拦截、软边界关系阈值影响放行、人格风格回复正常。
-
-## ✅ Phase 5 完成（主动唤醒系统）
-
-| Task | 描述 | 状态 |
-|------|------|------|
-| 5-1 | ProactiveConfig 配置加载 | ✅ 完成 |
-| 5-2 | ProactiveState 持久化 | ✅ 完成 |
-| 5-3 | LLM 推理判断（是否应联系） | ✅ 完成 |
-| 5-4 | LLM 生成人格消息 | ✅ 完成 |
-| 5-5 | 后台调度器独立运行 | ✅ 完成 |
-| 5-6 | 情绪触发检测 | ✅ 完成 |
-| 5-7 | 限流（max_daily/min_interval） | ✅ 完成 |
-| 5-8 | 生气降级（annoyance_level） | ✅ 完成 |
-| 5-9 | 冷却机制 | ✅ 完成 |
-| 5-10 | 静默模式（mode=silent） | ✅ 完成 |
-| 5-11 | 平台适配器（CLI/飞书/Webhook） | ✅ 完成 |
-| 5-12 | 配置项全部可调整 | ✅ 完成 |
-
-> 主动唤醒通过 LLM 推理判断是否应主动联系，LLM 生成符合人格的主动消息。所有参数可配置，状态持久化。
-
-## ✅ Phase 6 完成（多媒体 Skill 系统）
-
-| Task | 描述 | 状态 |
-|------|------|------|
-| 6-1 | Skill 基类 + SkillDispatcher 调度器 | ✅ 完成 |
-| 6-2 | 图片生成 Skill（ImageGenerationSkill） | ✅ 完成 |
-| 6-3 | 语音生成 Skill（TTSSkill） | ✅ 完成 |
-| 6-4 | 通道能力系统（ChannelCapability） | ✅ 完成 |
-| 6-5 | 多模态发送器（MultimodalSender） | ✅ 完成 |
-| 6-6 | 通道降级（不支持类型 → text） | ✅ 完成 |
-
-**支持的模型：**
-- 图片：DALLE、MiniMax（text_to_image API）、Stable Diffusion、自定义 HTTP API
-- 语音：Edge TTS、MiniMax TTS、Azure TTS、OpenAI TTS、自定义 HTTP API
-
-**配置示例（config/models.yaml）：**
-```yaml
-skills:
-  image_generation:
-    model: "minimax"
-    minimax:
-      model: "image-01"
-
-  tts:
-    model: "minimax"
-    minimax:
-      model: "speech-2.8-hd"
-      voice: "male-qn-qingse"
-
-channel:
-  type: "cli"
-```
-
-**自定义模型配置：**
-任何技能都支持自定义 HTTP API，只需在对应模型配置块中设置 `api_url` 和相关参数即可。支持 bearer/api_key 认证方式，支持任务轮询模式，支持配置请求体模板和响应解析路径。
-
-## ✅ Phase 7 完成（Skill 扩展系统）
-
-| Task | 描述 | 状态 |
-|------|------|------|
-| 7-1 | SkillRegistry 技能注册中心 | ✅ 完成 |
-| 7-2 | SkillInstaller 安装器 | ✅ 完成 |
-| 7-3 | skill CLI 命令 | ✅ 完成 |
-| 7-4 | BotInstance 动态加载 | ✅ 完成 |
-| 7-5 | 测试验证 | ✅ 完成 |
-
-**Skill 扩展系统让用户可以下载和安装新的 Skills 来扩展系统能力。**
-
-**CLI 命令：**
 ```bash
-python -m ai_companion skill list           # 列出已安装技能
-python -m ai_companion skill install <path> # 从路径安装
-python -m ai_companion skill install <url>   # 从 URL 安装
-python -m ai_companion skill uninstall <name> # 卸载技能
-python -m ai_companion skill enable <name>  # 启用技能
-python -m ai_companion skill disable <name> # 禁用技能
-python -m ai_companion skill create <name>  # 创建技能脚手架
-python -m ai_companion skill info <name>    # 查看技能详情
+python -m ai_companion skill list           # 查看已安装技能
+python -m ai_companion skill install ./my-skill  # 从本地安装
+python -m ai_companion skill install https://xxx # 从 URL 安装
+python -m ai_companion skill uninstall my-skill  # 卸载
 ```
 
-**Skill 包格式：**
+技能包格式：
 ```
 skill-my-skill/
-├── skill.json       # 元数据（名称、版本、描述、作者）
-└── my_skill.py      # 入口文件
+├── skill.json   # 元数据
+└── my_skill.py  # 入口
 ```
 
-**已安装技能目录：** `data/bots/_skills/`
+## 数据目录
 
-## 平台支持
+所有数据默认保存在 `~/.ai-companion/`：
 
-| 平台 | 状态 | 说明 |
-|------|------|------|
-| 飞书 | ✅ 已集成 | Hermes 企业级飞书适配器 |
-| CLI | ✅ 已集成 | 本地交互模式 |
-| Webhook | ✅ 已集成 | API 服务器模式 |
-| 更多平台 | 计划中 | Telegram、Discord 等 |
-
-## ✅ Phase 8 完成（飞书集成）
-
-| Task | 描述 | 状态 |
-|------|------|------|
-| 8-1 | Hermes Feishu 适配器迁移 | ✅ 完成 |
-| 8-2 | WebSocket / Webhook 双模式支持 | ✅ 完成 |
-| 8-3 | 消息去重与持久化 | ✅ 完成 |
-| 8-4 | 群组 @提及 门控 | ✅ 完成 |
-| 8-5 | 媒体文件收发支持 | ✅ 完成 |
-| 8-6 | 发送状态反应（Typing/CrossMark） | ✅ 完成 |
-
-**飞书配置：**
-```bash
-export FEISHU_APP_ID="your_app_id"
-export FEISHU_APP_SECRET="your_app_secret"
-export FEISHU_CONNECTION_MODE="websocket"  # websocket 或 webhook
+```
+~/.ai-companion/
+├── config/           # 配置文件
+├── data/bots/       # Bot 数据（人格、记忆）
+├── logs/            # 日志
+└── gateway.pid      # 网关进程 ID
 ```
 
-**配置项详细说明见 [ARCHITECTURE.md](ARCHITECTURE.md#八-飞书集成配置)。**
+## 常见问题
+
+**Q: 提示 "API Key 未设置"**
+A: 设置环境变量 `export MINIMAX_API_KEY="your_key"`，或编辑 `~/.ai-companion/config/models.yaml`
+
+**Q: 飞书连接失败**
+A: 检查 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET` 是否正确，确保机器人已启用
+
+**Q: 如何切换 Bot？**
+A: 在 CLI 中输入 `switch`，或启动时指定 `--bot bot_id`
+
+**Q: 如何重置记忆？**
+A: 删除 `~/.ai-companion/data/bots/{bot_id}/memory/` 下的 .db 文件
 
 ## License
 
