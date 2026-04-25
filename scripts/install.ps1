@@ -218,11 +218,11 @@ function Install-Local {
         Set-Location $ProjectDir
         # Install without chroma-hnswlib first (it needs C++ compiler on Windows)
         Write-Host "  Installing core dependencies..." -ForegroundColor Gray
-        & python -m pip install aiohttp httpx lark-oapi pyyaml pydantic rich jieba python-dotenv -q
+        & python -m pip install aiohttp httpx lark-oapi pyyaml pydantic rich jieba python-dotenv -i https://pypi.tuna.tsinghua.edu.cn/simple -q
 
         # Try chroma-hnswlib with binary only
         Write-Host "  Installing chroma (optional)..." -ForegroundColor Gray
-        & python -m pip install chroma-hnswlib aiosqlite --only-binary :all: -q 2>$null
+        & python -m pip install chroma-hnswlib aiosqlite --only-binary :all: -i https://pypi.tuna.tsinghua.edu.cn/simple -q 2>$null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  Warning: chroma-hnswlib skipped (needs Visual C++ Build Tools)" -ForegroundColor Yellow
             Write-Host "  To install chroma-hnswlib later:" -ForegroundColor Gray
