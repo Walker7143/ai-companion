@@ -98,24 +98,20 @@ function Download-Project {
 
     # 先清理已存在的目录
     if (Test-Path $InstallDir) {
-        Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "   Cleaning existing directory..." -ForegroundColor Gray
+        Remove-Item $InstallDir -Recurse -Force
     }
 
-    try {
-        # 使用 git clone
-        Write-Host "   Using Git clone..." -ForegroundColor Gray
-        $output = git clone --depth 1 $repoUrl $InstallDir 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Done!" -ForegroundColor Green
-            return $true
-        }
-        Write-Host "   Git clone failed with exit code: $LASTEXITCODE" -ForegroundColor Gray
-        Write-Host "   Output: $output" -ForegroundColor Gray
-    } catch {
-        Write-Host "   Git clone exception: $_" -ForegroundColor Gray
+    # 使用 git clone
+    Write-Host "   Running git clone..." -ForegroundColor Gray
+    $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1",$repoUrl,$InstallDir -NoNewWindow -Wait -PassThru
+
+    if ($process.ExitCode -eq 0 -and (Test-Path $InstallDir)) {
+        Write-Host "Done!" -ForegroundColor Green
+        return $true
     }
 
-    Write-Host "Failed to download. Please ensure Git is installed and network is working." -ForegroundColor Red
+    Write-Host "Git clone failed with exit code: $($process.ExitCode)" -ForegroundColor Red
     return $false
 }
 
