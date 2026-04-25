@@ -216,13 +216,20 @@ function Install-Local {
     $originalDir = Get-Location
     try {
         Set-Location $ProjectDir
-        # Try pre-built packages first to avoid compilation issues
-        Write-Host "  Trying pre-built packages..." -ForegroundColor Gray
-        & python -m pip install -r requirements.txt --only-binary :all: -q 2>$null
+        # Install without chroma-hnswlib first (it needs C++ compiler on Windows)
+        Write-Host "  Installing core dependencies..." -ForegroundColor Gray
+        $corePackages = @("aiohttp>=3.9.0", "httpx>=0.25.0", "lark-oapi>=1.0.0", "pyyaml>=6.0", "pydantic>=2.0", "rich>=13.0", "jieba>=0.42", "python-dotenv>=1.2.0")
+        & python -m pip install $corePackages -q
+
+        # Try chroma-hnswlib with binary only
+        Write-Host "  Installing chroma (optional)..." -ForegroundColor Gray
+        & python -m pip install chroma-hnswlib aiosqlite --only-binary :all: -q 2>$null
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  Falling back to normal install..." -ForegroundColor Gray
-            & python -m pip install -r requirements.txt -q
+            Write-Host "  Warning: chroma-hnswlib skipped (needs Visual C++ Build Tools)" -ForegroundColor Yellow
+            Write-Host "  To install chroma-hnswlib later:" -ForegroundColor Gray
+            Write-Host "    Install Visual C++ Build Tools, then: pip install chroma-hnswlib" -ForegroundColor Gray
         }
+
         Write-Host "[OK] Dependencies installed" -ForegroundColor Green
         Write-Host "[OK] Dependencies installed" -ForegroundColor Green
 
