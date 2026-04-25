@@ -1,43 +1,29 @@
-# AI Companion 一键安装脚本
-# 使用方式:
-#   方式1: 下载后执行
-#     irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
-#   方式2: 本地执行
-#     .\install.ps1
-#   方式3: Docker 安装
-#     .\install.ps1 -Docker
-
 param(
     [switch]$D,
     [switch]$Docker
 )
 
+# Encoding settings
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
-# 支持: Windows PowerShell
-#
-# 用法:
-#   . {iwr https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing} | iex  # 在线安装（推荐）
-#   .\install.ps1          # 本地安装
-#   .\install.ps1 -Docker  # Docker 安装
-
-param(
-    [switch]$D,
-    [switch]$Docker
-)
 
 $ErrorActionPreference = "Stop"
+
+# AI Companion Installer
+# Usage:
+#   Online: irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
+#   Local: .\install.ps1
+#   Docker: .\install.ps1 -Docker
 
 $InstallMode = "local"
 if ($D -or $Docker) {
     $InstallMode = "docker"
 }
 
-# 检测是否从远程执行
 $ScriptPath = $MyInvocation.MyCommand.Path
 $IsOnlineInstall = $false
-if ([string]::IsNullOrEmpty($ScriptPath) -or $ScriptPath -eq "" -or $ScriptPath -match "Temp|Local\\Temp" -or ($env:ONLINE_INSTALL -eq "1")) {
+if ([string]::IsNullOrEmpty($ScriptPath) -or $ScriptPath -match "Temp|Local\\Temp" -or ($env:ONLINE_INSTALL -eq "1")) {
     $IsOnlineInstall = $true
 }
 
@@ -46,7 +32,6 @@ Write-Host "  AI Companion Installer" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 检测 Docker
 function Test-Docker {
     try {
         $dockerVersion = docker --version 2>&1
@@ -59,7 +44,6 @@ function Test-Docker {
     return $false
 }
 
-# 检测 Python
 function Test-Python {
     try {
         $version = python --version 2>&1
@@ -70,7 +54,7 @@ function Test-Python {
                 return $true
             }
         }
-        Write-Host "[FAIL] Python version too old or not found" -ForegroundColor Red
+        Write-Host "[FAIL] Python version too old" -ForegroundColor Red
         return $false
     } catch {
         Write-Host "[FAIL] Python 3.11+ required" -ForegroundColor Red
@@ -78,7 +62,6 @@ function Test-Python {
     }
 }
 
-# 检测 pip
 function Test-Pip {
     try {
         python -m pip --version | Out-Null
@@ -91,80 +74,58 @@ function Test-Pip {
     }
 }
 
-# 下载项目（直接下载，无需 Git）
 function Download-Project {
     param([string]$InstallDir)
 
     Write-Host ""
     Write-Host "Downloading project to: $InstallDir" -ForegroundColor Cyan
 
-    # 先清理已存在的目录
     if (Test-Path $InstallDir) {
         Write-Host "  Cleaning existing directory..." -ForegroundColor Gray
         Remove-Item $InstallDir -Recurse -Force
     }
 
-    # 直接下载所有必需文件
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
 
         $baseUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master"
 
-        # 需要下载的文件列表
-        $files = @(
-            "requirements.txt",
-            "setup.py",
-            "pyproject.toml",
-            "config/bots.yaml.example",
-            "config/models.yaml.example"
-        )
-
-        # 递归下载目录
-        $dirs = @("ai_companion", "ai_companion/tools", "ai_companion/memory", "ai_companion/platforms", "gateway")
-
-        foreach ($dir in $dirs) {
-            $localDir = Join-Path $InstallDir $dir
-            if (!(Test-Path $localDir)) { New-Item -Path $localDir -ItemType Directory -Force | Out-Null }
-        }
-
-        # 下载根目录文件
-        foreach ($file in $files) {
-            $fileUrl = "$baseUrl/$file"
-            $localPath = Join-Path $InstallDir $file
-            $dir = Split-Path $localPath
-            if (!(Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+        # Root files
+        $rootFiles = @("requirements.txt", "setup.py", "pyproject.toml")
+        foreach ($file in $rootFiles) {
             Write-Host "  Downloading $file..." -ForegroundColor Gray
-            try {
-                Invoke-WebRequest -Uri $fileUrl -OutFile $localPath -UseBasicParsing -TimeoutSec 30
-            } catch {
-                Write-Host "    Failed to download $file, continuing..." -ForegroundColor Yellow
-            }
+            Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile (Join-Path $InstallDir $file) -UseBasicParsing -TimeoutSec 30
         }
 
-        # 递归下载 ai_companion 目录
-        $subFiles = @(
+        # Config files
+        $configFiles = @("config/bots.yaml.example", "config/models.yaml.example")
+        New-Item -Path (Join-Path $InstallDir "config") -ItemType Directory -Force | Out-Null
+        foreach ($file in $configFiles) {
+            Write-Host "  Downloading $file..." -ForegroundColor Gray
+            Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile (Join-Path $InstallDir $file) -UseBasicParsing -TimeoutSec 30
+        }
+
+        # Create directory structure
+        $dirs = @("ai_companion", "ai_companion/tools", "ai_companion/memory", "ai_companion/platforms", "gateway")
+        foreach ($dir in $dirs) {
+            New-Item -Path (Join-Path $InstallDir $dir) -ItemType Directory -Force | Out-Null
+        }
+
+        # Core files
+        $coreFiles = @(
             "ai_companion/__main__.py",
             "ai_companion/__init__.py",
             "ai_companion/config.py",
             "ai_companion/bot.py",
-            "ai_companion/models.py",
-            "ai_companion/memory/__init__.py",
-            "ai_companion/memory/situation.py",
-            "ai_companion/platforms/__init__.py",
-            "ai_companion/platforms/base.py",
-            "gateway/__init__.py",
-            "gateway/server.py"
+            "ai_companion/models.py"
         )
-
-        foreach ($file in $subFiles) {
-            $fileUrl = "$baseUrl/$file"
-            $localPath = Join-Path $InstallDir $file
+        foreach ($file in $coreFiles) {
             Write-Host "  Downloading $file..." -ForegroundColor Gray
             try {
-                Invoke-WebRequest -Uri $fileUrl -OutFile $localPath -UseBasicParsing -TimeoutSec 30
+                Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile (Join-Path $InstallDir $file) -UseBasicParsing -TimeoutSec 30
             } catch {
-                Write-Host "    Failed: $file" -ForegroundColor Yellow
+                Write-Host "    Warning: failed to download $file" -ForegroundColor Yellow
             }
         }
 
@@ -176,7 +137,6 @@ function Download-Project {
     }
 }
 
-# 检查是否需要虚拟环境
 function Test-NeedsVenv {
     param([string]$ProjectDir)
     $originalDir = Get-Location
@@ -186,10 +146,6 @@ function Test-NeedsVenv {
         if ($output -match "externally-managed-environment") {
             return $true
         }
-        $testFile = "$env:TEMP\pip_test.txt"
-        $null = python -m pip install --target $testFile --dry-run pip 2>&1
-        if ($LASTEXITCODE -ne 0) { return $true }
-        if (Test-Path $testFile) { Remove-Item $testFile -Force -ErrorAction SilentlyContinue }
         return $false
     } catch {
         return $true
@@ -198,7 +154,6 @@ function Test-NeedsVenv {
     }
 }
 
-# 本地安装
 function Install-Local {
     param([string]$ProjectDir)
 
@@ -276,7 +231,6 @@ function Install-Local {
     Write-Host "========================================" -ForegroundColor Cyan
 }
 
-# Docker 安装
 function Install-Docker {
     param([string]$ProjectDir)
 
@@ -322,7 +276,7 @@ function Install-Docker {
     Write-Host "========================================" -ForegroundColor Cyan
 }
 
-# 主流程
+# Main
 $ProjectDir = $PSScriptRoot
 
 if ($IsOnlineInstall) {
