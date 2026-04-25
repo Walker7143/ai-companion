@@ -1,7 +1,7 @@
 # AI Companion 完整使用指南
 
 > 文档目的：详细的配置说明和功能介绍
-> 最后更新：2026-04-25
+> 最后更新：2026-04-26
 
 ---
 
@@ -103,6 +103,7 @@ bots:
 | **数据目录** | 所有数据存储在 `~/.ai-companion/` |
 | **Docker 模式** | 自动下载项目到 `%LOCALAPPDATA%\AICompanion`，无需手动克隆 |
 | **Git 检测** | Windows 脚本会自动检测 Git，如未安装会自动安装 |
+| **向量嵌入** | sentence-transformers 已默认安装，启用只需在 models.yaml 中设置 `memory.embedding: "local"` |
 
 ---
 
@@ -772,7 +773,7 @@ models:
 
 # 记忆配置
 memory:
-  embedding: "none"           # 向量嵌入模式: local/none
+  embedding: "none"           # 向量嵌入模式: local/none（sentence-transformers 已默认安装）
   embedding_model: "all-MiniLM-L6-v2"  # sentence-transformers 模型
   max_working_turns: 20       # 工作记忆保留轮数
   hard_limit_chars: 5000      # 硬上限，超限同步压缩
