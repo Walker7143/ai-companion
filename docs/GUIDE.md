@@ -23,26 +23,43 @@
 
 ## 1. 快速开始
 
-### 1.1 最简安装（5分钟启动）
+### 1.1 一键安装（推荐）
 
+**macOS / Linux：**
 ```bash
-# 1. 克隆项目
-git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
-cd ai-girl-friend
+# 自动检测 Docker 或本地安装
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
 
-# 2. 安装依赖
-pip install -r requirements.txt
-
-# 3. 设置 API Key
-export MINIMAX_API_KEY="your_api_key_here"
-
-# 4. 启动
-python -m ai_companion start
+# 指定模式
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --docker  # Docker 模式
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --local   # 本地模式
 ```
 
-> **最低要求**：只需一个 MiniMax API Key 即可运行
+**Windows：**
+```powershell
+# 在线安装
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing | iex
 
-### 1.2 首次配置向导
+# 本地 / Docker 模式
+.\scripts\install.ps1
+.\scripts\install.ps1 -Docker
+```
+
+**或克隆后本地安装：**
+```bash
+git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
+cd ai-girl-friend
+./scripts/install.sh
+```
+
+### 1.2 最低要求
+
+> **最低要求**：只需一个 MiniMax API Key 即可运行
+- Python 3.11+（本地安装）
+- Docker（Docker 安装模式）
+- 至少一个模型 API Key (MiniMax / OpenAI / Claude / Ollama)
+
+### 1.3 首次配置向导
 
 ```bash
 python -m ai_companion setup
@@ -53,7 +70,7 @@ python -m ai_companion setup
 2. 选择人格模板
 3. 飞书集成（可选）
 
-### 1.3 快速配置
+### 1.4 快速配置
 
 如果你已有 API Key，只需创建配置文件：
 
@@ -76,6 +93,16 @@ bots:
     name: 苏晴
     enabled: true
 ```
+
+### 1.5 注意事项
+
+| 项目 | 说明 |
+|------|------|
+| **Python 版本** | 本地安装需要 Python 3.11+ |
+| **虚拟环境** | 如果系统 Python 受保护（externally-managed-environment），脚本会自动创建虚拟环境 `~/.ai-companion/.venv` |
+| **数据目录** | 所有数据存储在 `~/.ai-companion/` |
+| **Docker 模式** | 自动下载项目到 `%LOCALAPPDATA%\AICompanion`，无需手动克隆 |
+| **Git 检测** | Windows 脚本会自动检测 Git，如未安装会自动安装 |
 
 ---
 

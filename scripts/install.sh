@@ -75,7 +75,9 @@ check_python_quiet() {
 
 # 检测 pip 是否可用（能正常安装包）
 check_pip_works() {
-    $PYTHON_CMD -m pip install --dry-run anything 2>&1 | grep -q "externally-managed-environment" && return 1
+    if $PYTHON_CMD -m pip list 2>&1 | grep -q "externally-managed-environment"; then
+        return 1
+    fi
     return 0
 }
 

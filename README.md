@@ -31,10 +31,18 @@
 # 一键安装（自动选择 Docker 或本地）
 curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
 
+# 强制 Docker 模式
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --docker
+
+# 强制本地安装
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --local
+
 # 或克隆后本地安装
 git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
 cd ai-girl-friend
 ./scripts/install.sh
+./scripts/install.sh --docker    # Docker 模式
+./scripts/install.sh --local     # 本地模式
 ```
 
 ### 首次配置
@@ -294,20 +302,48 @@ python test_real_usage.py
 ### macOS / Linux
 
 ```bash
+# 一键安装（自动检测 Docker 或本地）
 curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
+
+# 指定安装模式
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --docker
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --local
+
+# 或克隆后本地运行
+git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
+cd ai-girl-friend
+./scripts/install.sh
 ```
 
 ### Windows
 
 ```powershell
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 | iex
+# 在线安装（自动下载并执行）
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing | iex
+
+# 本地安装
+.\scripts\install.ps1
+
+# Docker 模式
+.\scripts\install.ps1 -Docker
 ```
 
 ### Docker
 
 ```bash
 curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --docker
+# 或克隆后
+./scripts/install.sh --docker
 ```
+
+---
+
+## 注意事项
+
+- **Python 版本**：本地安装需要 Python 3.11+
+- **虚拟环境**：如果系统 Python 受保护（externally-managed-environment），脚本会自动创建虚拟环境 `~/.ai-companion/.venv`
+- **数据目录**：所有数据存储在 `~/.ai-companion/`
+- **API Key**：安装后需要配置 API Key，参考[配置说明](#配置说明)
 
 ---
 
