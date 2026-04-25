@@ -74,6 +74,40 @@ function Test-Pip {
     }
 }
 
+function Test-Git {
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($git) {
+        Write-Host "[OK] Git found: $($git.Source)" -ForegroundColor Green
+        return $true
+    }
+    Write-Host "[FAIL] Git not found" -ForegroundColor Red
+    return $false
+}
+
+function Install-Git {
+    Write-Host ""
+    Write-Host "Installing Git..." -ForegroundColor Yellow
+    try {
+        $null = Start-Process -FilePath "winget" -ArgumentList "install","Git.Git","-s","winget","--accept-source-agreements","--accept-package-agreements" -Wait -PassThru -NoNewWindow
+        # Refresh PATH
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        Start-Sleep -Seconds 2
+        if (Test-Git) {
+            Write-Host "[OK] Git installed successfully" -ForegroundColor Green
+            return $true
+        }
+    } catch {
+        Write-Host "Automatic Git installation failed" -ForegroundColor Red
+    }
+
+    Write-Host ""
+    Write-Host "Please install Git manually:" -ForegroundColor Yellow
+    Write-Host "  1. Download: https://git-scm.com/download/win" -ForegroundColor Gray
+    Write-Host "  2. Or run: winget install Git.Git" -ForegroundColor Gray
+    Write-Host "  3. Restart PowerShell and run this script again" -ForegroundColor Gray
+    return $false
+}
+
 function Download-Project {
     param([string]$InstallDir)
 
@@ -86,38 +120,20 @@ function Download-Project {
     }
 
     # Check if git is available
-    $hasGit = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
-    if ($hasGit) {
-        Write-Host "  Using Git clone..." -ForegroundColor Gray
-        $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1","https://gitee.com/wang_xiao_wei_7143/ai-girl-friend",$InstallDir -NoNewWindow -Wait -PassThru
-        if ($process.ExitCode -eq 0 -and (Test-Path $InstallDir)) {
-            Write-Host "  [OK] Download complete" -ForegroundColor Green
-            return $true
+    if (-not (Test-Git)) {
+        if (-not (Install-Git)) {
+            return $false
         }
-        Write-Host "  Warning: Git clone failed, trying alternative..." -ForegroundColor Yellow
     }
 
-    # Fallback: direct download using git archive
-    Write-Host "  Trying git archive download..." -ForegroundColor Gray
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $zipUrl = "https://codeload.github.com/wang_xiao_wei_7143/ai-girl-friend/zip/master"
-        $tempZip = "$env:TEMP\ai-companion.zip"
-        Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 60
-        Expand-Archive -Path $tempZip -DestinationPath "$env:TEMP" -Force
-        $extractedDir = "$env:TEMP\ai-girl-friend-master"
-        if (Test-Path $extractedDir) {
-            Copy-Item -Path "$extractedDir\*" -Destination $InstallDir -Recurse -Force
-            Remove-Item -Path $extractedDir -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item -Path $tempZip -Force -ErrorAction SilentlyContinue
-            Write-Host "  [OK] Download complete" -ForegroundColor Green
-            return $true
-        }
-    } catch {
-        Write-Host "  Warning: git archive also failed" -ForegroundColor Yellow
+    Write-Host "  Using Git clone..." -ForegroundColor Gray
+    $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1","https://gitee.com/wang_xiao_wei_7143/ai-girl-friend",$InstallDir -NoNewWindow -Wait -PassThru
+    if ($process.ExitCode -eq 0 -and (Test-Path $InstallDir)) {
+        Write-Host "  [OK] Download complete" -ForegroundColor Green
+        return $true
     }
 
-    Write-Host "  [FAIL] Download failed. Please install Git or download manually." -ForegroundColor Red
+    Write-Host "  [FAIL] Git clone failed" -ForegroundColor Red
     return $false
 }
 
