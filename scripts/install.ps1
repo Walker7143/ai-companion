@@ -218,8 +218,7 @@ function Install-Local {
         Set-Location $ProjectDir
         # Install without chroma-hnswlib first (it needs C++ compiler on Windows)
         Write-Host "  Installing core dependencies..." -ForegroundColor Gray
-        $corePackages = @("aiohttp>=3.9.0", "httpx>=0.25.0", "lark-oapi>=1.0.0", "pyyaml>=6.0", "pydantic>=2.0", "rich>=13.0", "jieba>=0.42", "python-dotenv>=1.2.0")
-        & python -m pip install $corePackages -q
+        & python -m pip install aiohttp httpx lark-oapi pyyaml pydantic rich jieba python-dotenv -q
 
         # Try chroma-hnswlib with binary only
         Write-Host "  Installing chroma (optional)..." -ForegroundColor Gray
