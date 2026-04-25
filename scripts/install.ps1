@@ -111,7 +111,7 @@ function Download-Project {
 
     try {
         # 方法2: 下载 zip 包 (Gitee 格式)
-        $zipUrl = "$repoUrl/archive/refs/heads/master.zip"
+        $zipUrl = "$repoUrl/repository/archive/master.zip"
         Write-Host "   下载压缩包..." -ForegroundColor Gray
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
