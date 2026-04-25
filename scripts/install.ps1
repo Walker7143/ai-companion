@@ -95,53 +95,27 @@ function Download-Project {
     Write-Host "Downloading AI Companion code..." -ForegroundColor Yellow
 
     $repoUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend"
-    $tempZip = "$env:TEMP\ai-companion.zip"
+
+    # 先清理已存在的目录
+    if (Test-Path $InstallDir) {
+        Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 
     try {
-        # 方法1: 使用 git clone
+        # 使用 git clone
         Write-Host "   Using Git clone..." -ForegroundColor Gray
-        git clone --depth 1 $repoUrl $InstallDir 2>&1 | Out-Null
+        $output = git clone --depth 1 $repoUrl $InstallDir 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Host "Done!" -ForegroundColor Green
             return $true
         }
+        Write-Host "   Git clone failed with exit code: $LASTEXITCODE" -ForegroundColor Gray
+        Write-Host "   Output: $output" -ForegroundColor Gray
     } catch {
-        Write-Host "   Git not available, trying alternative..." -ForegroundColor Gray
+        Write-Host "   Git clone exception: $_" -ForegroundColor Gray
     }
 
-    # 方法2: 使用 GitHub 备选（如果 Gitee 不可用）
-    try {
-        Write-Host "   Trying GitHub mirror..." -ForegroundColor Gray
-        $githubUrl = "https://github.com/AIC-Framework/ai-girl-friend.git"
-        git clone --depth 1 $githubUrl $InstallDir 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Done!" -ForegroundColor Green
-            return $true
-        }
-    } catch {
-        Write-Host "   GitHub mirror failed" -ForegroundColor Gray
-    }
-
-    # 方法3: 直接下载单个必需文件
-    try {
-        Write-Host "   Trying direct download..." -ForegroundColor Gray
-        $baseUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master"
-        $files = @("requirements.txt", "setup.py", "ai_companion/__main__.py")
-        New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
-
-        foreach ($file in $files) {
-            $fileUrl = "$baseUrl/$file"
-            $localPath = Join-Path $InstallDir $file
-            New-Item -Path (Split-Path $localPath) -ItemType Directory -Force | Out-Null
-            Invoke-WebRequest -Uri $fileUrl -OutFile $localPath -UseBasicParsing
-        }
-        Write-Host "Done!" -ForegroundColor Green
-        return $true
-    } catch {
-        Write-Host "   Direct download failed: $_" -ForegroundColor Gray
-    }
-
-    Write-Host "Failed to download. Please ensure Git is installed or download manually." -ForegroundColor Red
+    Write-Host "Failed to download. Please ensure Git is installed and network is working." -ForegroundColor Red
     return $false
 }
 
