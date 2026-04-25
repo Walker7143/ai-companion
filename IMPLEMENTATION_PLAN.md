@@ -472,8 +472,8 @@ feishu:
 
 | Task | 验证内容 | 状态 |
 |------|---------|------|
-| 9-1 | Docker 化验证 | 🚧 Dockerfile/docker-compose 已创建，待验证 |
-| 9-2 | 完整对话流程压测 | ❌ 未开始 |
+| 9-1 | Docker 化验证 | 🚧 Dockerfile/docker-compose 已创建，待有 Docker 环境验证 |
+| 9-2 | 完整对话流程压测 | ✅ 通过（5轮多轮对话测试） |
 | 9-3 | 一键安装脚本跨平台验证 | ✅ 完成（添加 Docker 选项） |
 
 ---
