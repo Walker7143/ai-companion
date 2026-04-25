@@ -384,7 +384,113 @@ irm https://gitee.com/xxx/install.ps1 | iex
 
 ---
 
-## 八、设计原则
+## 八、飞书集成配置
+
+### 8.1 连接模式
+
+飞书支持两种连接模式：
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| `websocket` | WebSocket 长连接（默认） | 生产环境，推荐 |
+| `webhook` | HTTP Webhook | 需要公网回调地址 |
+
+### 8.2 环境变量配置
+
+```bash
+# 必需
+export FEISHU_APP_ID="your_app_id"           # 飞书应用 ID
+export FEISHU_APP_SECRET="your_app_secret"   # 飞书应用 Secret
+
+# 可选
+export FEISHU_DOMAIN="feishu"                 # feishu 或 lark
+export FEISHU_CONNECTION_MODE="websocket"    # websocket 或 webhook
+export FEISHU_BOT_OPEN_ID="ou_xxx"           # 机器人 Open ID（用于 @mention 匹配）
+export FEISHU_BOT_USER_ID="u_xxx"            # 机器人 User ID（可选）
+export FEISHU_BOT_NAME="AICompanion"          # 机器人名称
+
+# Webhook 模式专用
+export FEISHU_WEBHOOK_HOST="0.0.0.0"         # 监听地址
+export FEISHU_WEBHOOK_PORT="8765"            # 监听端口
+export FEISHU_WEBHOOK_PATH="/feishu/webhook" # Webhook 路径
+
+# 安全配置
+export FEISHU_ENCRYPT_KEY="your_encrypt_key"  # 事件订阅加密密钥
+export FEISHU_VERIFICATION_TOKEN="your_token" # 事件订阅验证 Token
+
+# 群组策略
+export FEISHU_GROUP_POLICY="allowlist"        # open/allowlist/blacklist/admin_only/disabled
+export FEISHU_ALLOWED_USERS="user1,user2"    # 允许的用户列表（逗号分隔）
+```
+
+### 8.3 config.yaml 配置方式
+
+```yaml
+platforms:
+  feishu:
+    enabled: true
+    extra:
+      app_id: "your_app_id"
+      app_secret: "your_app_secret"
+      domain: "feishu"
+      connection_mode: "websocket"
+      encrypt_key: "your_encrypt_key"
+      verification_token: "your_verification_token"
+      group_policy: "allowlist"
+      allowed_users:
+        - "user_open_id_1"
+        - "user_open_id_2"
+      admins:
+        - "admin_open_id"
+      group_rules:
+        "chat_id_1":
+          policy: "open"
+        "chat_id_2":
+          policy: "allowlist"
+          allowlist:
+            - "allowed_user_id"
+```
+
+### 8.4 群组策略说明
+
+| 策略 | 说明 |
+|------|------|
+| `open` | 完全开放，所有人可用 |
+| `allowlist` | 仅白名单用户可用 |
+| `blacklist` | 除黑名单外所有人都可用 |
+| `admin_only` | 仅管理员可用 |
+| `disabled` | 机器人禁用 |
+
+### 8.5 Hermes 适配器特性
+
+迁移自 Hermes 的企业级飞书适配器，提供：
+
+- **消息去重**：24 小时去重窗口，重启后持久化
+- **发送方名称缓存**：10 分钟 TTL，减少 API 调用
+- **应用锁**：防止多实例使用相同凭证
+- **速率限制**：Webhook 模式下滑动窗口限流
+- **异常追踪**：连续错误时记录 WARNING 日志
+- **Per-chat 串行处理**：保证同一聊天内消息有序
+- **打字状态指示**：处理中显示 "Typing"，失败显示 CrossMark
+- **表情反应路由**：作为合成文本事件处理
+- **卡片按钮事件**：作为 COMMAND 事件路由
+
+### 8.6 消息类型支持
+
+| 类型 | 接收 | 发送 |
+|------|------|------|
+| 文本 | ✅ | ✅ |
+| 富文本 (post) | ✅ | ✅ |
+| 图片 | ✅ | ✅ |
+| 语音 | ✅ | ✅ |
+| 视频/媒体 | ✅ | ✅ |
+| 文件 | ✅ | ✅ |
+| 卡片消息 | ✅ | ✅ |
+| @提及 | ✅ | ✅ |
+
+---
+
+## 九、设计原则
 
 1. **零配置启动：** 安装后无需手动编辑任何文件，`setup` 向导覆盖所有必要配置
 2. **路径无关：** 所有路径使用 `pathlib`，用户数据放在 `~/.ai-companion/`

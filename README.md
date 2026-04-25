@@ -52,13 +52,78 @@ python -m ai_companion start
 
 ## 命令行工具
 
+### 本地对话
+
 ```bash
-python -m ai_companion start              # 启动
+python -m ai_companion start              # 启动本地 CLI 对话
+python -m ai_companion start --bot aiyue  # 只启动指定 Bot
+```
+
+### 网关服务（连接飞书）
+
+```bash
+python -m ai_companion gateway start        # 异步启动（后台运行）
+python -m ai_companion gateway start --sync  # 同步启动（显示日志）
+python -m ai_companion gateway stop         # 停止网关
+python -m ai_companion gateway restart      # 重启网关
+python -m ai_companion gateway restart --sync  # 同步重启
+python -m ai_companion gateway replace       # 替换网关（先停止旧实例再启动新实例）
+python -m ai_companion gateway replace --sync  # 同步替换
+python -m ai_companion gateway logs         # 查看网关日志
+python -m ai_companion gateway logs -n 100  # 查看最新100行
+python -m ai_companion gateway status       # 查看网关状态
+```
+
+### 其他
+
+```bash
 python -m ai_companion setup             # 配置向导
 python -m ai_companion status             # 查看状态
 python -m ai_companion bot list           # 列出所有 Bot
 python -m ai_companion bot add --name xxx # 添加 Bot
 python -m ai_companion model test         # 测试模型连接
+```
+
+## 飞书机器人配置
+
+### 路由模式
+
+在 `~/.ai-companion/config/config.yaml` 中配置：
+
+**dedicated 模式**（专用，一对一）：
+```yaml
+platforms:
+  feishu:
+    routing:
+      mode: dedicated
+      bot_id: aiyue  # 所有消息发给这个 Bot
+```
+
+**chat_routed 模式**（群聊路由，一对多）：
+```yaml
+platforms:
+  feishu:
+    routing:
+      mode: chat_routed
+      default_bot: suqing  # 默认 Bot
+      group_bot_map:
+        "oc_群ID1": aiyue   # 不同群聊发给不同 Bot
+        "oc_群ID2": suqing
+```
+
+### 完整配置示例
+
+```yaml
+platforms:
+  feishu:
+    enabled: true
+    extra:
+      app_id: cli_xxxxx
+      app_secret: xxxxx
+      connection_mode: websocket
+    routing:
+      mode: dedicated
+      bot_id: aiyue
 ```
 
 ## 默认人格
@@ -227,6 +292,35 @@ skill-my-skill/
 ```
 
 **已安装技能目录：** `data/bots/_skills/`
+
+## 平台支持
+
+| 平台 | 状态 | 说明 |
+|------|------|------|
+| 飞书 | ✅ 已集成 | Hermes 企业级飞书适配器 |
+| CLI | ✅ 已集成 | 本地交互模式 |
+| Webhook | ✅ 已集成 | API 服务器模式 |
+| 更多平台 | 计划中 | Telegram、Discord 等 |
+
+## ✅ Phase 8 完成（飞书集成）
+
+| Task | 描述 | 状态 |
+|------|------|------|
+| 8-1 | Hermes Feishu 适配器迁移 | ✅ 完成 |
+| 8-2 | WebSocket / Webhook 双模式支持 | ✅ 完成 |
+| 8-3 | 消息去重与持久化 | ✅ 完成 |
+| 8-4 | 群组 @提及 门控 | ✅ 完成 |
+| 8-5 | 媒体文件收发支持 | ✅ 完成 |
+| 8-6 | 发送状态反应（Typing/CrossMark） | ✅ 完成 |
+
+**飞书配置：**
+```bash
+export FEISHU_APP_ID="your_app_id"
+export FEISHU_APP_SECRET="your_app_secret"
+export FEISHU_CONNECTION_MODE="websocket"  # websocket 或 webhook
+```
+
+**配置项详细说明见 [ARCHITECTURE.md](ARCHITECTURE.md#八-飞书集成配置)。**
 
 ## License
 
