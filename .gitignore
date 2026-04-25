@@ -39,11 +39,7 @@ env/
 .LSOverride
 
 # Project specific
-data/bots/_images/
-data/bots/_audio/
-data/bots/*/memory/*.db
-data/bots/*/memory/chroma/
-data/suqing/
+data/
 
 # Test files
 test_*.py
