@@ -2,7 +2,7 @@
 # 支持: Windows PowerShell
 #
 # 用法:
-#   irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 | iex  # 在线安装（推荐）
+#   . {iwr https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing} | iex  # 在线安装（推荐）
 #   .\install.ps1          # 本地安装
 #   .\install.ps1 -Docker  # Docker 安装
 
@@ -18,14 +18,10 @@ if ($D -or $Docker) {
     $InstallMode = "docker"
 }
 
-# 检测是否从远程执行（通过检查脚本路径是否在临时目录或为空）
+# 检测是否从远程执行
 $ScriptPath = $MyInvocation.MyCommand.Path
 $IsOnlineInstall = $false
-if ([string]::IsNullOrEmpty($ScriptPath) -or $ScriptPath -eq "" -or (Test-Path "env:ONLINE_INSTALL")) {
-    $IsOnlineInstall = $true
-}
-# 也检查当前目录是否为临时下载路径
-if ($IsOnlineInstall -eq $false -and $ScriptPath -match "Temp|Local\\Temp") {
+if ([string]::IsNullOrEmpty($ScriptPath) -or $ScriptPath -eq "" -or $ScriptPath -match "Temp|Local\\Temp" -or ($env:ONLINE_INSTALL -eq "1")) {
     $IsOnlineInstall = $true
 }
 
