@@ -1,3 +1,7 @@
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+chcp 65001 | Out-Null
+
 # AI Companion 一键安装脚本
 # 支持: Windows PowerShell
 #
@@ -25,9 +29,9 @@ if ([string]::IsNullOrEmpty($ScriptPath) -or $ScriptPath -eq "" -or $ScriptPath 
     $IsOnlineInstall = $true
 }
 
-Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host "  AI Companion 安装脚本" -ForegroundColor Cyan
-Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  AI Companion Installer" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # 检测 Docker
@@ -35,11 +39,11 @@ function Test-Docker {
     try {
         $dockerVersion = docker --version 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ Docker 已就绪: $dockerVersion" -ForegroundColor Green
+            Write-Host "[OK] Docker: $dockerVersion" -ForegroundColor Green
             return $true
         }
     } catch {}
-    Write-Host "❌ 未检测到 Docker" -ForegroundColor Red
+    Write-Host "[FAIL] Docker not found" -ForegroundColor Red
     return $false
 }
 
@@ -50,26 +54,14 @@ function Test-Python {
         if ($version -match "Python (\d+\.\d+)") {
             $ver = [float]$Matches[1]
             if ($ver -ge 3.11) {
-                Write-Host "✓ Python $ver" -ForegroundColor Green
+                Write-Host "[OK] Python $ver" -ForegroundColor Green
                 return $true
             }
         }
-        Write-Host "❌ Python 版本过低或未安装" -ForegroundColor Red
-        Write-Host "请先安装 Python 3.11+: https://www.python.org/downloads/" -ForegroundColor Yellow
+        Write-Host "[FAIL] Python version too old or not found" -ForegroundColor Red
         return $false
     } catch {
-        try {
-            $version = python3 --version 2>&1
-            if ($version -match "Python (\d+\.\d+)") {
-                $ver = [float]$Matches[1]
-                if ($ver -ge 3.11) {
-                    Write-Host "✓ Python $ver" -ForegroundColor Green
-                    return $true
-                }
-            }
-        } catch {}
-        Write-Host "❌ 未检测到 Python 3.11+" -ForegroundColor Red
-        Write-Host "请先安装 Python: https://www.python.org/downloads/" -ForegroundColor Yellow
+        Write-Host "[FAIL] Python 3.11+ required" -ForegroundColor Red
         return $false
     }
 }
@@ -78,10 +70,10 @@ function Test-Python {
 function Test-Pip {
     try {
         python -m pip --version | Out-Null
-        Write-Host "✓ pip 已就绪" -ForegroundColor Green
+        Write-Host "[OK] pip ready" -ForegroundColor Green
         return $true
     } catch {
-        Write-Host "📦 安装 pip..." -ForegroundColor Yellow
+        Write-Host "[WARN] pip not found, installing..." -ForegroundColor Yellow
         python -m ensurepip --upgrade 2>&1 | Out-Null
         return $true
     }
@@ -92,49 +84,80 @@ function Download-Project {
     param([string]$InstallDir)
 
     Write-Host ""
-    Write-Host "Downloading AI Companion code..." -ForegroundColor Yellow
+    Write-Host "Downloading project to: $InstallDir" -ForegroundColor Cyan
 
     $repoUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend"
 
     # 先清理已存在的目录
     if (Test-Path $InstallDir) {
-        Write-Host "   Cleaning existing directory..." -ForegroundColor Gray
+        Write-Host "  Cleaning existing directory..." -ForegroundColor Gray
         Remove-Item $InstallDir -Recurse -Force
     }
 
-    # 使用 git clone
-    Write-Host "   Running git clone..." -ForegroundColor Gray
-    $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1",$repoUrl,$InstallDir -NoNewWindow -Wait -PassThru
-
-    if ($process.ExitCode -eq 0 -and (Test-Path $InstallDir)) {
-        Write-Host "Done!" -ForegroundColor Green
-        return $true
+    # 方法1: 使用 git clone
+    $hasGit = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+    if ($hasGit) {
+        Write-Host "  Using Git clone..." -ForegroundColor Gray
+        $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1",$repoUrl,$InstallDir -NoNewWindow -Wait -PassThru
+        if ($process.ExitCode -eq 0 -and (Test-Path $InstallDir)) {
+            Write-Host "  [OK] Download complete" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "  [WARN] Git clone failed" -ForegroundColor Yellow
+    } else {
+        Write-Host "  [WARN] Git not found" -ForegroundColor Yellow
     }
 
-    Write-Host "Git clone failed with exit code: $($process.ExitCode)" -ForegroundColor Red
-    return $false
+    # 方法2: 直接下载文件（无需 Git）
+    Write-Host "  Trying direct download..." -ForegroundColor Gray
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
+
+        $baseUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master"
+
+        # 需要下载的文件和目录结构
+        $files = @(
+            "requirements.txt",
+            "setup.py",
+            "pyproject.toml",
+            "ai_companion/__main__.py",
+            "ai_companion/__init__.py",
+            "ai_companion/config.py",
+            "ai_companion/bot.py",
+            "ai_companion/models.py"
+        )
+
+        foreach ($file in $files) {
+            $fileUrl = "$baseUrl/$file"
+            $localPath = Join-Path $InstallDir $file
+            $dir = Split-Path $localPath
+            if (!(Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+            Write-Host "    Downloading $file..." -ForegroundColor Gray
+            Invoke-WebRequest -Uri $fileUrl -OutFile $localPath -UseBasicParsing
+        }
+
+        Write-Host "  [OK] Download complete" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "  [FAIL] Direct download failed: $_" -ForegroundColor Red
+        return $false
+    }
 }
 
-# 检查是否需要创建虚拟环境
+# 检查是否需要虚拟环境
 function Test-NeedsVenv {
     param([string]$ProjectDir)
     $originalDir = Get-Location
     try {
         Set-Location $ProjectDir
-        $null = python -m pip list 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            return $true
-        }
         $output = python -m pip list 2>&1 | Out-String
         if ($output -match "externally-managed-environment") {
             return $true
         }
-        # 尝试实际安装测试
-        $testFile = "$env:TEMP\pip_test_$([guid]::NewGuid().ToString('N')).txt"
+        $testFile = "$env:TEMP\pip_test.txt"
         $null = python -m pip install --target $testFile --dry-run pip 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            return $true
-        }
+        if ($LASTEXITCODE -ne 0) { return $true }
         if (Test-Path $testFile) { Remove-Item $testFile -Force -ErrorAction SilentlyContinue }
         return $false
     } catch {
@@ -149,82 +172,69 @@ function Install-Local {
     param([string]$ProjectDir)
 
     Write-Host ""
-    Write-Host "📦 本地安装模式" -ForegroundColor Cyan
+    Write-Host "Local Install Mode" -ForegroundColor Cyan
     Write-Host ""
 
-    # Python 检查
     if (-not (Test-Python)) {
-        Write-Host ""
-        Write-Host "❌ 本地安装需要 Python 3.11+" -ForegroundColor Red
-        Write-Host "请安装 Python 或使用 Docker 模式" -ForegroundColor Yellow
+        Write-Host "Please install Python 3.11+ first" -ForegroundColor Yellow
         return
     }
 
-    # pip 检查
     Test-Pip
 
-    # 用户数据目录
     $userDir = "$env:USERPROFILE\.ai-companion"
     Write-Host ""
-    Write-Host "📁 创建用户数据目录: $userDir" -ForegroundColor Yellow
+    Write-Host "Creating user directory: $userDir" -ForegroundColor Yellow
     New-Item -ItemType Directory -Path "$userDir\data\bots" -Force | Out-Null
     New-Item -ItemType Directory -Path "$userDir\logs" -Force | Out-Null
-    Write-Host "✓ 数据目录创建完成" -ForegroundColor Green
+    Write-Host "[OK] Directory created" -ForegroundColor Green
 
-    # 复制配置文件
     Write-Host ""
-    Write-Host "⚙️  初始化配置..." -ForegroundColor Yellow
+    Write-Host "Initializing config..." -ForegroundColor Yellow
     if (-not (Test-Path "$userDir\config\bots.yaml")) {
         New-Item -ItemType Directory -Path "$userDir\config" -Force | Out-Null
         Copy-Item "$ProjectDir\config\bots.yaml.example" "$userDir\config\bots.yaml" -ErrorAction SilentlyContinue
         Copy-Item "$ProjectDir\config\models.yaml.example" "$userDir\config\models.yaml" -ErrorAction SilentlyContinue
-        Write-Host "✓ 配置文件已创建" -ForegroundColor Green
+        Write-Host "[OK] Config created" -ForegroundColor Green
     }
 
-    # 安装依赖
     Write-Host ""
-    Write-Host "📦 安装 Python 依赖..." -ForegroundColor Yellow
+    Write-Host "Installing Python dependencies..." -ForegroundColor Yellow
     $originalDir = Get-Location
     try {
         Set-Location $ProjectDir
         & python -m pip install -r requirements.txt -q
-        Write-Host "✓ 依赖安装完成" -ForegroundColor Green
+        Write-Host "[OK] Dependencies installed" -ForegroundColor Green
 
-        # 检查是否需要虚拟环境
         $needsVenv = Test-NeedsVenv $ProjectDir
         $venvDir = "$userDir\.venv"
 
         if ($needsVenv) {
             Write-Host ""
-            Write-Host "   系统 Python 受保护，创建虚拟环境..." -ForegroundColor Yellow
+            Write-Host "System Python is protected, creating virtual environment..." -ForegroundColor Yellow
             python -m venv $venvDir
             $venvPip = "$venvDir\Scripts\pip.exe"
             & $venvPip install --upgrade pip -q
             & $venvPip install -r requirements.txt -q
             & $venvPip install -e .
-            Write-Host "✓ AI Companion 已安装到虚拟环境" -ForegroundColor Green
-            Write-Host ""
-            Write-Host "   启动命令: $venvDir\Scripts\ai-companion.exe" -ForegroundColor Gray
+            Write-Host "[OK] Installed to virtual environment" -ForegroundColor Green
         } else {
-            # 安装 AI Companion（全局命令）
             Write-Host ""
-            Write-Host "📦 安装 AI Companion（全局命令）..." -ForegroundColor Yellow
+            Write-Host "Installing AI Companion command..." -ForegroundColor Yellow
             & python -m pip install -e .
-            Write-Host "✓ AI Companion 命令已安装: ai-companion" -ForegroundColor Green
+            Write-Host "[OK] AI Companion installed" -ForegroundColor Green
         }
     } finally {
         Set-Location $originalDir
     }
 
     Write-Host ""
-    Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
-    Write-Host "✓ 本地安装完成！" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "Installation complete!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "下一步:" -ForegroundColor White
-    Write-Host "  1. 配置 API Key:" -ForegroundColor Yellow
-    Write-Host "     编辑 $userDir\config\models.yaml" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "  2. 启动:" -ForegroundColor Yellow
+    Write-Host "Next steps:" -ForegroundColor White
+    Write-Host "  1. Edit config: $userDir\config\models.yaml" -ForegroundColor Yellow
+    Write-Host "  2. Run setup:"
     if ($needsVenv) {
         Write-Host "     $venvDir\Scripts\ai-companion.exe setup" -ForegroundColor Gray
         Write-Host "     $venvDir\Scripts\ai-companion.exe start" -ForegroundColor Gray
@@ -232,9 +242,7 @@ function Install-Local {
         Write-Host "     ai-companion setup" -ForegroundColor Gray
         Write-Host "     ai-companion start" -ForegroundColor Gray
     }
-    Write-Host ""
-    Write-Host "  配置目录: $userDir" -ForegroundColor Gray
-    Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
 }
 
 # Docker 安装
@@ -242,26 +250,24 @@ function Install-Docker {
     param([string]$ProjectDir)
 
     Write-Host ""
-    Write-Host "🐳 Docker 安装模式" -ForegroundColor Cyan
+    Write-Host "Docker Install Mode" -ForegroundColor Cyan
     Write-Host ""
 
     if (-not (Test-Docker)) {
-        Write-Host ""
-        Write-Host "请先安装 Docker: https://docs.docker.com/get-docker/" -ForegroundColor Yellow
-        Write-Host "或使用本地安装模式" -ForegroundColor Yellow
+        Write-Host "Please install Docker first" -ForegroundColor Yellow
         return
     }
 
     Write-Host ""
-    Write-Host "📦 构建 Docker 镜像..." -ForegroundColor Yellow
+    Write-Host "Building Docker image..." -ForegroundColor Yellow
     $originalDir = Get-Location
     try {
         Set-Location $ProjectDir
         docker build -t ai-companion .
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ 镜像构建完成" -ForegroundColor Green
+            Write-Host "[OK] Image built" -ForegroundColor Green
         } else {
-            Write-Host "❌ 镜像构建失败" -ForegroundColor Red
+            Write-Host "[FAIL] Build failed" -ForegroundColor Red
             return
         }
     } finally {
@@ -269,38 +275,29 @@ function Install-Docker {
     }
 
     Write-Host ""
-    Write-Host "📁 创建配置目录..." -ForegroundColor Yellow
+    Write-Host "Creating config directory..." -ForegroundColor Yellow
     $userDir = "$env:USERPROFILE\.ai-companion"
     New-Item -ItemType Directory -Path "$userDir\config" -Force | Out-Null
     New-Item -ItemType Directory -Path "$userDir\data" -Force | Out-Null
-    Write-Host "✓ 配置目录: $userDir" -ForegroundColor Green
+    Write-Host "[OK] Config directory: $userDir" -ForegroundColor Green
 
     Write-Host ""
-    Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
-    Write-Host "✓ Docker 安装完成！" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "Docker installation complete!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "下一步:" -ForegroundColor White
-    Write-Host "  1. 配置 API Key（编辑 docker-compose.yml 或设置环境变量）" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "  2. 启动服务:" -ForegroundColor Yellow
-    Write-Host "     docker-compose up -d" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "  3. 查看日志:" -ForegroundColor Yellow
-    Write-Host "     docker-compose logs -f" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "  配置目录: $userDir" -ForegroundColor Gray
-    Write-Host "  配置文件: $userDir\config\" -ForegroundColor Gray
-    Write-Host "═══════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Next steps:" -ForegroundColor White
+    Write-Host "  1. Configure API Key in docker-compose.yml" -ForegroundColor Yellow
+    Write-Host "  2. Run: docker-compose up -d" -ForegroundColor Gray
+    Write-Host "========================================" -ForegroundColor Cyan
 }
 
 # 主流程
 $ProjectDir = $PSScriptRoot
 
 if ($IsOnlineInstall) {
-    # 在线安装：下载项目到本地AppData目录
     $InstallDir = "$env:LOCALAPPDATA\AICompanion"
-    Write-Host "📦 在线安装模式" -ForegroundColor Cyan
-    Write-Host "   安装目录: $InstallDir" -ForegroundColor Gray
+    Write-Host "Online Install Mode" -ForegroundColor Cyan
+    Write-Host "  Install directory: $InstallDir" -ForegroundColor Gray
     Write-Host ""
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
@@ -313,12 +310,4 @@ if ($IsOnlineInstall) {
 switch ($InstallMode) {
     "docker" { Install-Docker $ProjectDir }
     "local"  { Install-Local $ProjectDir }
-}
-
-# 清理临时文件（仅在线安装）
-if ($IsOnlineInstall -and (Test-Path "$env:TEMP\ai-girl-friend")) {
-    Remove-Item -Path "$env:TEMP\ai-girl-friend" -Recurse -Force -ErrorAction SilentlyContinue
-}
-if ($IsOnlineInstall -and (Test-Path "$env:TEMP\ai-companion.zip")) {
-    Remove-Item -Path "$env:TEMP\ai-companion.zip" -Force -ErrorAction SilentlyContinue
 }
