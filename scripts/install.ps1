@@ -85,81 +85,40 @@ function Download-Project {
         Remove-Item $InstallDir -Recurse -Force
     }
 
+    # Check if git is available
+    $hasGit = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+    if ($hasGit) {
+        Write-Host "  Using Git clone..." -ForegroundColor Gray
+        $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1","https://gitee.com/wang_xiao_wei_7143/ai-girl-friend",$InstallDir -NoNewWindow -Wait -PassThru
+        if ($process.ExitCode -eq 0 -and (Test-Path $InstallDir)) {
+            Write-Host "  [OK] Download complete" -ForegroundColor Green
+            return $true
+        }
+        Write-Host "  Warning: Git clone failed, trying alternative..." -ForegroundColor Yellow
+    }
+
+    # Fallback: direct download using git archive
+    Write-Host "  Trying git archive download..." -ForegroundColor Gray
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
-
-        $baseUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master"
-
-        # Root files that exist
-        $rootFiles = @("requirements.txt", "setup.py", "README.md")
-        foreach ($file in $rootFiles) {
-            Write-Host "  Downloading $file..." -ForegroundColor Gray
-            try {
-                Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile (Join-Path $InstallDir $file) -UseBasicParsing -TimeoutSec 30
-            } catch {
-                Write-Host "    Warning: $file not found, creating default..." -ForegroundColor Yellow
-            }
+        $zipUrl = "https://codeload.github.com/wang_xiao_wei_7143/ai-girl-friend/zip/master"
+        $tempZip = "$env:TEMP\ai-companion.zip"
+        Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing -TimeoutSec 60
+        Expand-Archive -Path $tempZip -DestinationPath "$env:TEMP" -Force
+        $extractedDir = "$env:TEMP\ai-girl-friend-master"
+        if (Test-Path $extractedDir) {
+            Copy-Item -Path "$extractedDir\*" -Destination $InstallDir -Recurse -Force
+            Remove-Item -Path $extractedDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempZip -Force -ErrorAction SilentlyContinue
+            Write-Host "  [OK] Download complete" -ForegroundColor Green
+            return $true
         }
-
-        # Config files - only models.yaml.example exists
-        New-Item -Path (Join-Path $InstallDir "config") -ItemType Directory -Force | Out-Null
-        Write-Host "  Downloading config files..." -ForegroundColor Gray
-        try {
-            Invoke-WebRequest -Uri "$baseUrl/config/models.yaml.example" -OutFile (Join-Path $InstallDir "config\models.yaml.example") -UseBasicParsing -TimeoutSec 30
-        } catch {}
-
-        # Create default bots.yaml if not found
-        $botsYamlContent = @"
-bots:
-  default:
-    name: "AI Companion"
-    persona: "persona_template.json"
-"@
-        Set-Content -Path (Join-Path $InstallDir "config\bots.yaml") -Value $botsYamlContent -Encoding UTF8
-
-        # Download all ai_companion subdirectories recursively using a smarter approach
-        Write-Host "  Downloading ai_companion source..." -ForegroundColor Gray
-
-        # Download key files
-        $keyFiles = @(
-            "ai_companion/__main__.py",
-            "ai_companion/__init__.py",
-            "ai_companion/main.py",
-            "ai_companion/config/__init__.py",
-            "ai_companion/bot/__init__.py",
-            "ai_companion/bot/manager.py",
-            "ai_companion/bot/cli.py",
-            "ai_companion/gateway/cmd.py",
-            "ai_companion/gateway/router.py",
-            "ai_companion/memory/__init__.py",
-            "ai_companion/memory/engine.py",
-            "ai_companion/platform/__init__.py"
-        )
-
-        foreach ($file in $keyFiles) {
-            $localPath = Join-Path $InstallDir $file
-            $dir = Split-Path $localPath
-            if (!(Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
-            try {
-                Write-Host "    $file" -ForegroundColor Gray
-                Invoke-WebRequest -Uri "$baseUrl/$file" -OutFile $localPath -UseBasicParsing -TimeoutSec 30
-            } catch {
-                Write-Host "    Warning: failed to download $file" -ForegroundColor Yellow
-            }
-        }
-
-        # Copy config/__init__.py content if it exists
-        try {
-            $configInitContent = Invoke-WebRequest -Uri "$baseUrl/ai_companion/config/__init__.py" -UseBasicParsing -TimeoutSec 30 -ErrorAction SilentlyContinue
-        } catch {}
-
-        Write-Host "  [OK] Download complete" -ForegroundColor Green
-        return $true
     } catch {
-        Write-Host "  [FAIL] Download failed: $_" -ForegroundColor Red
-        return $false
+        Write-Host "  Warning: git archive also failed" -ForegroundColor Yellow
     }
+
+    Write-Host "  [FAIL] Download failed. Please install Git or download manually." -ForegroundColor Red
+    return $false
 }
 
 function Test-NeedsVenv {
