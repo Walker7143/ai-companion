@@ -2,11 +2,18 @@
 AI Companion CLI 入口
 
 用法:
-    python -m ai_companion start      # 启动
-    python -m ai_companion setup     # 配置向导
-    python -m ai_companion status     # 查看状态
-    python -m ai_companion bot list   # Bot 管理
-    python -m ai_companion --help     # 帮助
+    python -m ai_companion start          # 启动本地 CLI 对话
+    python -m ai_companion gateway       # 启动网关服务（连接飞书）
+    python -m ai_companion gateway start  # 异步启动网关（后台运行）
+    python -m ai_companion gateway start --sync  # 同步启动网关（显示日志）
+    python -m ai_companion gateway stop   # 停止网关
+    python -m ai_companion gateway restart  # 重启网关
+    python -m ai_companion gateway logs   # 查看网关日志
+    python -m ai_companion gateway status  # 查看网关状态
+    python -m ai_companion setup          # 配置向导
+    python -m ai_companion status         # 查看状态
+    python -m ai_companion bot list       # Bot 管理
+    python -m ai_companion --help         # 帮助
 """
 
 import argparse
@@ -18,12 +25,17 @@ from pathlib import Path
 _project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(_project_root))
 
+# 确保 gateway 模块可以正确导入 (Hermes 风格的顶级模块结构)
+# 这样 ai_companion.gateway.platforms.feishu 中的 `from gateway.config import ...` 可以工作
+import gateway
+
 
 def main():
     from ai_companion.main import main as start_main
     from ai_companion.setup import run_setup
     from ai_companion.main import show_status
     from ai_companion.bot.cli import handle_bot_command
+    from ai_companion.gateway import control
 
     parser = argparse.ArgumentParser(
         prog="ai-companion",
@@ -32,8 +44,34 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
     # start 命令
-    start_parser = subparsers.add_parser("start", help="启动 AI Companion")
+    start_parser = subparsers.add_parser("start", help="启动 AI Companion (本地 CLI)")
     start_parser.add_argument("--bot", type=str, help="只启动指定 Bot")
+
+    # gateway 命令（支持子命令）
+    gateway_parser = subparsers.add_parser("gateway", help="网关服务管理 (连接飞书等平台)")
+    gateway_subparsers = gateway_parser.add_subparsers(dest="gateway_command")
+
+    # gateway start
+    gateway_start = gateway_subparsers.add_parser("start", help="启动网关")
+    gateway_start.add_argument("--sync", action="store_true", help="同步模式（显示日志）")
+
+    # gateway stop
+    gateway_subparsers.add_parser("stop", help="停止网关")
+
+    # gateway restart
+    gateway_restart = gateway_subparsers.add_parser("restart", help="重启网关")
+    gateway_restart.add_argument("--sync", action="store_true", help="同步模式（显示日志）")
+
+    # gateway replace
+    gateway_replace = gateway_subparsers.add_parser("replace", help="替换网关（先停止旧实例再启动新实例）")
+    gateway_replace.add_argument("--sync", action="store_true", help="同步模式（显示日志）")
+
+    # gateway logs
+    gateway_logs = gateway_subparsers.add_parser("logs", help="查看网关日志")
+    gateway_logs.add_argument("-n", "--lines", type=int, default=50, help="显示行数")
+
+    # gateway status
+    gateway_subparsers.add_parser("status", help="查看网关状态")
 
     # setup 命令
     subparsers.add_parser("setup", help="运行配置向导")
@@ -63,6 +101,23 @@ def main():
     # 路由
     if args.command == "start":
         asyncio.run(start_main(bot_filter=args.bot))
+    elif args.command == "gateway":
+        if args.gateway_command == "start":
+            control.start_gateway(sync=args.sync)
+        elif args.gateway_command == "stop":
+            control.stop_gateway()
+        elif args.gateway_command == "restart":
+            control.restart_gateway(sync=args.sync)
+        elif args.gateway_command == "replace":
+            control.replace_gateway(sync=args.sync)
+        elif args.gateway_command == "logs":
+            control.tail_logs(lines=args.lines)
+        elif args.gateway_command == "status":
+            control.show_gateway_status()
+        else:
+            # 无子命令时直接运行 gateway
+            from ai_companion.gateway.cmd import run_gateway
+            asyncio.run(run_gateway())
     elif args.command == "setup":
         asyncio.run(run_setup())
     elif args.command == "status":

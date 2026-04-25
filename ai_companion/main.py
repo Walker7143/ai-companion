@@ -11,20 +11,23 @@ from .cli.adapter import CLIAdapter
 
 
 def get_data_dir() -> Path:
-    """获取 Bot 数据根目录，跨平台兼容"""
-    # 优先使用项目根目录下的 data/bots 目录（便于开发调试）
-    project_data = Path(__file__).parent.parent.parent / "data" / "bots"
-    if project_data.exists():
-        return project_data
-    # 其次用户目录
-    if sys.platform == "win32":
-        return Path.home() / ".ai-companion" / "bots"
-    else:
-        return Path.home() / "ai-companion" / "bots"
+    """获取 Bot 数据根目录，优先用户目录 ~/.ai-companion/"""
+    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    if user_dir.exists():
+        return user_dir
+    return Path(__file__).parent.parent.parent / "data" / "bots"
 
 
 async def main(bot_filter: str = None):
     """主启动函数"""
+    # 获取数据目录
+    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    if user_dir.exists():
+        data_dir = user_dir
+    else:
+        project_data = Path(__file__).parent.parent.parent / "data" / "bots"
+        data_dir = project_data
+
     # 加载配置（优先用户目录，其次项目目录）
     config = Config()
 

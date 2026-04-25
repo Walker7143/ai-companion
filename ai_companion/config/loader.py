@@ -14,10 +14,11 @@ class Config:
         elif sys.platform == "win32":
             self.config_dir = Path.home() / ".ai-companion" / "config"
         else:
-            self.config_dir = Path.home() / "ai-companion" / "config"
+            self.config_dir = Path.home() / ".ai-companion" / "config"
 
         self._bots = None
         self._models = None
+        self._config = None
 
     def _find_file(self, filename: str) -> Optional[Path]:
         """从用户目录或项目目录查找配置文件"""
@@ -70,3 +71,13 @@ class Config:
             "base_url": cfg.get("base_url", "https://api.minimax.chat/v1"),
             "model": cfg.get("model", "MiniMax-m2.7"),
         }
+
+    @property
+    def config(self) -> dict:
+        if self._config is None:
+            self._config = self._load_yaml("config.yaml")
+        return self._config
+
+    def get_platform_config(self, platform: str) -> dict:
+        """获取指定平台的配置"""
+        return self.config.get("platforms", {}).get(platform, {})
