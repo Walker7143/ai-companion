@@ -18,10 +18,14 @@ if ($D -or $Docker) {
     $InstallMode = "docker"
 }
 
-# 检测是否从远程执行（通过检查脚本是否下载到临时目录）
+# 检测是否从远程执行（通过检查脚本路径是否在临时目录或为空）
 $ScriptPath = $MyInvocation.MyCommand.Path
 $IsOnlineInstall = $false
-if ([string]::IsNullOrEmpty($ScriptPath) -or (Test-Path "env:ONLINE_INSTALL")) {
+if ([string]::IsNullOrEmpty($ScriptPath) -or $ScriptPath -eq "" -or (Test-Path "env:ONLINE_INSTALL")) {
+    $IsOnlineInstall = $true
+}
+# 也检查当前目录是否为临时下载路径
+if ($IsOnlineInstall -eq $false -and $ScriptPath -match "Temp|Local\\Temp") {
     $IsOnlineInstall = $true
 }
 
@@ -333,8 +337,8 @@ switch ($InstallMode) {
 }
 
 # 清理临时文件（仅在线安装）
-if ($IsOnlineInstall -and (Test-Path "$env:TEMP\ai-girl-friend-master")) {
-    Remove-Item -Path "$env:TEMP\ai-girl-friend-master" -Recurse -Force -ErrorAction SilentlyContinue
+if ($IsOnlineInstall -and (Test-Path "$env:TEMP\ai-girl-friend")) {
+    Remove-Item -Path "$env:TEMP\ai-girl-friend" -Recurse -Force -ErrorAction SilentlyContinue
 }
 if ($IsOnlineInstall -and (Test-Path "$env:TEMP\ai-companion.zip")) {
     Remove-Item -Path "$env:TEMP\ai-companion.zip" -Force -ErrorAction SilentlyContinue
