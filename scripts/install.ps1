@@ -92,7 +92,7 @@ function Download-Project {
         $baseUrl = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master"
 
         # Root files that exist
-        $rootFiles = @("requirements.txt", "setup.py")
+        $rootFiles = @("requirements.txt", "setup.py", "README.md")
         foreach ($file in $rootFiles) {
             Write-Host "  Downloading $file..." -ForegroundColor Gray
             try {
@@ -216,7 +216,14 @@ function Install-Local {
     $originalDir = Get-Location
     try {
         Set-Location $ProjectDir
-        & python -m pip install -r requirements.txt -q
+        # Try pre-built packages first to avoid compilation issues
+        Write-Host "  Trying pre-built packages..." -ForegroundColor Gray
+        & python -m pip install -r requirements.txt --only-binary :all: -q 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  Falling back to normal install..." -ForegroundColor Gray
+            & python -m pip install -r requirements.txt -q
+        }
+        Write-Host "[OK] Dependencies installed" -ForegroundColor Green
         Write-Host "[OK] Dependencies installed" -ForegroundColor Green
 
         $needsVenv = Test-NeedsVenv $ProjectDir
