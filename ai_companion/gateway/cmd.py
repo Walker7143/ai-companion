@@ -1002,6 +1002,7 @@ async def run_gateway():
     except KeyboardInterrupt:
         print()
         print("正在停止网关...")
+        _stop_ui_server()
         await adapter.disconnect()
         await _stop_admin_api()
         cleanup()
