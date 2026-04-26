@@ -264,6 +264,7 @@ class LifeEngine:
         if event:
             self.state.add_event(event)
             self.state.prune_events(self.config.max_events, self.config.max_context_bits)
+            logger.info(f"[LifeEngine] 生成日常事件: {event.description}")
 
         # Bot 年龄增长
         self.state.bot_age_days += 1
@@ -284,6 +285,7 @@ class LifeEngine:
         if event:
             self.state.add_major_event(event)
             await self._apply_major_event(event)
+            logger.info(f"[LifeEngine] 生成人生大事: {event.description}")
 
         self.state.last_major_tick = datetime.now()
         self.state.save()
