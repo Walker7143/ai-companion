@@ -39,7 +39,7 @@ async def main(bot_filter: str = None):
         api_key = model_cfg.get("api_key", "")
 
     if not api_key or api_key.startswith("${"):
-        print("❌ API Key 未配置")
+        print("[ERROR] API Key 未配置")
         print("")
         print("请先配置 API Key：")
         print("  1. 设置环境变量: export MINIMAX_API_KEY='your_key'")
@@ -55,7 +55,7 @@ async def main(bot_filter: str = None):
             model=model_cfg["model"],
         )
     except Exception as e:
-        print(f"❌ 模型初始化失败: {e}")
+        print(f"[ERROR] 模型初始化失败: {e}")
         sys.exit(1)
 
     # 初始化 Bot 管理器
@@ -74,10 +74,10 @@ async def main(bot_filter: str = None):
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
         await bot.init()
         bot_manager.register(bot)
-        print(f"✓ 加载 Bot: {bot.name}")
+        print(f"[OK] 加载 Bot: {bot.name}")
 
     if not bot_manager.list_bots():
-        print("❌ 没有可用的 Bot")
+        print("[ERROR] 没有可用的 Bot")
         print("请先创建 Bot 或运行: python -m ai_companion setup")
         sys.exit(1)
 

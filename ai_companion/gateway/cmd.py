@@ -96,9 +96,9 @@ async def run_gateway():
             base_url=model_cfg["base_url"],
             model=model_cfg["model"],
         )
-        print(f"✓ 模型初始化成功: {model_cfg['model']}")
+        print(f"[OK] 模型初始化成功: {model_cfg['model']}")
     except Exception as e:
-        print(f"❌ 模型初始化失败: {e}")
+        print(f"[ERROR] 模型初始化失败: {e}")
         sys.exit(1)
 
     # 加载 Bot
@@ -111,21 +111,21 @@ async def run_gateway():
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
         await bot.init()
         bot_manager.register(bot)
-        print(f"✓ 加载 Bot: {bot.name}")
+        print(f"[OK] 加载 Bot: {bot.name}")
 
     if not bot_manager.list_bots():
-        print("❌ 没有可用的 Bot")
+        print("[ERROR] 没有可用的 Bot")
         sys.exit(1)
 
     print()
 
     # 加载飞书配置
     if not feishu_config:
-        print("❌ 飞书未配置")
+        print("[ERROR] 飞书未配置")
         print("请运行: python -m ai_companion setup")
         sys.exit(1)
 
-    print("✓ 飞书配置已加载")
+    print("[OK] 飞书配置已加载")
 
     # 创建飞书适配器
     platform_config = PlatformConfig(
@@ -139,7 +139,7 @@ async def run_gateway():
     feishu_full_config = config.get_platform_config("feishu")
     routing_config = feishu_full_config.get("routing", {})
     router = PlatformRouter(routing_config)
-    print(f"✓ 路由模式: {router.mode}")
+    print(f"[OK] 路由模式: {router.mode}")
 
     # 设置消息处理器 - 将消息路由到 Bot
     async def feishu_message_handler(event):
@@ -174,7 +174,7 @@ async def run_gateway():
         print(f"   错误: {adapter.fatal_error_message or '未知错误'}")
         sys.exit(1)
 
-    print(f"✓ 飞书连接成功 [{feishu_config.get('connection_mode', 'websocket')}]")
+    print(f"[OK] 飞书连接成功 [{feishu_config.get('connection_mode', 'websocket')}]")
     print()
     print("=" * 50)
     print("网关已启动，等待飞书消息...")
@@ -190,7 +190,7 @@ async def run_gateway():
         print("正在停止网关...")
         await adapter.disconnect()
         cleanup()
-        print("✓ 网关已停止")
+        print("[OK] 网关已停止")
 
 
 if __name__ == "__main__":

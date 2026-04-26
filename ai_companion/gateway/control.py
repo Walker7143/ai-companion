@@ -58,7 +58,7 @@ def stop_gateway(silent: bool = False) -> bool:
     pid = get_gateway_pid()
     if not pid:
         if not silent:
-            print("❌ Gateway 未运行")
+            print("[ERROR] Gateway 未运行")
         return False
 
     try:
@@ -81,16 +81,16 @@ def stop_gateway(silent: bool = False) -> bool:
 
         remove_gateway_pid()
         if not silent:
-            print("✓ Gateway 已停止")
+            print("[OK] Gateway 已停止")
         return True
     except ProcessLookupError:
         remove_gateway_pid()
         if not silent:
-            print("✓ Gateway 已停止")
+            print("[OK] Gateway 已停止")
         return True
     except Exception as e:
         if not silent:
-            print(f"❌ 停止失败: {e}")
+            print(f"[ERROR] 停止失败: {e}")
         return False
 
 
@@ -98,7 +98,7 @@ def start_gateway(sync: bool = False) -> int | None:
     """启动 gateway 进程"""
     # 检查是否已在运行
     if is_gateway_running():
-        print("❌ Gateway 已在运行")
+        print("[ERROR] Gateway 已在运行")
         print(f"   PID: {get_gateway_pid()}")
         print("   使用 'python -m ai_companion gateway stop' 停止")
         return None

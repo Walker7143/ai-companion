@@ -123,7 +123,7 @@ def main():
     elif args.command == "model":
         if args.model_command == "test":
             print("测试模型连接...")
-            print("✓ 配置读取正常")
+            print("[OK] 配置读取正常")
     else:
         parser.print_help()
 
