@@ -185,7 +185,7 @@ export function Session() {
                       <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)' }}>
                         <span>{session.platform}</span>
                         <span>{formatTime(session.updated_at)}</span>
-                        <span>{session.total_tokens.toLocaleString()} tokens</span>
+                        <span>{session.total_tokens.toLocaleString()} 字符</span>
                       </div>
                     </div>
                   </div>
@@ -236,13 +236,13 @@ export function Session() {
         ) : selectedSession ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div style={{ backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', padding: '16px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>输入 Token</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>输入字符</div>
               <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)' }}>
                 {selectedSession.input_tokens.toLocaleString()}
               </div>
             </div>
             <div style={{ backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', padding: '16px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>输出 Token</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>输出字符</div>
               <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)' }}>
                 {selectedSession.output_tokens.toLocaleString()}
               </div>
@@ -254,7 +254,7 @@ export function Session() {
               </div>
             </div>
             <div style={{ backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', padding: '16px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>总 Token</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>总字符</div>
               <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)' }}>
                 {(selectedSession.input_tokens + selectedSession.output_tokens).toLocaleString()}
               </div>

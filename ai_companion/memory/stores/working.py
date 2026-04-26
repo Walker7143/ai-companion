@@ -373,5 +373,21 @@ class WorkingMemoryStore:
         self._compression_counts[sid] = self._compression_counts.get(sid, 0) + 1
         return True
 
+    def list_sessions(self, limit: int = 50) -> list[dict]:
+        """返回所有会话列表，按最后消息时间倒序"""
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute("""
+            SELECT session_id,
+                   COUNT(*) as msg_count,
+                   MAX(id) as last_msg_id,
+                   MAX(created_at) as last_at
+            FROM messages
+            GROUP BY session_id
+            ORDER BY last_msg_id DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        conn.close()
+        return [{"session_id": r[0], "msg_count": r[1], "last_at": r[3]} for r in rows]
+
     async def close(self):
         pass

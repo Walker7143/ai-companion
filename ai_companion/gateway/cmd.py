@@ -97,6 +97,63 @@ _admin_app = None
 _admin_runner = None
 
 
+def _get_data_dir() -> Path:
+    """获取 Bot 数据根目录。
+
+    优先返回有实际数据的目录：
+    1. ~/.ai-companion/data/bots（如果该目录下有 bot 目录）
+    2. 项目 data/bots 目录（兼容旧数据）
+    """
+    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    project_dir = Path(__file__).parent.parent.parent / "data" / "bots"
+    # 如果用户目录存在且有内容，使用用户目录
+    if user_dir.exists() and any(user_dir.iterdir()):
+        return user_dir
+    # 否则用项目目录
+    return project_dir
+
+
+def _discover_bots() -> list[dict]:
+    """扫描所有 data/bots/ 目录，自动发现所有 Bot（用户目录 + 项目目录）"""
+    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    project_dir = Path(__file__).parent.parent.parent / "data" / "bots"
+    seen = set()
+    bots = []
+    for base_dir in (user_dir, project_dir):
+        if not base_dir.exists():
+            continue
+        for bot_dir in base_dir.iterdir():
+            if not bot_dir.is_dir() or bot_dir.name in seen:
+                continue
+            persona_file = bot_dir / "persona" / "profile.json"
+            name = bot_dir.name
+            description = ""
+            if persona_file.exists():
+                try:
+                    import json as _json
+                    profile = _json.loads(persona_file.read_text(encoding="utf-8"))
+                    name = profile.get("name", name)
+                    description = profile.get("description", description)
+                except Exception:
+                    pass
+            seen.add(bot_dir.name)
+            bots.append({"id": bot_dir.name, "name": name, "description": description})
+    return bots
+
+
+def _get_memory_db_path(bot_id: str, db_name: str) -> Path | None:
+    """获取 Bot 内存数据库路径，同时检查用户目录和项目目录"""
+    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    # gateway/cmd.py -> parent=ai_companion/gateway -> parent.parent=ai_companion -> parent.parent.parent=project_root
+    project_dir = Path(__file__).parent.parent.parent / "data" / "bots"
+    # 优先返回有实际数据的目录（检查 db 文件是否存在）
+    for base in (project_dir, user_dir):
+        db_path = base / bot_id / "memory" / db_name
+        if db_path.exists():
+            return db_path
+    return None
+
+
 async def _start_admin_api(bot_manager: BotManager, config: Config):
     """Start the admin API HTTP server on port 8642."""
     global _admin_app, _admin_runner
@@ -111,7 +168,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
     async def handle_bots(request):
         """GET /api/v1/admin/bots"""
-        bots = bot_manager.list_bots()
+        bots = _discover_bots()
         return web.json_response({"bots": bots})
 
     async def handle_metrics_system(request):
@@ -129,57 +186,228 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "uptime_seconds": int(time.time() - psutil.Process().create_time()),
             })
         except ImportError:
-            # psutil not installed, return placeholder data
-            return web.json_response({
-                "cpu_percent": 0,
-                "memory_percent": 0,
-                "memory_used_mb": 0,
-                "disk_percent": 0,
-                "uptime_seconds": 0,
-            })
+            # psutil not installed, try os module for basic info
+            try:
+                import os
+                loadavg = os.getloadavg()
+                # loadavg is (1min, 5min, 15min) - convert to percent (approximate)
+                # multiply by 100/n CPUs for percentage
+                cpu_load = min(loadavg[0] * 30, 100)  # rough approximation
+                # Try to get memory info from sysconf
+                import resource
+                rusage = resource.getrusage(resource.RUSAGE_SELF)
+                # This doesn't give total memory, so return estimated
+                return web.json_response({
+                    "cpu_percent": cpu_load,
+                    "memory_percent": 0,  # can't determine without psutil
+                    "memory_used_mb": rusage.ru_maxrss // 1024,  # macOS maxrss is in bytes
+                    "disk_percent": 0,
+                    "uptime_seconds": 0,
+                })
+            except Exception:
+                return web.json_response({
+                    "cpu_percent": 0,
+                    "memory_percent": 0,
+                    "memory_used_mb": 0,
+                    "disk_percent": 0,
+                    "uptime_seconds": 0,
+                })
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
     async def handle_metrics_bot(request):
         """GET /api/v1/admin/metrics/bot/:bot_id"""
         bot_id = request.match_info["bot_id"]
+        db_path = _get_memory_db_path(bot_id, "working.db")
+        episodic_path = _get_memory_db_path(bot_id, "episodic.db")
+        semantic_path = _get_memory_db_path(bot_id, "semantic.db")
+
+        def _table_count(path, table):
+            if not path:
+                return 0
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(path))
+                c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                conn.close()
+                return c
+            except Exception:
+                return 0
+
+        def _sessions_today(path):
+            """Count distinct sessions created today"""
+            if not path:
+                return 0
+            try:
+                import sqlite3
+                from datetime import datetime
+                today = datetime.now().strftime("%Y%m%d")
+                conn = sqlite3.connect(str(path))
+                # session_id format is like "20260426_211009"
+                c = conn.execute(
+                    "SELECT COUNT(DISTINCT session_id) FROM messages WHERE session_id LIKE ?",
+                    (f"{today}%",)
+                ).fetchone()[0]
+                conn.close()
+                return c
+            except Exception:
+                return 0
+
+        def _token_estimate(path):
+            """Calculate tokens from actual character count (~2 chars ≈ 1 token)"""
+            if not path:
+                return 0, 0
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(path))
+                user_chars = conn.execute("SELECT COALESCE(SUM(LENGTH(content)), 0) FROM messages WHERE role = 'user'").fetchone()[0]
+                assistant_chars = conn.execute("SELECT COALESCE(SUM(LENGTH(content)), 0) FROM messages WHERE role = 'assistant'").fetchone()[0]
+                conn.close()
+                return user_chars // 2, assistant_chars // 2
+            except Exception:
+                return 0, 0
+
+        # 实时状态：BotManager 中存在则 running
         bot = bot_manager.get_bot(bot_id)
-        if not bot:
-            return web.json_response({"error": "Bot not found"}, status=404)
+        status = "running" if bot else "stopped"
+        input_tokens, output_tokens = _token_estimate(db_path)
+
+        return web.json_response({
+            "bot_id": bot_id,
+            "status": status,
+            "uptime_seconds": 0,
+            "conversations_today": _sessions_today(db_path),
+            "proactive_messages_today": 0,
+            "input_tokens_today": input_tokens,
+            "output_tokens_today": output_tokens,
+            "memory_stats": {
+                "working_count": _table_count(db_path, "messages"),
+                "working_size_kb": 0,
+                "episodic_count": _table_count(episodic_path, "episodic_memory"),
+                "episodic_size_kb": 0,
+                "semantic_count": _table_count(semantic_path, "user_facts"),
+                "semantic_size_kb": 0,
+                "embedding_enabled": False,
+            },
+        })
+
+    async def handle_sessions(request):
+        """GET /api/v1/admin/sessions"""
+        import sqlite3
+        # 扫描所有 Bot 的 working.db，获取会话列表
+        all_sessions = []
+        bots = _discover_bots()
+        for bot in bots:
+            bot_id = bot["id"]
+            db_path = _get_memory_db_path(bot_id, "working.db")
+            if not db_path:
+                continue
+            try:
+                conn = sqlite3.connect(str(db_path))
+                rows = conn.execute("""
+                    SELECT session_id,
+                           COUNT(*) as msg_count,
+                           MAX(id) as last_msg_id,
+                           MAX(created_at) as last_at,
+                           COALESCE(SUM(LENGTH(content)), 0) as total_chars
+                    FROM messages
+                    GROUP BY session_id
+                    ORDER BY last_msg_id DESC
+                    LIMIT 100
+                """).fetchall()
+                conn.close()
+                for r in rows:
+                    all_sessions.append({
+                        "session_key": f"{bot_id}:{r[0]}",
+                        "session_id": r[0],
+                        "platform": "cli",
+                        "user": "用户",
+                        "created_at": r[3],
+                        "updated_at": r[3],
+                        "status": "active",
+                        "reset_reason": None,
+                        "total_tokens": r[4] // 2,  # ~2 chars ≈ 1 token
+                    })
+            except Exception:
+                pass
+        # 按最后消息时间倒序
+        all_sessions.sort(key=lambda x: x.get("last_at", ""), reverse=True)
+        return web.json_response({"sessions": all_sessions})
+
+    async def handle_session_detail(request):
+        """GET /api/v1/admin/sessions/:session_key"""
+        import sqlite3
+        session_key = request.match_info["session_key"]
+        # session_key format: "bot_id:session_id"
+        if ":" in session_key:
+            bot_id, session_id = session_key.split(":", 1)
+        else:
+            return web.json_response({"error": "Invalid session key"}, status=400)
+
+        db_path = _get_memory_db_path(bot_id, "working.db")
+        if not db_path:
+            return web.json_response({"error": "Session not found"}, status=404)
+
         try:
-            memory_status = await bot.memory.get_memory_status()
+            conn = sqlite3.connect(str(db_path))
+            rows = conn.execute("""
+                SELECT role, content, created_at
+                FROM messages
+                WHERE session_id = ?
+                ORDER BY id ASC
+            """, (session_id,)).fetchall()
+            # Calculate token counts from character lengths
+            user_chars = sum(len(r[1]) for r in rows if r[0] == "user")
+            assistant_chars = sum(len(r[1]) for r in rows if r[0] == "assistant")
+            input_tokens = user_chars // 2
+            output_tokens = assistant_chars // 2
+            total_chars = user_chars + assistant_chars
+            conn.close()
+            messages = [{"role": r[0], "content": r[1], "created_at": r[2]} for r in rows]
             return web.json_response({
-                "bot_id": bot_id,
-                "status": "running",
-                "uptime_seconds": 0,
-                "conversations_today": 0,
-                "proactive_messages_today": 0,
-                "input_tokens_today": 0,
-                "output_tokens_today": 0,
-                "memory_stats": {
-                    "working_count": memory_status.get("working_turns", 0),
-                    "working_size_kb": 0,
-                    "episodic_count": memory_status.get("episodic_count", 0),
-                    "episodic_size_kb": 0,
-                    "semantic_count": memory_status.get("fact_count", 0),
-                    "semantic_size_kb": 0,
-                    "embedding_enabled": False,
+                "info": {
+                    "session_key": session_key,
+                    "session_id": session_id,
+                    "platform": "cli",
+                    "user": "用户",
+                    "created_at": rows[0][2] if rows else "",
+                    "updated_at": rows[-1][2] if rows else "",
+                    "status": "active",
+                    "reset_reason": None,
+                    "total_tokens": total_chars // 2,
                 },
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_write_tokens": 0,
+                "cache_read_tokens": 0,
+                "estimated_cost_usd": 0.0,
             })
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
-    async def handle_sessions(request):
-        """GET /api/v1/admin/sessions"""
-        return web.json_response({"sessions": []})
-
-    async def handle_session_detail(request):
-        """GET /api/v1/admin/sessions/:session_key"""
-        return web.json_response({"error": "Not implemented"}, status=501)
-
     async def handle_session_reset(request):
         """POST /api/v1/admin/sessions/:session_key/reset"""
-        return web.json_response({"error": "Not implemented"}, status=501)
+        # 清空该会话的工作记忆消息
+        import sqlite3
+        session_key = request.match_info["session_key"]
+        if ":" in session_key:
+            bot_id, session_id = session_key.split(":", 1)
+        else:
+            return web.json_response({"error": "Invalid session key"}, status=400)
+
+        db_path = _get_memory_db_path(bot_id, "working.db")
+        if not db_path:
+            return web.json_response({"error": "Session not found"}, status=404)
+
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM summaries WHERE session_id = ?", (session_id,))
+            conn.commit()
+            conn.close()
+            return web.json_response({"ok": True})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
 
     async def handle_logs(request):
         """GET /api/v1/admin/logs"""
@@ -188,20 +416,24 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         logs = []
         if log_dir.exists():
             import re
+            # Pattern: 2026-04-26 22:14:32,764 [INFO] ai_companion.proactive: [ProactiveScheduler] message
+            # or: 2026-04-26 22:14:32,764 [INFO] aiohttp.access: message
             for log_file in sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:5]:
                 try:
                     content = log_file.read_text(encoding="utf-8")
-                    for line in content.splitlines()[-100:]:
-                        match = re.match(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\w+)\s+\[(.*?)\]\s+(.*)", line)
-                        if match:
-                            timestamp, level, logger_name, msg = match.groups()
+                    for line in content.splitlines()[-200:]:
+                        # Match timestamp and rest: 2026-04-26 22:14:32,764 [LEVEL] [logger] message
+                        # or: 2026-04-26 22:14:32,764 [LEVEL] logger: message
+                        m = re.match(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+\[(\w+)\]\s+(?:\[(.*?)\]\s+)?(.+)", line)
+                        if m:
+                            timestamp, level, logger_name, msg = m.groups()
                             logs.append({
                                 "id": str(uuid.uuid4())[:8],
-                                "timestamp": timestamp,
+                                "timestamp": timestamp.split(",")[0],  # remove milliseconds
                                 "level": level.lower(),
                                 "log_type": "system",
-                                "platform": "cli",
-                                "message": msg,
+                                "platform": log_file.stem,
+                                "message": f"[{logger_name}] {msg}" if logger_name else msg,
                             })
                 except Exception:
                     pass
@@ -214,65 +446,155 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             "total_pages": 1,
         })
 
+    async def handle_logs_stream(request):
+        """GET /api/v1/admin/logs/stream - WebSocket log streaming"""
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        hermes_home = Path.home() / ".ai-companion"
+        log_file = hermes_home / "logs" / "gateway.log"
+        last_size = 0
+        if log_file.exists():
+            last_size = log_file.stat().st_size
+
+        import re
+        async def send_log_lines():
+            if log_file.exists():
+                content = log_file.read_text(encoding="utf-8")
+                for line in content.splitlines()[-50:]:
+                    m = re.match(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+\[(\w+)\]\s+(?:\[(.*?)\]\s+)?(.+)", line)
+                    if m:
+                        timestamp, level, logger_name, msg = m.groups()
+                        await ws.send_json({
+                            "id": str(uuid.uuid4())[:8],
+                            "timestamp": timestamp.split(",")[0],
+                            "level": level.lower(),
+                            "log_type": "system",
+                            "platform": "gateway",
+                            "message": f"[{logger_name}] {msg}" if logger_name else msg,
+                        })
+
+        # Send initial batch
+        await send_log_lines()
+
+        # Stream new lines
+        try:
+            while True:
+                await asyncio.sleep(1)
+                if log_file.exists():
+                    current_size = log_file.stat().st_size
+                    if current_size > last_size:
+                        content = log_file.read_text(encoding="utf-8")
+                        new_content = content[last_size:]
+                        for line in new_content.splitlines():
+                            if line.strip():
+                                m = re.match(r"(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+\[(\w+)\]\s+(?:\[(.*?)\]\s+)?(.+)", line)
+                                if m:
+                                    timestamp, level, logger_name, msg = m.groups()
+                                    await ws.send_json({
+                                        "id": str(uuid.uuid4())[:8],
+                                        "timestamp": timestamp.split(",")[0],
+                                        "level": level.lower(),
+                                        "log_type": "system",
+                                        "platform": "gateway",
+                                        "message": f"[{logger_name}] {msg}" if logger_name else msg,
+                                    })
+                        last_size = current_size
+        except Exception:
+            pass
+        finally:
+            await ws.close()
+
     async def handle_memory_stats(request):
         """GET /api/v1/admin/memory/:bot_id/stats"""
         bot_id = request.match_info["bot_id"]
-        bot = bot_manager.get_bot(bot_id)
-        if not bot:
-            return web.json_response({"error": "Bot not found"}, status=404)
-        try:
-            status = await bot.memory.get_memory_status()
-            return web.json_response({
-                "working_count": status.get("working_turns", 0),
-                "working_size_kb": 0,
-                "episodic_count": status.get("episodic_count", 0),
-                "episodic_size_kb": 0,
-                "semantic_count": status.get("fact_count", 0),
-                "semantic_size_kb": 0,
-                "embedding_enabled": False,
-            })
-        except Exception as e:
-            return web.json_response({"error": str(e)}, status=500)
+        db_path = _get_memory_db_path(bot_id, "working.db")
+        episodic_path = _get_memory_db_path(bot_id, "episodic.db")
+        semantic_path = _get_memory_db_path(bot_id, "semantic.db")
+
+        def _table_count(path, table):
+            if not path:
+                return 0
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(path))
+                c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                conn.close()
+                return c
+            except Exception:
+                return 0
+
+        return web.json_response({
+            "working_count": _table_count(db_path, "messages"),
+            "working_size_kb": 0,
+            "episodic_count": _table_count(episodic_path, "episodic_memory"),
+            "episodic_size_kb": 0,
+            "semantic_count": _table_count(semantic_path, "user_facts"),
+            "semantic_size_kb": 0,
+            "embedding_enabled": False,
+        })
 
     async def handle_memory_working(request):
         """GET /api/v1/admin/memory/:bot_id/working"""
         bot_id = request.match_info["bot_id"]
-        bot = bot_manager.get_bot(bot_id)
-        if not bot:
-            return web.json_response({"error": "Bot not found"}, status=404)
-        try:
-            working = bot.memory.working
-            messages = working.get_messages(working.current_session) if hasattr(working, "get_messages") else []
-            result = []
-            for msg in messages[-20:]:
-                result.append({
-                    "id": str(uuid.uuid4())[:8],
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", ""),
-                    "created_at": msg.get("created_at", ""),
-                })
-            return web.json_response(result)
-        except Exception as e:
-            return web.json_response({"error": str(e)}, status=500)
+        query_session = request.query.get("session_id")
+        db_path = _get_memory_db_path(bot_id, "working.db")
+        if not db_path:
+            return web.json_response([])
+
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+
+        if query_session:
+            rows = conn.execute("""
+                SELECT role, content, created_at
+                FROM messages
+                WHERE session_id = ? AND compressed = 0
+                ORDER BY id DESC
+                LIMIT 50
+            """, (query_session,)).fetchall()
+            conn.close()
+            messages = [{"role": r[0], "content": r[1], "created_at": r[2]} for r in reversed(rows)]
+            return web.json_response(messages)
+
+        # 无 session_id 时返回最近一次会话的消息
+        row = conn.execute("""
+            SELECT session_id FROM messages
+            WHERE compressed = 0
+            ORDER BY id DESC LIMIT 1
+        """).fetchone()
+        if not row:
+            conn.close()
+            return web.json_response([])
+        session_id = row[0]
+        rows = conn.execute("""
+            SELECT role, content, created_at
+            FROM messages
+            WHERE session_id = ? AND compressed = 0
+            ORDER BY id ASC
+        """, (session_id,)).fetchall()
+        conn.close()
+        messages = [{"role": r[0], "content": r[1], "created_at": r[2]} for r in rows]
+        return web.json_response(messages)
 
     async def handle_memory_episodic(request):
         """GET /api/v1/admin/memory/:bot_id/episodic"""
         bot_id = request.match_info["bot_id"]
-        bot = bot_manager.get_bot(bot_id)
-        if not bot:
-            return web.json_response({"error": "Bot not found"}, status=404)
+        db_path = _get_memory_db_path(bot_id, "episodic.db")
+        if not db_path:
+            return web.json_response([])
         try:
-            episodic = bot.memory.episodic
-            items = episodic.get_recent_items(20) if hasattr(episodic, "get_recent_items") else []
-            result = []
-            for item in items:
-                result.append({
-                    "id": item.get("id", str(uuid.uuid4())[:8]),
-                    "summary": item.get("summary", ""),
-                    "content": item.get("content", ""),
-                    "importance": item.get("importance", 0.5),
-                    "created_at": item.get("created_at", ""),
-                })
+            import sqlite3
+            conn = sqlite3.connect(str(db_path))
+            rows = conn.execute("""
+                SELECT id, session_id, summary, content, importance, created_at
+                FROM episodic_memory
+                ORDER BY id DESC
+                LIMIT 50
+            """).fetchall()
+            conn.close()
+            result = [{"id": str(r[0]), "session_id": r[1], "summary": r[2],
+                       "content": r[3], "importance": r[4], "created_at": r[5]} for r in rows]
             return web.json_response(result)
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
@@ -280,23 +602,32 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     async def handle_memory_semantic(request):
         """GET /api/v1/admin/memory/:bot_id/semantic"""
         bot_id = request.match_info["bot_id"]
-        bot = bot_manager.get_bot(bot_id)
-        if not bot:
-            return web.json_response({"error": "Bot not found"}, status=404)
+        db_path = _get_memory_db_path(bot_id, "semantic.db")
+        if not db_path:
+            return web.json_response({"facts": [], "attitude_score": 0.0, "relationship_level": "陌生"})
         try:
-            semantic = bot.memory.semantic
-            facts = semantic.get_facts() if hasattr(semantic, "get_facts") else []
-            result = []
-            for fact in facts:
-                result.append({
-                    "key": fact.get("key", ""),
-                    "value": fact.get("value", ""),
-                    "updated_at": fact.get("updated_at", ""),
-                })
+            import sqlite3
+            conn = sqlite3.connect(str(db_path))
+            rows = conn.execute("""
+                SELECT key, value, updated_at FROM user_facts ORDER BY updated_at DESC
+            """).fetchall()
+            conn.close()
+            facts = [{"key": r[0], "value": r[1], "updated_at": r[2]} for r in rows]
+            # 尝试获取 attitude_score
+            attitude_score = 0.0
+            relationship_level = "陌生"
+            for f in facts:
+                if f["key"] == "attitude_score":
+                    try:
+                        attitude_score = float(f["value"])
+                    except Exception:
+                        pass
+                elif f["key"] == "relationship_level":
+                    relationship_level = f["value"]
             return web.json_response({
-                "facts": result,
-                "attitude_score": 0.0,
-                "relationship_level": "陌生",
+                "facts": facts,
+                "attitude_score": attitude_score,
+                "relationship_level": relationship_level,
             })
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
@@ -304,14 +635,41 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     async def handle_config(request):
         """GET /api/v1/admin/config/:bot_id"""
         bot_id = request.match_info["bot_id"]
+        # 优先从 BotManager 获取
         bot = bot_manager.get_bot(bot_id)
+        # 如果 BotManager 中没有，尝试从目录发现
         if not bot:
-            return web.json_response({"error": "Bot not found"}, status=404)
+            discovered = _discover_bots()
+            found = next((b for b in discovered if b["id"] == bot_id), None)
+            if not found:
+                return web.json_response({"error": "Bot not found"}, status=404)
+            bot_name = found["name"]
+        else:
+            bot_name = bot.name
         model_cfg = config.get_model_config()
         memory_cfg = config.models.get("memory", {}) if hasattr(config, "models") else {}
+
+        # 从运行中的 bot 获取 proactive 配置
+        proactive_cfg = {
+            "enabled": False,
+            "idle_threshold_hours": 24,
+            "min_interval_hours": 3,
+            "max_daily": 5,
+            "emotion_keywords": [],
+        }
+        if bot and hasattr(bot, "proactive_config"):
+            pc = bot.proactive_config
+            proactive_cfg = {
+                "enabled": pc.enabled,
+                "idle_threshold_hours": pc.idle_threshold_hours,
+                "min_interval_hours": pc.min_interval_hours,
+                "max_daily": pc.max_daily,
+                "emotion_keywords": pc.emotion_keywords,
+            }
+
         return web.json_response({
             "bot_id": bot_id,
-            "name": bot.name,
+            "name": bot_name,
             "model": {
                 "provider": model_cfg.get("provider", "minimax"),
                 "api_key": model_cfg.get("api_key", ""),
@@ -327,13 +685,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "embedding": memory_cfg.get("embedding", "none"),
                 "embedding_model": memory_cfg.get("embedding_model", ""),
             },
-            "proactive": {
-                "enabled": False,
-                "idle_threshold_hours": 24,
-                "min_interval_hours": 3,
-                "max_daily": 5,
-                "emotion_keywords": [],
-            },
+            "proactive": proactive_cfg,
             "platforms": [
                 {"name": "cli", "enabled": True, "config": {}},
                 {"name": "feishu", "enabled": True, "config": {}},
@@ -349,6 +701,76 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
     async def handle_config_update(request):
         """PUT /api/v1/admin/config/:bot_id"""
+        bot_id = request.match_info["bot_id"]
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        bot = bot_manager.get_bot(bot_id)
+
+        # 1. 保存模型配置到 models.yaml（合并更新，保留未修改的字段）
+        if "model" in body:
+            model_data = body["model"]
+            models_cfg_path = Path.home() / ".ai-companion" / "config" / "models.yaml"
+            try:
+                models_data = {}
+                if models_cfg_path.exists():
+                    with open(models_cfg_path, encoding="utf-8") as f:
+                        models_data = yaml.safe_load(f) or {}
+                provider = model_data.get("provider", "minimax")
+                # 合并 provider 配置（保留未修改的字段）
+                if provider not in models_data:
+                    models_data[provider] = {}
+                existing_provider = models_data.get(provider, {})
+                models_data[provider] = {
+                    "api_key": model_data.get("api_key", existing_provider.get("api_key", "")),
+                    "base_url": model_data.get("base_url", existing_provider.get("base_url", "")),
+                    "model": model_data.get("model", existing_provider.get("model", "")),
+                }
+                # 全局默认参数
+                if "model" not in models_data:
+                    models_data["model"] = {}
+                existing_global = models_data.get("model", {})
+                models_data["model"] = {
+                    "provider": provider,
+                    "temperature": model_data.get("temperature", existing_global.get("temperature", 0.7)),
+                    "max_tokens": model_data.get("max_tokens", existing_global.get("max_tokens", 2000)),
+                }
+                models_cfg_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(models_cfg_path, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(models_data, f, allow_unicode=True, default_flow_style=False)
+            except Exception as e:
+                return web.json_response({"error": f"Failed to save model config: {e}"}, status=500)
+
+        # 2. 保存 proactive 配置并热更新
+        if "proactive" in body and bot and hasattr(bot, "proactive_config"):
+            proactive_data = body["proactive"]
+            pc = bot.proactive_config
+            try:
+                if "enabled" in proactive_data:
+                    pc._config["enabled"] = proactive_data["enabled"]
+                if "idle_threshold_hours" in proactive_data:
+                    pc._config.setdefault("scheduler", {})["idle_threshold_hours"] = proactive_data["idle_threshold_hours"]
+                if "min_interval_hours" in proactive_data:
+                    pc._config.setdefault("scheduler", {})["min_interval_hours"] = proactive_data["min_interval_hours"]
+                if "max_daily" in proactive_data:
+                    pc._config.setdefault("scheduler", {})["max_daily"] = proactive_data["max_daily"]
+                if "emotion_keywords" in proactive_data:
+                    pc._config.setdefault("triggers", {}).setdefault("emotion_trigger", {})["keywords"] = proactive_data["emotion_keywords"]
+                pc.save()
+
+                # 重启调度器以应用新配置
+                if bot.proactive_scheduler:
+                    await bot.proactive_scheduler.stop()
+                    bot.proactive_scheduler = None
+                    from ai_companion.proactive.scheduler import ProactiveScheduler
+                    bot.proactive_scheduler = ProactiveScheduler(bot.proactive_engine)
+                    bot.proactive_scheduler.set_dependencies(bot.model, bot.memory)
+                    await bot.proactive_scheduler.start()
+            except Exception as e:
+                return web.json_response({"error": f"Failed to save proactive config: {e}"}, status=500)
+
         return web.json_response({"ok": True})
 
     async def handle_config_test(request):
@@ -365,6 +787,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_post("/api/v1/admin/sessions/{session_key}/reset", handle_session_reset)
     _admin_app.router.add_post("/api/v1/admin/sessions/{session_key}/suspend", handle_session_reset)
     _admin_app.router.add_get("/api/v1/admin/logs", handle_logs)
+    _admin_app.router.add_get("/api/v1/admin/logs/stream", handle_logs_stream)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/stats", handle_memory_stats)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/working", handle_memory_working)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/episodic", handle_memory_episodic)
@@ -506,62 +929,61 @@ async def run_gateway():
     # 启动管理 API
     await _start_admin_api(bot_manager, config)
 
-    # 加载飞书配置
-    if not feishu_config:
-        print("[ERROR] 飞书未配置")
-        print("请运行: ai-companion setup")
-        sys.exit(1)
+    # 飞书未配置时，只启动管理 API
+    if feishu_config:
+        print("[OK] 飞书配置已加载")
 
-    print("[OK] 飞书配置已加载")
+        # 创建飞书适配器
+        platform_config = PlatformConfig(
+            enabled=True,
+            extra=feishu_config
+        )
 
-    # 创建飞书适配器
-    platform_config = PlatformConfig(
-        enabled=True,
-        extra=feishu_config
-    )
+        adapter = FeishuAdapter(platform_config)
 
-    adapter = FeishuAdapter(platform_config)
+        # 加载路由配置
+        feishu_full_config = config.get_platform_config("feishu")
+        routing_config = feishu_full_config.get("routing", {})
+        router = PlatformRouter(routing_config)
+        print(f"[OK] 路由模式: {router.mode}")
 
-    # 加载路由配置
-    feishu_full_config = config.get_platform_config("feishu")
-    routing_config = feishu_full_config.get("routing", {})
-    router = PlatformRouter(routing_config)
-    print(f"[OK] 路由模式: {router.mode}")
+        # 设置消息处理器 - 将消息路由到 Bot
+        async def feishu_message_handler(event):
+            """process feishu message, route to BotInstance"""
+            # 根据路由模式获取 bot_id
+            bot_id = router.route(event)
+            bot = bot_manager.get_bot(bot_id)
 
-    # 设置消息处理器 - 将消息路由到 Bot
-    async def feishu_message_handler(event):
-        """处理飞书消息，路由到 BotInstance"""
-        # 根据路由模式获取 bot_id
-        bot_id = router.route(event)
-        bot = bot_manager.get_bot(bot_id)
+            if not bot:
+                # Fallback: 使用第一个可用的 bot
+                bot = next(iter(bot_manager._bots.values()), None)
 
-        if not bot:
-            # Fallback: 使用第一个可用的 bot
-            bot = next(iter(bot_manager._bots.values()), None)
+            if not bot:
+                return "没有可用的 Bot"
 
-        if not bot:
-            return "没有可用的 Bot"
+            try:
+                response = await bot.handle_message(event.text)
+                return response
+            except Exception as e:
+                logger.error(f"处理消息失败: {e}")
+                return f"处理失败: {e}"
 
-        try:
-            response = await bot.handle_message(event.text)
-            return response
-        except Exception as e:
-            logger.error(f"处理消息失败: {e}")
-            return f"处理失败: {e}"
+        adapter.set_message_handler(feishu_message_handler)
 
-    adapter.set_message_handler(feishu_message_handler)
+        # 连接飞书
+        print()
+        print("正在连接飞书...")
 
-    # 连接飞书
-    print()
-    print("正在连接飞书...")
+        success = await adapter.connect()
+        if not success:
+            print("[ERROR] 飞书连接失败")
+            print(f"   错误: {adapter.fatal_error_message or '未知错误'}")
+            sys.exit(1)
 
-    success = await adapter.connect()
-    if not success:
-        print("[ERROR] 飞书连接失败")
-        print(f"   错误: {adapter.fatal_error_message or '未知错误'}")
-        sys.exit(1)
-
-    print(f"[OK] 飞书连接成功 [{feishu_config.get('connection_mode', 'websocket')}]")
+        print(f"[OK] 飞书连接成功 [{feishu_config.get('connection_mode', 'websocket')}]")
+    else:
+        print("[WARN] 飞书未配置，跳过网关连接")
+        print("       管理 API 已启动，可访问 http://localhost:8642")
     print()
     print("=" * 50)
     if _ui_process:

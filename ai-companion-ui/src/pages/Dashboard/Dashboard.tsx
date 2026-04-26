@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Activity, MessageSquare, Brain, Cpu, HardDrive, Zap, RefreshCw } from 'lucide-react';
+import { Activity, MessageSquare, Brain, Zap, RefreshCw } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent, Button } from '../../components/ui';
 import { useBotStore } from '../../stores';
 import { useToast } from '../../components/ui/Toast';
@@ -50,53 +50,6 @@ function StatCard({
         >
           {icon}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function ProgressBar({
-  label,
-  value,
-  gradient,
-}: {
-  label: string;
-  value: number;
-  gradient: string;
-}) {
-  const percent = Math.min(value, 100);
-
-  return (
-    <div style={{ marginBottom: '8px' }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          marginBottom: '8px',
-        }}
-      >
-        <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{label}</span>
-        <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>
-          {value.toFixed(1)}%
-        </span>
-      </div>
-      <div
-        style={{
-          height: '8px',
-          borderRadius: '4px',
-          backgroundColor: 'var(--bg-tertiary)',
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            height: '100%',
-            width: `${percent}%`,
-            borderRadius: '4px',
-            background: gradient,
-            transition: 'width 500ms ease',
-          }}
-        />
       </div>
     </div>
   );
@@ -263,61 +216,6 @@ export function Dashboard() {
         />
       </div>
 
-      {/* System Metrics */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-          gap: '16px',
-        }}
-      >
-        <Card
-          style={{
-            backgroundColor: 'var(--bg-secondary)',
-            borderRadius: '12px',
-            border: '1px solid var(--border-subtle)',
-            padding: '20px',
-          }}
-        >
-          <CardHeader style={{ borderBottom: 'none', padding: 0, marginBottom: '16px' }}>
-            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Cpu style={{ width: '18px', height: '18px', color: 'var(--accent)' }} />
-              CPU 使用率
-            </CardTitle>
-          </CardHeader>
-          <CardContent style={{ padding: 0 }}>
-            <ProgressBar
-              label="CPU"
-              value={systemMetrics?.cpu_percent ?? 0}
-              gradient="linear-gradient(90deg, var(--accent), var(--info))"
-            />
-          </CardContent>
-        </Card>
-
-        <Card
-          style={{
-            backgroundColor: 'var(--bg-secondary)',
-            borderRadius: '12px',
-            border: '1px solid var(--border-subtle)',
-            padding: '20px',
-          }}
-        >
-          <CardHeader style={{ borderBottom: 'none', padding: 0, marginBottom: '16px' }}>
-            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <HardDrive style={{ width: '18px', height: '18px', color: 'var(--info)' }} />
-              内存使用
-            </CardTitle>
-          </CardHeader>
-          <CardContent style={{ padding: 0 }}>
-            <ProgressBar
-              label="内存"
-              value={systemMetrics?.memory_percent ?? 0}
-              gradient="linear-gradient(90deg, var(--info), var(--success))"
-            />
-          </CardContent>
-        </Card>
-      </div>
-
       {/* Bot Metrics Details */}
       {botMetrics && (
         <Card
@@ -344,8 +242,8 @@ export function Dashboard() {
               {[
                 { label: '今日会话', value: botMetrics.conversations_today },
                 { label: '主动消息', value: botMetrics.proactive_messages_today },
-                { label: '输入 Token', value: botMetrics.input_tokens_today.toLocaleString() },
-                { label: '输出 Token', value: botMetrics.output_tokens_today.toLocaleString() },
+                { label: '输入字符', value: botMetrics.input_tokens_today.toLocaleString() },
+                { label: '输出字符', value: botMetrics.output_tokens_today.toLocaleString() },
               ].map((item) => (
                 <div
                   key={item.label}

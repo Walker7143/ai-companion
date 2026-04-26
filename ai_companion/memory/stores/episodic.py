@@ -315,5 +315,18 @@ class EpisodicStore:
         conn.close()
         return [dict(r) for r in rows] if rows else []
 
+    def list_recent(self, limit: int = 20) -> list[dict]:
+        """返回最近的情景记忆片段"""
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute("""
+            SELECT id, session_id, summary, content, importance, created_at
+            FROM episodic_memory
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        conn.close()
+        return [{"id": str(r[0]), "session_id": r[1], "summary": r[2],
+                 "content": r[3], "importance": r[4], "created_at": r[5]} for r in rows]
+
     async def close(self):
         pass
