@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "mode": "idle",
+  "check_interval": 60,
+  "idle_threshold_hours": 48,
+  "min_interval_hours": 6,
+  "max_daily": 3,
+  "emotion_trigger_enabled": true,
+  "emotion_keywords": ["难过", "伤心", "生气", "委屈", "累"],
+  "emotion_response_delay_minutes": 30,
+  "platform_type": "cli",
+  "personality_type": "沉稳"
+}
