@@ -136,7 +136,18 @@ install_local() {
 
     echo ""
     echo "📦 安装项目依赖..."
-    $VENV_PIP install -r requirements.txt -q
+
+    # Install core dependencies first (these don't need compilation)
+    $VENV_PIP install aiohttp httpx lark-oapi pyyaml pydantic rich jieba python-dotenv sentence-transformers -q
+
+    # Try chroma-hnswlib with binary wheel (may fail on some platforms without C++ compiler)
+    echo "  Attempting chroma-hnswlib (vector search)..."
+    if $VENV_PIP install chroma-hnswlib aiosqlite --only-binary :all: -q 2>/dev/null; then
+        echo "✓ chroma-hnswlib installed"
+    else
+        echo "⚠️  chroma-hnswlib skipped (vector search disabled)"
+    fi
+
     echo "✓ 项目依赖安装完成"
 
     echo ""
