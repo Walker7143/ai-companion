@@ -528,6 +528,6 @@ async def run_setup():
     console.print("\n✓ 配置完成！\n")
 
     console.print("[bold]启动方式:[/bold]")
-    console.print("  [cyan]python -m ai_companion start[/cyan]\n")
+    console.print("  [cyan]ai-companion start[/cyan]\n")
     console.print(f"[dim]配置文件: {config_dir}[/dim]")
     console.print(f"[dim]人格数据: {data_dir}/data/bots[/dim]\n")

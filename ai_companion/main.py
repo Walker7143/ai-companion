@@ -78,7 +78,7 @@ async def main(bot_filter: str = None):
         print("")
         print("请先配置 API Key：")
         print("  1. 设置环境变量: export MINIMAX_API_KEY='your_key'")
-        print("  2. 或运行: python -m ai_companion setup")
+        print("  2. 或运行: ai-companion setup")
         sys.exit(1)
 
     # 初始化模型
@@ -113,7 +113,7 @@ async def main(bot_filter: str = None):
 
     if not bot_manager.list_bots():
         print("[ERROR] 没有可用的 Bot")
-        print("请先创建 Bot 或运行: python -m ai_companion setup")
+        print("请先创建 Bot 或运行: ai-companion setup")
         sys.exit(1)
 
     # 启动 CLI

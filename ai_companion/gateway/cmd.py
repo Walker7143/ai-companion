@@ -85,7 +85,7 @@ async def run_gateway():
         print("")
         print("请先配置 API Key：")
         print("  1. 设置环境变量: export MINIMAX_API_KEY='your_key'")
-        print("  2. 或运行: python -m ai_companion setup")
+        print("  2. 或运行: ai-companion setup")
         sys.exit(1)
 
     # 初始化模型
@@ -122,7 +122,7 @@ async def run_gateway():
     # 加载飞书配置
     if not feishu_config:
         print("[ERROR] 飞书未配置")
-        print("请运行: python -m ai_companion setup")
+        print("请运行: ai-companion setup")
         sys.exit(1)
 
     print("[OK] 飞书配置已加载")

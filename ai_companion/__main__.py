@@ -2,18 +2,18 @@
 AI Companion CLI 入口
 
 用法:
-    python -m ai_companion start          # 启动本地 CLI 对话
-    python -m ai_companion gateway       # 启动网关服务（连接飞书）
-    python -m ai_companion gateway start  # 异步启动网关（后台运行）
-    python -m ai_companion gateway start --sync  # 同步启动网关（显示日志）
-    python -m ai_companion gateway stop   # 停止网关
-    python -m ai_companion gateway restart  # 重启网关
-    python -m ai_companion gateway logs   # 查看网关日志
-    python -m ai_companion gateway status  # 查看网关状态
-    python -m ai_companion setup          # 配置向导
-    python -m ai_companion status         # 查看状态
-    python -m ai_companion bot list       # Bot 管理
-    python -m ai_companion --help         # 帮助
+    ai-companion start          # 启动本地 CLI 对话
+    ai-companion gateway       # 启动网关服务（连接飞书）
+    ai-companion gateway start  # 异步启动网关（后台运行）
+    ai-companion gateway start --sync  # 同步启动网关（显示日志）
+    ai-companion gateway stop   # 停止网关
+    ai-companion gateway restart  # 重启网关
+    ai-companion gateway logs   # 查看网关日志
+    ai-companion gateway status  # 查看网关状态
+    ai-companion setup          # 配置向导
+    ai-companion status         # 查看状态
+    ai-companion bot list       # Bot 管理
+    ai-companion --help         # 帮助
 """
 
 import argparse

@@ -100,7 +100,7 @@ def start_gateway(sync: bool = False) -> int | None:
     if is_gateway_running():
         print("[ERROR] Gateway 已在运行")
         print(f"   PID: {get_gateway_pid()}")
-        print("   使用 'python -m ai_companion gateway stop' 停止")
+        print("   使用 'ai-companion gateway stop' 停止")
         return None
 
     ensure_log_dir()
@@ -143,13 +143,13 @@ def start_gateway(sync: bool = False) -> int | None:
                         time.sleep(0.5)
         except KeyboardInterrupt:
             print("\n停止日志输出...")
-            print("Gateway 仍在后台运行，使用 'python -m ai_companion gateway stop' 停止")
+            print("Gateway 仍在后台运行，使用 'ai-companion gateway stop' 停止")
         return None
     else:
         # 异步模式：后台运行
         print(f"[OK] Gateway 已启动 (PID: {process.pid})")
         print(f"  日志文件: {GATEWAY_LOG_FILE}")
-        print("  使用 'python -m ai_companion gateway logs' 查看日志")
+        print("  使用 'ai-companion gateway logs' 查看日志")
         return process.pid
 
 

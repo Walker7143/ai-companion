@@ -1,5 +1,5 @@
 """
-Gateway 模块入口 - 支持 python -m ai_companion.gateway 直接执行
+Gateway 模块入口 - 支持 ai-companion gateway 直接执行
 """
 
 import asyncio
