@@ -225,17 +225,17 @@ export FEISHU_APP_SECRET="your_feishu_app_secret"
 ### 本地 CLI
 
 ```bash
-python -m ai_companion start              # 默认 Bot
-python -m ai_companion start --bot suqing  # 指定 Bot
+ai-companion start              # 默认 Bot
+ai-companion start --bot suqing  # 指定 Bot
 ```
 
 ### 飞书网关服务
 
 ```bash
-python -m ai_companion gateway start    # 后台启动
-python -m ai_companion gateway start --sync  # 前台启动
-python -m ai_companion gateway stop     # 停止
-python -m ai_companion gateway logs     # 查看日志
+ai-companion gateway start    # 后台启动
+ai-companion gateway start --sync  # 前台启动
+ai-companion gateway stop     # 停止
+ai-companion gateway logs     # 查看日志
 ```
 
 ### 内置命令
@@ -346,7 +346,7 @@ curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/script
 
 ```bash
 # 1. 停止网关服务（如有运行）
-python -m ai_companion gateway stop
+ai-companion gateway stop
 
 # 2. 删除 Python 包
 pip uninstall ai-companion -y
@@ -362,7 +362,7 @@ rm -rf ~/.ai-companion/.venv
 
 ```powershell
 # 1. 停止网关服务
-python -m ai_companion gateway stop
+ai-companion gateway stop
 
 # 2. 卸载 Python 包
 pip uninstall ai-companion -y

@@ -16,7 +16,7 @@
 docker build -t ai-companion .
 
 # 2. 运行测试
-docker run -it ai-companion python -m ai_companion start
+docker run -it ai-companion ai-companion start
 
 # 3. 使用 docker-compose
 docker-compose up -d

@@ -66,7 +66,7 @@ cd ai-girl-friend
 ### 1.3 首次配置向导
 
 ```bash
-python -m ai_companion setup
+ai-companion setup
 ```
 
 向导会引导你完成：
@@ -716,7 +716,7 @@ Bot 会根据你多久没理它调整行为：
 
 ```bash
 # 查看主动唤醒状态
-python -m ai_companion status
+ai-companion status
 ```
 
 状态文件：`data/bots/{bot_id}/proactive_state.json`
@@ -977,23 +977,23 @@ platforms:
 ### 8.1 查看已安装技能
 
 ```bash
-python -m ai_companion skill list
+ai-companion skill list
 ```
 
 ### 8.2 安装技能
 
 ```bash
 # 从本地安装
-python -m ai_companion skill install ./my-skill
+ai-companion skill install ./my-skill
 
 # 从 URL 安装
-python -m ai_companion skill install https://example.com/skill.zip
+ai-companion skill install https://example.com/skill.zip
 ```
 
 ### 8.3 卸载技能
 
 ```bash
-python -m ai_companion skill uninstall my-skill
+ai-companion skill uninstall my-skill
 ```
 
 ### 8.4 技能包结构
@@ -1142,7 +1142,7 @@ minimax:
 
 **A**:
 - 在 CLI 中输入 `switch`
-- 启动时指定：`python -m ai_companion start --bot bot_id`
+- 启动时指定：`ai-companion start --bot bot_id`
 
 ### Q: Bot 不主动发消息
 

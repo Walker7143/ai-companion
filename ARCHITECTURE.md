@@ -69,12 +69,12 @@ install.sh / install.ps1
     ├── 7. 设置权限（macOS/Linux）
     │
     └── 8. 启动配置向导
-            └── python -m ai_companion setup
+            └── ai-companion setup
 ```
 
 ### 2.3 配置向导
 
-运行 `python -m ai_companion setup` 启动交互式配置：
+运行 `ai-companion setup` 启动交互式配置：
 
 ```
 ╔══════════════════════════════════════════════╗
@@ -113,7 +113,7 @@ install.sh / install.ps1
 [4/4] 完成
   ✓ 配置完成！
 
-  启动命令: python -m ai_companion start
+  启动命令: ai-companion start
   配置目录: ~/.ai-companion/
 ```
 
@@ -123,13 +123,13 @@ install.sh / install.ps1
 
 ```bash
 # 默认启动（加载所有已配置的 Bot）
-python -m ai_companion start
+ai-companion start
 
 # 指定启动某个 Bot
-python -m ai_companion start --bot suqing
+ai-companion start --bot suqing
 
 # 查看帮助
-python -m ai_companion --help
+ai-companion --help
 ```
 
 **平台特定快捷方式：**
@@ -148,26 +148,26 @@ Windows:
 
 ```bash
 # 配置向导（重新配置）
-python -m ai_companion setup
+ai-companion setup
 
 # 查看状态
-python -m ai_companion status
+ai-companion status
 
 # 管理 Bot
-python -m ai_companion bot list      # 列出所有 Bot
-python -m ai_companion bot add       # 添加新 Bot
-python -m ai_companion bot remove    # 删除 Bot
-python -m ai_companion bot configure # 配置已有 Bot
+ai-companion bot list      # 列出所有 Bot
+ai-companion bot add       # 添加新 Bot
+ai-companion bot remove    # 删除 Bot
+ai-companion bot configure # 配置已有 Bot
 
 # 模型管理
-python -m ai_companion model test    # 测试模型连接
-python -m ai_companion model switch  # 切换模型
+ai-companion model test    # 测试模型连接
+ai-companion model switch  # 切换模型
 
 # 更新
-python -m ai_companion update
+ai-companion update
 
 # 卸载
-python -m ai_companion uninstall
+ai-companion uninstall
 ```
 
 ### 2.6 配置文件位置
@@ -193,7 +193,7 @@ python -m ai_companion uninstall
 ai-companion/              # 项目根目录
 ├── ai_companion/          # 主包（pip install -e . 安装）
 │   ├── __init__.py
-│   ├── __main__.py         # 入口：python -m ai_companion
+│   ├── __main__.py         # 入口：ai-companion
 │   ├── main.py             # 启动逻辑
 │   ├── setup.py            # 配置向导（TODO）
 │   ├── config/
@@ -366,7 +366,7 @@ source venv/bin/activate  # macOS/Linux
 pip install -r requirements.txt
 cp config/models.yaml.example config/models.yaml
 # 编辑 config/models.yaml 填入 API Key
-python -m ai_companion start
+ai-companion start
 ```
 
 ### Docker 部署
