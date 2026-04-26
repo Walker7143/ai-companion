@@ -74,7 +74,7 @@ async def run_setup():
     if models_config_path.exists():
         try:
             import yaml
-            existing_config = yaml.safe_load(models_config_path.read_text()) or {}
+            existing_config = yaml.safe_load(models_config_path.read_text(encoding="utf-8")) or {}
             console.print("[dim]发现现有模型配置，将以此为默认值[/dim]")
         except Exception:
             pass
@@ -88,7 +88,7 @@ async def run_setup():
     if models_config_path.exists():
         try:
             import yaml
-            existing_models = yaml.safe_load(models_config_path.read_text()) or {}
+            existing_models = yaml.safe_load(models_config_path.read_text(encoding="utf-8")) or {}
             existing_minimax_key = existing_models.get("minimax", {}).get("api_key", "") if isinstance(existing_models.get("minimax"), dict) else ""
         except Exception:
             pass
@@ -120,7 +120,7 @@ async def run_setup():
   base_url: "{custom_url}"
   model: "{custom_model}"
 """
-        (config_dir / "models.yaml").write_text(models_config)
+        (config_dir / "models.yaml").write_text(models_config, encoding="utf-8")
         console.print("✓ 模型配置已保存\n")
     else:
         console.print("[dim]跳过模型配置保存[/dim]\n")
@@ -199,7 +199,7 @@ async def run_setup():
             "enabled": True
         })
 
-    (config_dir / "bots.yaml").write_text(yaml.dump(bots_config, allow_unicode=True))
+    (config_dir / "bots.yaml").write_text(yaml.dump(bots_config, allow_unicode=True), encoding="utf-8")
     console.print(f"✓ Bot 列表已更新 ({len(created_bots)} 个)\n")
 
     # Step 3: 主动唤醒配置
@@ -247,9 +247,9 @@ async def run_setup():
         for b in created_bots:
             proactive_path = data_dir / "data" / "bots" / b["id"] / "persona" / "proactive.json"
             if proactive_path.exists():
-                existing = yaml.safe_load(proactive_path.read_text()) or {}
+                existing = yaml.safe_load(proactive_path.read_text(encoding="utf-8")) or {}
                 existing.update(proactive_config)
-                proactive_path.write_text(yaml.dump(existing, allow_unicode=True, sort_keys=False))
+                proactive_path.write_text(yaml.dump(existing, allow_unicode=True, sort_keys=False), encoding="utf-8")
             console.print(f"✓ [green]{b['name']}[/green] 主动唤醒已配置")
         console.print("[dim]可在 data/bots/{bot_id}/persona/proactive.json 中进一步调整[/dim]\n")
     else:
@@ -275,9 +275,9 @@ async def run_setup():
         for b in created_bots:
             life_path = data_dir / "data" / "bots" / b["id"] / "persona" / "life.json"
             if life_path.exists():
-                existing = yaml.safe_load(life_path.read_text()) or {}
+                existing = yaml.safe_load(life_path.read_text(encoding="utf-8")) or {}
                 existing.update(life_config)
-                life_path.write_text(yaml.dump(existing, allow_unicode=True, sort_keys=False))
+                life_path.write_text(yaml.dump(existing, allow_unicode=True, sort_keys=False), encoding="utf-8")
             console.print(f"✓ [green]{b['name']}[/green] 人生轨迹已配置")
         console.print("[dim]可在 data/bots/{bot_id}/persona/life.json 中进一步调整[/dim]\n")
     else:
@@ -293,7 +293,7 @@ async def run_setup():
     existing_feishu = {}
     if config_path.exists():
         try:
-            config_data = yaml.safe_load(config_path.read_text()) or {}
+            config_data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
             existing_feishu = config_data.get("platforms", {}).get("feishu", {}) or {}
         except Exception:
             pass
@@ -441,7 +441,7 @@ async def run_setup():
         config_data["platforms"]["feishu"]["routing"] = routing_config
 
         # 写回 config.yaml
-        config_path.write_text(yaml.dump(config_data, allow_unicode=True, sort_keys=False))
+        config_path.write_text(yaml.dump(config_data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         console.print("✓ 飞书配置已保存到 config.yaml\n")
     else:
         console.print("✗ 跳过飞书配置\n")
@@ -455,7 +455,7 @@ async def run_setup():
     existing_env = {}
     if env_path.exists():
         console.print(f"[dim]发现现有 .env 文件: {env_path}[/dim]")
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             if "=" in line:
                 key, _, value = line.partition("=")
                 existing_env[key.strip()] = value.strip()
@@ -508,7 +508,7 @@ async def run_setup():
             if key not in [line.split("=")[0] for line in env_lines if "=" in line]:
                 env_lines.append(f'{key}={value}')
 
-        env_path.write_text("\n".join(env_lines) + "\n")
+        env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
         console.print(f"✓ 环境变量已保存到 {env_path}\n")
     else:
         console.print("✗ 跳过\n")
