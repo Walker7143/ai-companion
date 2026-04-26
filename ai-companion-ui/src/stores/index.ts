@@ -1,3 +1,8 @@
 export { useBotStore } from './useBotStore';
 export { useThemeStore } from './useThemeStore';
 export { useUIStore } from './useUIStore';
+export { useMetricsStore } from './useMetricsStore';
+export { useSessionStore } from './useSessionStore';
+export { useLogStore } from './useLogStore';
+export { useMemoryStore } from './useMemoryStore';
+export { useConfigStore } from './useConfigStore';
