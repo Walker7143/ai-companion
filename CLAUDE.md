@@ -120,6 +120,7 @@ Storage Layer（SQLite + Chroma 向量）
 - `docs/ui/UI_DESIGN.md` - UI 设计方案（设计规范、页面布局、组件规范）
 - `docs/ui/UI_SPEC.md` - 产品规格（功能清单、交互细节、验收标准）
 - `docs/ui/UI_TECH_DESIGN.md` - 技术设计方案（架构、API、目录结构）
+- `docs/ui/UI_PROGRESS.md` - 实现进度追踪（150个任务步骤）
 
 开发命令（TODO，待初始化）：
 ```bash
