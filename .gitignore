@@ -67,3 +67,7 @@ test_*.py
 # Temporary files
 *.tmp
 .temp/
+
+# Frontend build
+node_modules/
+ai-companion-ui/.vite/
