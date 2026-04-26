@@ -58,12 +58,25 @@ class ProactiveConfig:
         """加载配置文件"""
         if self.config_path.exists():
             try:
-                with open(self.config_path, encoding="utf-8") as f:
-                    self._config = self._deep_merge(self.DEFAULT_CONFIG, json.load(f))
+                content = self.config_path.read_text(encoding="utf-8")
+                # 空文件或只有空白字符
+                if not content.strip():
+                    raise ValueError("文件为空")
+                # 尝试 JSON 格式（原生 JSON 兼容 YAML 子集）
+                try:
+                    loaded = json.loads(content)
+                except json.JSONDecodeError:
+                    # 尝试 YAML 格式（setup.py 写入的是 YAML）
+                    import yaml
+                    loaded = yaml.safe_load(content)
+                    if loaded is None:
+                        raise ValueError("YAML 内容为空")
+                self._config = self._deep_merge(self.DEFAULT_CONFIG, loaded)
                 logger.info(f"[ProactiveConfig] 加载配置: {self.config_path}")
             except Exception as e:
                 logger.warning(f"[ProactiveConfig] 加载配置失败: {e}，使用默认配置")
                 self._config = self.DEFAULT_CONFIG.copy()
+                self.save()  # 用默认配置覆盖损坏的文件
         else:
             self._config = self.DEFAULT_CONFIG.copy()
             self.save()  # 创建默认配置
