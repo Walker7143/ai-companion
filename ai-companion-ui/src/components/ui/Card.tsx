@@ -5,20 +5,23 @@ interface CardProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 export const Card = forwardRef<HTMLDivElement, CardProps>(
-  ({ variant = 'default', className = '', children, ...props }, ref) => {
-    const variantStyles = {
-      default: 'bg-bg-secondary border border-border-subtle',
-      elevated: 'bg-bg-elevated shadow-md',
+  ({ variant = 'default', className = '', style, children, ...props }, ref) => {
+    const baseStyle: React.CSSProperties = {
+      backgroundColor: 'var(--bg-secondary)',
+      borderRadius: '12px',
+      transition: 'box-shadow 200ms ease, border-color 200ms ease',
     };
+
+    const variantStyle: React.CSSProperties =
+      variant === 'elevated'
+        ? { boxShadow: 'var(--shadow-md)' }
+        : { border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-sm)' };
 
     return (
       <div
         ref={ref}
-        className={`
-          rounded-lg p-4
-          ${variantStyles[variant]}
-          ${className}
-        `}
+        className={className}
+        style={{ ...baseStyle, ...variantStyle, ...style }}
         {...props}
       >
         {children}
@@ -30,11 +33,17 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
 Card.displayName = 'Card';
 
 export const CardHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className = '', children, ...props }, ref) => {
+  ({ className = '', style, children, ...props }, ref) => {
     return (
       <div
         ref={ref}
-        className={`border-b border-border-subtle pb-3 mb-4 ${className}`}
+        className={className}
+        style={{
+          paddingBottom: '12px',
+          marginBottom: '16px',
+          borderBottom: '1px solid var(--border-subtle)',
+          ...style,
+        }}
         {...props}
       >
         {children}
@@ -46,11 +55,17 @@ export const CardHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEleme
 CardHeader.displayName = 'CardHeader';
 
 export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadingElement>>(
-  ({ className = '', children, ...props }, ref) => {
+  ({ className = '', style, children, ...props }, ref) => {
     return (
       <h3
         ref={ref}
-        className={`text-lg font-semibold text-text-primary ${className}`}
+        className={className}
+        style={{
+          fontSize: '16px',
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          ...style,
+        }}
         {...props}
       >
         {children}
@@ -62,9 +77,16 @@ export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadi
 CardTitle.displayName = 'CardTitle';
 
 export const CardContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
-  ({ className = '', children, ...props }, ref) => {
+  ({ className = '', style, children, ...props }, ref) => {
     return (
-      <div ref={ref} className={className} {...props}>
+      <div
+        ref={ref}
+        className={className}
+        style={{
+          ...style,
+        }}
+        {...props}
+      >
         {children}
       </div>
     );

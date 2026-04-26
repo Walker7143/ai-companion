@@ -1,38 +1,127 @@
 import { useEffect, useState, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Activity, MessageSquare, Brain, FileText, Cpu, HardDrive } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui';
+import { Activity, MessageSquare, Brain, Cpu, HardDrive, Zap, RefreshCw } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent, Button } from '../../components/ui';
 import { useBotStore } from '../../stores';
 import { useToast } from '../../components/ui/Toast';
+import { systemApi } from '../../api';
 import type { SystemMetrics, BotMetrics } from '../../types';
 
+function StatCard({
+  title,
+  value,
+  subtitle,
+  icon,
+  accentColor,
+}: {
+  title: string;
+  value: string | number;
+  subtitle: string;
+  icon: React.ReactNode;
+  accentColor: string;
+}) {
+  return (
+    <div
+      style={{
+        backgroundColor: 'var(--bg-secondary)',
+        borderRadius: '12px',
+        border: '1px solid var(--border-subtle)',
+        padding: '20px',
+        transition: 'all 200ms ease',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+        <div>
+          <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+            {title}
+          </p>
+          <p style={{ fontSize: '28px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
+            {value}
+          </p>
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+            {subtitle}
+          </p>
+        </div>
+        <div
+          style={{
+            padding: '10px',
+            borderRadius: '10px',
+            backgroundColor: accentColor,
+          }}
+        >
+          {icon}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProgressBar({
+  label,
+  value,
+  gradient,
+}: {
+  label: string;
+  value: number;
+  gradient: string;
+}) {
+  const percent = Math.min(value, 100);
+
+  return (
+    <div style={{ marginBottom: '8px' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          marginBottom: '8px',
+        }}
+      >
+        <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{label}</span>
+        <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>
+          {value.toFixed(1)}%
+        </span>
+      </div>
+      <div
+        style={{
+          height: '8px',
+          borderRadius: '4px',
+          backgroundColor: 'var(--bg-tertiary)',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: '100%',
+            width: `${percent}%`,
+            borderRadius: '4px',
+            background: gradient,
+            transition: 'width 500ms ease',
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function Dashboard() {
-  const { currentBotId, setBots } = useBotStore();
+  const { currentBotId, fetchBots } = useBotStore();
   const toast = useToast();
 
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [botMetrics, setBotMetrics] = useState<BotMetrics | null>(null);
   const [loading, setLoading] = useState(true);
-
-  const fetchBots = useCallback(async () => {
-    try {
-      const botsData = await invoke<{ id: string; name: string; status: string }[]>('get_available_bots');
-      setBots(botsData.map(b => ({ id: b.id, name: b.name })));
-    } catch (err) {
-      console.error('Failed to fetch bots:', err);
-    }
-  }, [setBots]);
+  const [lastRefresh, setLastRefresh] = useState(new Date());
 
   const fetchMetrics = useCallback(async () => {
     try {
       const [sysMetrics, bMetrics] = await Promise.all([
-        invoke<SystemMetrics>('get_system_metrics'),
-        invoke<BotMetrics>('get_bot_metrics', { botId: currentBotId || 'suqing' }),
+        systemApi.getSystemMetrics(),
+        systemApi.getBotMetrics(currentBotId || 'suqing'),
       ]);
       setSystemMetrics(sysMetrics);
       setBotMetrics(bMetrics);
+      setLastRefresh(new Date());
     } catch (err) {
-      toast('error', `获取监控数据失败: ${err}`);
+      toast.error(`获取监控数据失败: ${err}`);
     } finally {
       setLoading(false);
     }
@@ -57,201 +146,291 @@ export function Dashboard() {
     return `${mins}分钟`;
   };
 
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  };
+
   if (loading && !systemMetrics) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-text-primary">监控面板</h1>
-          <p className="text-text-secondary mt-1">实时监控 AI 伴侣的运行状态</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        {/* Header skeleton */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ height: '32px', width: '120px', borderRadius: '6px', backgroundColor: 'var(--bg-tertiary)', marginBottom: '8px' }} />
+            <div style={{ height: '16px', width: '200px', borderRadius: '4px', backgroundColor: 'var(--bg-tertiary)' }} />
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Cards skeleton */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="bg-bg-secondary border border-border-subtle rounded-lg p-4 animate-pulse">
-              <div className="h-8 bg-bg-tertiary rounded mb-2" />
-              <div className="h-4 bg-bg-tertiary rounded w-2/3" />
-            </div>
+            <div
+              key={i}
+              style={{
+                height: '120px',
+                borderRadius: '12px',
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            />
           ))}
         </div>
       </div>
     );
   }
 
+  const totalMemory =
+    (botMetrics?.memory_stats.working_count ?? 0) +
+    (botMetrics?.memory_stats.episodic_count ?? 0) +
+    (botMetrics?.memory_stats.semantic_count ?? 0);
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-text-primary">监控面板</h1>
-        <p className="text-text-secondary mt-1">实时监控 AI 伴侣的运行状态</p>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h1
+            style={{
+              fontSize: '24px',
+              fontWeight: 700,
+              color: 'var(--text-primary)',
+              marginBottom: '4px',
+            }}
+          >
+            监控面板
+          </h1>
+          <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            实时监控 AI 伴侣的运行状态
+          </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            最后更新: {formatTime(lastRefresh)}
+          </span>
+          <Button variant="secondary" size="sm" onClick={fetchMetrics}>
+            <RefreshCw style={{ width: '14px', height: '14px', marginRight: '4px' }} />
+            刷新
+          </Button>
+        </div>
       </div>
 
       {/* Status Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="flex items-center gap-4">
-            <div className="p-3 bg-accent/20 rounded-lg">
-              <MessageSquare className="w-6 h-6 text-accent" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-accent">
-                {botMetrics?.conversations_today ?? 0}
-              </div>
-              <div className="text-sm text-text-secondary">今日会话</div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="flex items-center gap-4">
-            <div className="p-3 bg-success/20 rounded-lg">
-              <Activity className="w-6 h-6 text-success" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-success">
-                {systemMetrics?.uptime_seconds ? formatUptime(systemMetrics.uptime_seconds) : '--'}
-              </div>
-              <div className="text-sm text-text-secondary">运行时长</div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="flex items-center gap-4">
-            <div className="p-3 bg-warning/20 rounded-lg">
-              <Brain className="w-6 h-6 text-warning" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-warning">
-                {(botMetrics?.memory_stats.working_count ?? 0) +
-                  (botMetrics?.memory_stats.episodic_count ?? 0) +
-                  (botMetrics?.memory_stats.semantic_count ?? 0)}
-              </div>
-              <div className="text-sm text-text-secondary">记忆条目</div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="flex items-center gap-4">
-            <div className="p-3 bg-info/20 rounded-lg">
-              <FileText className="w-6 h-6 text-info" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-info">
-                {botMetrics?.status === 'running' ? '运行中' : '已停止'}
-              </div>
-              <div className="text-sm text-text-secondary">Bot 状态</div>
-            </div>
-          </CardContent>
-        </Card>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: '16px',
+        }}
+      >
+        <StatCard
+          title="今日会话"
+          value={botMetrics?.conversations_today ?? 0}
+          subtitle="条对话"
+          icon={<MessageSquare style={{ width: '20px', height: '20px', color: 'var(--accent)' }} />}
+          accentColor="var(--accent-light)"
+        />
+        <StatCard
+          title="运行时长"
+          value={systemMetrics?.uptime_seconds ? formatUptime(systemMetrics.uptime_seconds) : '--'}
+          subtitle="连续运行"
+          icon={<Activity style={{ width: '20px', height: '20px', color: 'var(--success)' }} />}
+          accentColor="var(--success-light)"
+        />
+        <StatCard
+          title="记忆总数"
+          value={totalMemory}
+          subtitle="条记忆"
+          icon={<Brain style={{ width: '20px', height: '20px', color: 'var(--warning)' }} />}
+          accentColor="var(--warning-light)"
+        />
+        <StatCard
+          title="Bot 状态"
+          value={botMetrics?.status === 'running' ? '运行中' : '已停止'}
+          subtitle={botMetrics?.status === 'running' ? '正常' : '需要重启'}
+          icon={
+            <Zap
+              style={{
+                width: '20px',
+                height: '20px',
+                color: botMetrics?.status === 'running' ? 'var(--success)' : 'var(--error)',
+              }}
+            />
+          }
+          accentColor={botMetrics?.status === 'running' ? 'var(--success-light)' : 'var(--error-light)'}
+        />
       </div>
 
       {/* System Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Cpu className="w-5 h-5" />
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+          gap: '16px',
+        }}
+      >
+        <Card
+          style={{
+            backgroundColor: 'var(--bg-secondary)',
+            borderRadius: '12px',
+            border: '1px solid var(--border-subtle)',
+            padding: '20px',
+          }}
+        >
+          <CardHeader style={{ borderBottom: 'none', padding: 0, marginBottom: '16px' }}>
+            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Cpu style={{ width: '18px', height: '18px', color: 'var(--accent)' }} />
               CPU 使用率
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex justify-between text-sm">
-                <span className="text-text-secondary">当前使用</span>
-                <span className="font-medium text-text-primary">
-                  {systemMetrics?.cpu_percent.toFixed(1) ?? '0'}%
-                </span>
-              </div>
-              <div className="w-full bg-bg-tertiary rounded-full h-2">
-                <div
-                  className="bg-accent h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${systemMetrics?.cpu_percent ?? 0}%` }}
-                />
-              </div>
-            </div>
+          <CardContent style={{ padding: 0 }}>
+            <ProgressBar
+              label="CPU"
+              value={systemMetrics?.cpu_percent ?? 0}
+              gradient="linear-gradient(90deg, var(--accent), var(--info))"
+            />
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <HardDrive className="w-5 h-5" />
+        <Card
+          style={{
+            backgroundColor: 'var(--bg-secondary)',
+            borderRadius: '12px',
+            border: '1px solid var(--border-subtle)',
+            padding: '20px',
+          }}
+        >
+          <CardHeader style={{ borderBottom: 'none', padding: 0, marginBottom: '16px' }}>
+            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <HardDrive style={{ width: '18px', height: '18px', color: 'var(--info)' }} />
               内存使用
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex justify-between text-sm">
-                <span className="text-text-secondary">已用 / 总计</span>
-                <span className="font-medium text-text-primary">
-                  {systemMetrics?.memory_used_mb ?? 0} MB / {((systemMetrics?.memory_used_mb ?? 0) / ((systemMetrics?.memory_percent ?? 1) / 100)).toFixed(0)} MB
-                </span>
-              </div>
-              <div className="w-full bg-bg-tertiary rounded-full h-2">
-                <div
-                  className="bg-info h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${systemMetrics?.memory_percent ?? 0}%` }}
-                />
-              </div>
-            </div>
+          <CardContent style={{ padding: 0 }}>
+            <ProgressBar
+              label="内存"
+              value={systemMetrics?.memory_percent ?? 0}
+              gradient="linear-gradient(90deg, var(--info), var(--success))"
+            />
           </CardContent>
         </Card>
       </div>
 
       {/* Bot Metrics Details */}
       {botMetrics && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Bot 运行时统计</CardTitle>
+        <Card
+          style={{
+            backgroundColor: 'var(--bg-secondary)',
+            borderRadius: '12px',
+            border: '1px solid var(--border-subtle)',
+            padding: '20px',
+          }}
+        >
+          <CardHeader style={{ borderBottom: '1px solid var(--border-subtle)', padding: 0, marginBottom: '20px' }}>
+            <CardTitle>会话统计</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="text-center p-3 bg-bg-tertiary rounded-lg">
-                <div className="text-lg font-bold text-text-primary">
-                  {botMetrics.conversations_today}
+          <CardContent style={{ padding: 0 }}>
+            {/* Stats grid */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+                gap: '12px',
+                marginBottom: '24px',
+              }}
+            >
+              {[
+                { label: '今日会话', value: botMetrics.conversations_today },
+                { label: '主动消息', value: botMetrics.proactive_messages_today },
+                { label: '输入 Token', value: botMetrics.input_tokens_today.toLocaleString() },
+                { label: '输出 Token', value: botMetrics.output_tokens_today.toLocaleString() },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    backgroundColor: 'var(--bg-tertiary)',
+                    borderRadius: '8px',
+                    padding: '16px',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: '20px',
+                      fontWeight: 700,
+                      color: 'var(--text-primary)',
+                    }}
+                  >
+                    {item.value}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '12px',
+                      color: 'var(--text-secondary)',
+                      marginTop: '4px',
+                    }}
+                  >
+                    {item.label}
+                  </div>
                 </div>
-                <div className="text-xs text-text-secondary">今日会话</div>
-              </div>
-              <div className="text-center p-3 bg-bg-tertiary rounded-lg">
-                <div className="text-lg font-bold text-text-primary">
-                  {botMetrics.proactive_messages_today}
-                </div>
-                <div className="text-xs text-text-secondary">主动消息</div>
-              </div>
-              <div className="text-center p-3 bg-bg-tertiary rounded-lg">
-                <div className="text-lg font-bold text-text-primary">
-                  {botMetrics.input_tokens_today.toLocaleString()}
-                </div>
-                <div className="text-xs text-text-secondary">输入 Token</div>
-              </div>
-              <div className="text-center p-3 bg-bg-tertiary rounded-lg">
-                <div className="text-lg font-bold text-text-primary">
-                  {botMetrics.output_tokens_today.toLocaleString()}
-                </div>
-                <div className="text-xs text-text-secondary">输出 Token</div>
-              </div>
+              ))}
             </div>
 
-            <div className="mt-4 pt-4 border-t border-border-subtle">
-              <h4 className="text-sm font-medium text-text-primary mb-3">记忆统计</h4>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="text-center p-3 bg-bg-tertiary rounded-lg">
-                  <div className="text-lg font-bold text-text-primary">
-                    {botMetrics.memory_stats.working_count}
+            {/* Memory Distribution */}
+            <div>
+              <h4
+                style={{
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
+                  marginBottom: '12px',
+                }}
+              >
+                记忆分布
+              </h4>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: '12px',
+                }}
+              >
+                {[
+                  { label: '工作记忆', value: botMetrics.memory_stats.working_count, color: 'var(--accent)' },
+                  { label: '情景记忆', value: botMetrics.memory_stats.episodic_count, color: 'var(--warning)' },
+                  { label: '语义记忆', value: botMetrics.memory_stats.semantic_count, color: 'var(--info)' },
+                ].map((item) => (
+                  <div
+                    key={item.label}
+                    style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      borderRadius: '8px',
+                      padding: '16px',
+                      textAlign: 'center',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: '24px',
+                        fontWeight: 700,
+                        color: item.color,
+                      }}
+                    >
+                      {item.value}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        color: 'var(--text-secondary)',
+                        marginTop: '4px',
+                      }}
+                    >
+                      {item.label}
+                    </div>
                   </div>
-                  <div className="text-xs text-text-secondary">工作记忆</div>
-                </div>
-                <div className="text-center p-3 bg-bg-tertiary rounded-lg">
-                  <div className="text-lg font-bold text-text-primary">
-                    {botMetrics.memory_stats.episodic_count}
-                  </div>
-                  <div className="text-xs text-text-secondary">情景记忆</div>
-                </div>
-                <div className="text-center p-3 bg-bg-tertiary rounded-lg">
-                  <div className="text-lg font-bold text-text-primary">
-                    {botMetrics.memory_stats.semantic_count}
-                  </div>
-                  <div className="text-xs text-text-secondary">语义记忆</div>
-                </div>
+                ))}
               </div>
             </div>
           </CardContent>

@@ -1,4 +1,4 @@
-import { InputHTMLAttributes, forwardRef } from 'react';
+import { InputHTMLAttributes, forwardRef, useState } from 'react';
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -6,44 +6,54 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, error, className = '', type = 'text', ...props }, ref) => {
+  ({ label, error, className = '', type = 'text', style, ...props }, ref) => {
+    const [focused, setFocused] = useState(false);
+
     return (
-      <div className="w-full">
+      <div className={className} style={{ width: '100%' }}>
         {label && (
-          <label className="block text-sm font-medium text-text-primary mb-1.5">
+          <label
+            style={{
+              display: 'block',
+              fontSize: '13px',
+              fontWeight: 500,
+              color: 'var(--text-primary)',
+              marginBottom: '6px',
+            }}
+          >
             {label}
           </label>
         )}
         <input
           ref={ref}
           type={type}
-          className={`
-            w-full px-3 py-2 rounded-md
-            bg-bg-secondary border border-border-subtle
-            text-text-primary placeholder-text-muted
-            focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent
-            transition-colors duration-150
-            disabled:opacity-50 disabled:cursor-not-allowed
-            dark:bg-bg-secondary dark:border-border-subtle
-            ${error ? 'border-error focus:ring-error' : ''}
-            ${className}
-          `}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          style={{
+            width: '100%',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            border: `1px solid ${error ? 'var(--error)' : focused ? 'var(--accent)' : 'var(--border-subtle)'}`,
+            backgroundColor: 'var(--bg-secondary)',
+            color: 'var(--text-primary)',
+            fontSize: '14px',
+            outline: 'none',
+            boxShadow: focused ? '0 0 0 3px var(--accent-light)' : 'none',
+            transition: 'all 150ms ease',
+            opacity: props.disabled ? 0.5 : 1,
+            cursor: props.disabled ? 'not-allowed' : 'text',
+            ...style,
+          }}
           {...props}
         />
-        {error && <p className="mt-1 text-xs text-error">{error}</p>}
+        {error && (
+          <p style={{ marginTop: '4px', fontSize: '12px', color: 'var(--error)' }}>
+            {error}
+          </p>
+        )}
       </div>
     );
   }
 );
 
 Input.displayName = 'Input';
-
-interface PasswordInputProps extends Omit<InputProps, 'type'> {}
-
-export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
-  ({ className = '', ...props }, ref) => {
-    return <Input ref={ref} type="password" className={className} {...props} />;
-  }
-);
-
-PasswordInput.displayName = 'PasswordInput';

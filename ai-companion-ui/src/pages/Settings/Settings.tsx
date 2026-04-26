@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Moon, Sun, TestTube, Save, RotateCcw } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent, Toggle, Button, Input, Select, useToast } from '../../components/ui';
-import { useThemeStore } from '../../stores';
+import { useThemeStore, useBotStore } from '../../stores';
+import { configApi } from '../../api';
 import type { BotConfig } from '../../types';
 
 export function Settings() {
   const { theme, toggleTheme } = useThemeStore();
+  const { currentBotId } = useBotStore();
   const toast = useToast();
 
   const [config, setConfig] = useState<BotConfig | null>(null);
@@ -14,7 +15,6 @@ export function Settings() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
 
-  // Form state
   const [provider, setProvider] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -26,7 +26,7 @@ export function Settings() {
 
   const fetchConfig = useCallback(async () => {
     try {
-      const data = await invoke<BotConfig>('get_config', { botId: 'suqing' });
+      const data = await configApi.getConfig(currentBotId || 'suqing');
       setConfig(data);
       setProvider(data.model.provider);
       setApiKey(data.model.api_key);
@@ -35,18 +35,18 @@ export function Settings() {
       setTemperature(data.model.temperature);
       setMaxTokens(data.model.max_tokens);
     } catch (err) {
-      toast('error', `获取配置失败: ${err}`);
+      toast.error(`获取配置失败: ${err}`);
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [currentBotId, toast]);
 
   useEffect(() => {
     fetchConfig();
   }, [fetchConfig]);
 
-  const handleFieldChange = (setter: (value: string) => void) => (value: string) => {
-    setter(value);
+  const handleFieldChange = (setter: (value: string) => void) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    setter(e.target.value);
     setHasChanges(true);
   };
 
@@ -60,8 +60,7 @@ export function Settings() {
 
     setSaving(true);
     try {
-      const newConfig: BotConfig = {
-        ...config,
+      const newConfig: Partial<BotConfig> = {
         model: {
           provider,
           api_key: apiKey,
@@ -71,12 +70,12 @@ export function Settings() {
           max_tokens: maxTokens,
         },
       };
-      await invoke('update_config', { botId: config.bot_id, config: newConfig });
-      toast('success', '配置已保存');
+      await configApi.updateConfig(config.bot_id, newConfig);
+      toast.success('配置已保存');
       setHasChanges(false);
       fetchConfig();
     } catch (err) {
-      toast('error', `保存配置失败: ${err}`);
+      toast.error(`保存配置失败: ${err}`);
     } finally {
       setSaving(false);
     }
@@ -97,18 +96,14 @@ export function Settings() {
   const handleTestConnection = async () => {
     setTesting(true);
     try {
-      const result = await invoke<boolean>('test_api_connection', {
-        provider,
-        apiKey,
-        baseUrl,
-      });
+      const result = await configApi.testConnection(provider, apiKey, baseUrl);
       if (result) {
-        toast('success', 'API 连接测试成功');
+        toast.success('API 连接测试成功');
       } else {
-        toast('error', 'API 连接测试失败');
+        toast.error('API 连接测试失败');
       }
     } catch (err) {
-      toast('error', `测试连接失败: ${err}`);
+      toast.error(`测试连接失败: ${err}`);
     } finally {
       setTesting(false);
     }
@@ -124,20 +119,26 @@ export function Settings() {
 
   if (loading) {
     return (
-      <div className="space-y-6">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         <div>
-          <h1 className="text-2xl font-bold text-text-primary">设置</h1>
-          <p className="text-text-secondary mt-1">配置 AI 伴侣的各项功能</p>
+          <h1 style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+            设置
+          </h1>
+          <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            配置 AI 伴侣的各项功能
+          </p>
         </div>
-        <div className="space-y-4">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="bg-bg-secondary border border-border-subtle rounded-lg p-6 animate-pulse">
-              <div className="h-4 bg-bg-tertiary rounded w-1/4 mb-4" />
-              <div className="space-y-3">
-                <div className="h-10 bg-bg-tertiary rounded" />
-                <div className="h-10 bg-bg-tertiary rounded" />
-              </div>
-            </div>
+            <div
+              key={i}
+              style={{
+                height: '120px',
+                borderRadius: '12px',
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            />
           ))}
         </div>
       </div>
@@ -145,28 +146,37 @@ export function Settings() {
   }
 
   return (
-    <div className="space-y-6">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-text-primary">设置</h1>
-        <p className="text-text-secondary mt-1">配置 AI 伴侣的各项功能</p>
+        <h1 style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+          设置
+        </h1>
+        <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+          配置 AI 伴侣的各项功能
+        </p>
       </div>
 
       {/* Appearance */}
-      <Card>
-        <CardHeader>
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
           <CardTitle>外观</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+        <CardContent style={{ padding: '16px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               {theme === 'dark' ? (
-                <Moon className="w-5 h-5 text-text-primary" />
+                <Moon style={{ width: '20px', height: '20px', color: 'var(--text-primary)' }} />
               ) : (
-                <Sun className="w-5 h-5 text-text-primary" />
+                <Sun style={{ width: '20px', height: '20px', color: 'var(--text-primary)' }} />
               )}
               <div>
-                <div className="text-sm font-medium text-text-primary">深色模式</div>
-                <div className="text-xs text-text-muted">切换深色/浅色主题</div>
+                <div style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>
+                  深色模式
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  切换深色/浅色主题
+                </div>
               </div>
             </div>
             <Toggle checked={theme === 'dark'} onChange={toggleTheme} />
@@ -175,35 +185,35 @@ export function Settings() {
       </Card>
 
       {/* Model Configuration */}
-      <Card>
-        <CardHeader>
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ borderBottom: '1px solid var(--border-subtle)', padding: '16px 20px' }}>
           <CardTitle>模型配置</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <CardContent style={{ padding: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '20px' }}>
             <Select
-              label=" Provider"
+              label="Provider"
               options={providerOptions}
               value={provider}
-              onChange={(e) => handleFieldChange(setProvider)(e.target.value)}
+              onChange={handleFieldChange(setProvider)}
             />
             <Input
               label="API Key"
               type="password"
               value={apiKey}
-              onChange={(e) => handleFieldChange(setApiKey)(e.target.value)}
+              onChange={handleFieldChange(setApiKey)}
               placeholder="输入 API Key"
             />
             <Input
               label="Base URL"
               value={baseUrl}
-              onChange={(e) => handleFieldChange(setBaseUrl)(e.target.value)}
+              onChange={handleFieldChange(setBaseUrl)}
               placeholder="https://api.minimax.chat/v1"
             />
             <Input
               label="Model"
               value={model}
-              onChange={(e) => handleFieldChange(setModel)(e.target.value)}
+              onChange={handleFieldChange(setModel)}
               placeholder="MiniMax-M2.7"
             />
             <Input
@@ -225,18 +235,18 @@ export function Settings() {
             />
           </div>
 
-          <div className="flex gap-3 pt-4 border-t border-border-subtle">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
             <Button
               variant="secondary"
               onClick={handleTestConnection}
               disabled={testing || !apiKey || !baseUrl}
             >
-              <TestTube className="w-4 h-4 mr-1" />
+              <TestTube style={{ width: '14px', height: '14px', marginRight: '6px' }} />
               {testing ? '测试中...' : '测试连接'}
             </Button>
-            <div className="flex-1" />
+            <div style={{ flex: 1 }} />
             <Button variant="secondary" onClick={handleReset} disabled={!hasChanges}>
-              <RotateCcw className="w-4 h-4 mr-1" />
+              <RotateCcw style={{ width: '14px', height: '14px', marginRight: '6px' }} />
               重置
             </Button>
             <Button
@@ -244,7 +254,7 @@ export function Settings() {
               onClick={handleSave}
               disabled={saving || !hasChanges}
             >
-              <Save className="w-4 h-4 mr-1" />
+              <Save style={{ width: '14px', height: '14px', marginRight: '6px' }} />
               {saving ? '保存中...' : '保存配置'}
             </Button>
           </div>
@@ -252,15 +262,15 @@ export function Settings() {
       </Card>
 
       {/* About */}
-      <Card>
-        <CardHeader>
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
           <CardTitle>关于</CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="text-sm text-text-secondary">
-            <p>AI Companion v0.1.0</p>
-            <p className="mt-1">一个基于 Tauri + React 的 AI 伴侣应用</p>
-            <p className="mt-2 text-xs text-text-muted">
+        <CardContent style={{ padding: '16px 20px' }}>
+          <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            <p>AI Companion 管理后台 v0.1.0</p>
+            <p style={{ marginTop: '4px' }}>一个基于 React 的 AI 伴侣管理界面</p>
+            <p style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
               当前 Bot: {config?.name || '未知'}
             </p>
           </div>

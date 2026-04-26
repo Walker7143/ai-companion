@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Brain, Trash2, Star, Clock, User, Heart } from 'lucide-react';
+import { Brain, Trash2, Star, Clock, User, Heart, RefreshCw } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent, Badge, Button, Modal, useToast } from '../../components/ui';
 import { useBotStore } from '../../stores';
+import { memoryApi } from '../../api';
 import type { MemoryStats, Message, EpisodicItem, SemanticMemory } from '../../types';
 
 type MemoryTab = 'stats' | 'working' | 'episodic' | 'semantic';
@@ -26,17 +26,17 @@ export function Memory() {
     const botId = currentBotId || 'suqing';
     try {
       const [stats, working, episodic, semantic] = await Promise.all([
-        invoke<MemoryStats>('get_memory_stats', { botId }),
-        invoke<Message[]>('get_working_memory', { botId }),
-        invoke<EpisodicItem[]>('get_episodic_memory', { botId, query: null, limit: null }),
-        invoke<SemanticMemory>('get_semantic_memory', { botId }),
+        memoryApi.getStats(botId),
+        memoryApi.getWorking(botId),
+        memoryApi.getEpisodic(botId),
+        memoryApi.getSemantic(botId),
       ]);
       setMemoryStats(stats);
       setWorkingMemory(working);
       setEpisodicMemory(episodic);
       setSemanticMemory(semantic);
     } catch (err) {
-      toast('error', `获取记忆数据失败: ${err}`);
+      toast.error(`获取记忆数据失败: ${err}`);
     } finally {
       setLoading(false);
     }
@@ -51,17 +51,13 @@ export function Memory() {
 
     setDeleting(true);
     try {
-      await invoke('delete_memory', {
-        botId: currentBotId || 'suqing',
-        memoryType: deleteTarget.type,
-        memoryId: deleteTarget.id,
-      });
-      toast('success', '记忆已删除');
+      await memoryApi.deleteMemory(currentBotId || 'suqing', deleteTarget.type, deleteTarget.id);
+      toast.success('记忆已删除');
       setDeleteModalOpen(false);
       setDeleteTarget(null);
       fetchAllData();
     } catch (err) {
-      toast('error', `删除记忆失败: ${err}`);
+      toast.error(`删除记忆失败: ${err}`);
     } finally {
       setDeleting(false);
     }
@@ -71,22 +67,27 @@ export function Memory() {
     if (!confirm('确定要清空所有记忆吗？此操作不可恢复。')) return;
 
     try {
-      await invoke('clear_all_memory', { botId: currentBotId || 'suqing' });
-      toast('success', '所有记忆已清空');
+      await memoryApi.clearAll(currentBotId || 'suqing');
+      toast.success('所有记忆已清空');
       fetchAllData();
     } catch (err) {
-      toast('error', `清空记忆失败: ${err}`);
+      toast.error(`清空记忆失败: ${err}`);
     }
   };
 
   const getImportanceStars = (importance: number) => {
-    const stars = Math.round(importance);
+    const stars = Math.round(importance * 5);
     return (
-      <div className="flex gap-0.5">
+      <div style={{ display: 'flex', gap: '2px' }}>
         {[...Array(5)].map((_, i) => (
           <Star
             key={i}
-            className={`w-3 h-3 ${i < stars ? 'text-warning fill-warning' : 'text-text-muted'}`}
+            style={{
+              width: '12px',
+              height: '12px',
+              color: i < stars ? 'var(--warning)' : 'var(--text-muted)',
+              fill: i < stars ? 'var(--warning)' : 'none',
+            }}
           />
         ))}
       </div>
@@ -102,51 +103,77 @@ export function Memory() {
 
   if (loading) {
     return (
-      <div className="space-y-6">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         <div>
-          <h1 className="text-2xl font-bold text-text-primary">情景记忆</h1>
-          <p className="text-text-secondary mt-1">管理 AI 伴侣的情景记忆和上下文</p>
+          <h1 style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+            记忆管理
+          </h1>
+          <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            管理 AI 伴侣的三层记忆系统
+          </p>
         </div>
-        <div className="bg-bg-secondary border border-border-subtle rounded-lg p-8 animate-pulse">
-          <div className="h-4 bg-bg-tertiary rounded w-1/4 mb-4" />
-          <div className="grid grid-cols-3 gap-4">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="h-24 bg-bg-tertiary rounded" />
-            ))}
-          </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+          {[...Array(3)].map((_, i) => (
+            <div
+              key={i}
+              style={{
+                height: '100px',
+                borderRadius: '12px',
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            />
+          ))}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div>
-          <h1 className="text-2xl font-bold text-text-primary">情景记忆</h1>
-          <p className="text-text-secondary mt-1">管理 AI 伴侣的情景记忆和上下文</p>
+          <h1 style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+            记忆管理
+          </h1>
+          <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
+            管理 AI 伴侣的三层记忆系统
+          </p>
         </div>
-        <Button variant="secondary" size="sm" onClick={handleClearAll}>
-          <Trash2 className="w-4 h-4 mr-1" />
-          清空全部
-        </Button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <Button variant="secondary" size="sm" onClick={fetchAllData}>
+            <RefreshCw style={{ width: '14px', height: '14px', marginRight: '4px' }} />
+            刷新
+          </Button>
+          <Button variant="danger" size="sm" onClick={handleClearAll}>
+            <Trash2 style={{ width: '14px', height: '14px', marginRight: '4px' }} />
+            清空全部
+          </Button>
+        </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-border-subtle">
+      <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid var(--border-subtle)' }}>
         {tabs.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === tab.key
-                ? 'border-accent text-accent'
-                : 'border-transparent text-text-secondary hover:text-text-primary'
-            }`}
+            style={{
+              padding: '12px 16px',
+              fontSize: '14px',
+              fontWeight: 500,
+              border: 'none',
+              backgroundColor: 'transparent',
+              cursor: 'pointer',
+              borderBottom: `2px solid ${activeTab === tab.key ? 'var(--accent)' : 'transparent'}`,
+              color: activeTab === tab.key ? 'var(--accent)' : 'var(--text-secondary)',
+              transition: 'all 150ms ease',
+            }}
           >
             {tab.label}
             {tab.count !== undefined && (
-              <Badge variant="default" className="ml-2">
+              <Badge variant="default" style={{ marginLeft: '8px', fontSize: '11px' }}>
                 {tab.count}
               </Badge>
             )}
@@ -156,87 +183,66 @@ export function Memory() {
 
       {/* Stats Tab */}
       {activeTab === 'stats' && memoryStats && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card>
-            <CardContent className="flex items-center gap-4">
-              <div className="p-3 bg-accent/20 rounded-lg">
-                <Clock className="w-6 h-6 text-accent" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-text-primary">
-                  {memoryStats.working_count}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          {[
+            { label: '工作记忆', value: memoryStats.working_count, icon: Clock, color: 'var(--accent)', size: (memoryStats.working_size_kb / 1024).toFixed(2) },
+            { label: '情景记忆', value: memoryStats.episodic_count, icon: Brain, color: 'var(--warning)', size: (memoryStats.episodic_size_kb / 1024).toFixed(2) },
+            { label: '语义记忆', value: memoryStats.semantic_count, icon: User, color: 'var(--info)', size: (memoryStats.semantic_size_kb / 1024).toFixed(2) },
+          ].map((item) => (
+            <Card
+              key={item.label}
+              style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}
+            >
+              <CardContent style={{ padding: '20px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <div style={{ padding: '12px', borderRadius: '10px', backgroundColor: item.color + '15' }}>
+                  <item.icon style={{ width: '24px', height: '24px', color: item.color }} />
                 </div>
-                <div className="text-sm text-text-secondary">工作记忆</div>
-                <div className="text-xs text-text-muted">
-                  {(memoryStats.working_size_kb / 1024).toFixed(2)} MB
+                <div>
+                  <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>
+                    {item.value}
+                  </div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    {item.label}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {item.size} MB
+                  </div>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="flex items-center gap-4">
-              <div className="p-3 bg-warning/20 rounded-lg">
-                <Brain className="w-6 h-6 text-warning" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-text-primary">
-                  {memoryStats.episodic_count}
-                </div>
-                <div className="text-sm text-text-secondary">情景记忆</div>
-                <div className="text-xs text-text-muted">
-                  {(memoryStats.episodic_size_kb / 1024).toFixed(2)} MB
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="flex items-center gap-4">
-              <div className="p-3 bg-info/20 rounded-lg">
-                <User className="w-6 h-6 text-info" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-text-primary">
-                  {memoryStats.semantic_count}
-                </div>
-                <div className="text-sm text-text-secondary">语义记忆</div>
-                <div className="text-xs text-text-muted">
-                  {(memoryStats.semantic_size_kb / 1024).toFixed(2)} MB
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
 
       {/* Working Memory Tab */}
       {activeTab === 'working' && (
-        <Card>
-          <CardContent>
+        <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+          <CardContent style={{ padding: '0' }}>
             {workingMemory.length === 0 ? (
-              <div className="text-center py-8">
-                <Clock className="w-12 h-12 text-text-muted mx-auto mb-3" />
-                <p className="text-text-muted">工作记忆为空</p>
+              <div style={{ textAlign: 'center', padding: '48px 0' }}>
+                <Clock style={{ width: '48px', height: '48px', margin: '0 auto 16px', color: 'var(--text-muted)', opacity: 0.5 }} />
+                <p style={{ color: 'var(--text-muted)' }}>工作记忆为空</p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '16px' }}>
                 {workingMemory.map((msg) => (
                   <div
                     key={msg.id}
-                    className={`p-3 rounded-lg ${
-                      msg.role === 'user' ? 'bg-accent/10' : 'bg-bg-tertiary'
-                    }`}
+                    style={{
+                      padding: '12px',
+                      borderRadius: '8px',
+                      backgroundColor: msg.role === 'user' ? 'var(--accent-light)' : 'var(--bg-tertiary)',
+                    }}
                   >
-                    <div className="flex items-center gap-2 mb-1">
-                      <Badge variant={msg.role === 'user' ? 'info' : 'default'}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                      <Badge variant={msg.role === 'user' ? 'info' : 'default'} style={{ fontSize: '10px' }}>
                         {msg.role === 'user' ? '用户' : 'Bot'}
                       </Badge>
-                      <span className="text-xs text-text-muted">
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                         {new Date(msg.created_at).toLocaleString('zh-CN')}
                       </span>
                     </div>
-                    <p className="text-sm text-text-primary">{msg.content}</p>
+                    <p style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{msg.content}</p>
                   </div>
                 ))}
               </div>
@@ -247,42 +253,47 @@ export function Memory() {
 
       {/* Episodic Memory Tab */}
       {activeTab === 'episodic' && (
-        <Card>
-          <CardContent>
+        <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+          <CardContent style={{ padding: '0' }}>
             {episodicMemory.length === 0 ? (
-              <div className="text-center py-8">
-                <Brain className="w-12 h-12 text-text-muted mx-auto mb-3" />
-                <p className="text-text-muted">情景记忆为空</p>
+              <div style={{ textAlign: 'center', padding: '48px 0' }}>
+                <Brain style={{ width: '48px', height: '48px', margin: '0 auto 16px', color: 'var(--text-muted)', opacity: 0.5 }} />
+                <p style={{ color: 'var(--text-muted)' }}>情景记忆为空</p>
               </div>
             ) : (
-              <div className="space-y-4">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px' }}>
                 {episodicMemory.map((item) => (
                   <div
                     key={item.id}
-                    className="p-4 bg-bg-tertiary rounded-lg hover:bg-bg-tertiary/80 transition-colors"
+                    style={{
+                      padding: '16px',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--bg-tertiary)',
+                    }}
                   >
-                    <div className="flex items-start justify-between mb-2">
-                      <div className="flex items-center gap-2">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {getImportanceStars(item.importance)}
-                        <span className="text-xs text-text-muted">
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                           {new Date(item.created_at).toLocaleDateString('zh-CN')}
                         </span>
                       </div>
                       <Button
-                        variant="secondary"
+                        variant="ghost"
                         size="sm"
                         onClick={() => {
                           setDeleteTarget({ type: 'episodic', id: item.id });
                           setDeleteModalOpen(true);
                         }}
+                        style={{ padding: '4px' }}
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 style={{ width: '14px', height: '14px' }} />
                       </Button>
                     </div>
-                    <p className="text-sm font-medium text-text-primary mb-1">
+                    <p style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)', marginBottom: '4px' }}>
                       {item.summary}
                     </p>
-                    <p className="text-sm text-text-secondary">{item.content}</p>
+                    <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{item.content}</p>
                   </div>
                 ))}
               </div>
@@ -293,55 +304,57 @@ export function Memory() {
 
       {/* Semantic Memory Tab */}
       {activeTab === 'semantic' && semanticMemory && (
-        <div className="space-y-6">
-          {/* Relationship Status */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Heart className="w-5 h-5 text-error" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+            <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
+              <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Heart style={{ width: '18px', height: '18px', color: 'var(--error)' }} />
                 关系状态
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-6">
-                <div className="text-center">
-                  <div className="text-3xl font-bold text-accent">
+            <CardContent style={{ padding: '16px 20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '36px', fontWeight: 700, color: 'var(--accent)' }}>
                     {semanticMemory.attitude_score.toFixed(1)}
                   </div>
-                  <div className="text-sm text-text-secondary">好感度</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>好感度</div>
                 </div>
-                <div className="flex-1">
-                  <Badge variant="dialogue" className="text-lg px-3 py-1">
-                    {semanticMemory.relationship_level}
-                  </Badge>
-                </div>
+                <Badge variant="success" style={{ fontSize: '14px', padding: '6px 12px' }}>
+                  {semanticMemory.relationship_level}
+                </Badge>
               </div>
             </CardContent>
           </Card>
 
-          {/* User Facts */}
-          <Card>
-            <CardHeader>
+          <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
+            <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
               <CardTitle>用户画像</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent style={{ padding: '0 20px 20px' }}>
               {semanticMemory.facts.length === 0 ? (
-                <div className="text-center py-4">
-                  <User className="w-8 h-8 text-text-muted mx-auto mb-2" />
-                  <p className="text-text-muted text-sm">暂无用户画像</p>
+                <div style={{ textAlign: 'center', padding: '24px 0' }}>
+                  <User style={{ width: '32px', height: '32px', margin: '0 auto 8px', color: 'var(--text-muted)', opacity: 0.5 }} />
+                  <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>暂无用户画像</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
                   {semanticMemory.facts.map((fact) => (
                     <div
                       key={fact.key}
-                      className="p-3 bg-bg-tertiary rounded-lg"
+                      style={{
+                        padding: '12px',
+                        borderRadius: '8px',
+                        backgroundColor: 'var(--bg-tertiary)',
+                      }}
                     >
-                      <div className="text-xs text-text-muted mb-1">{fact.key}</div>
-                      <div className="text-sm font-medium text-text-primary">
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                        {fact.key}
+                      </div>
+                      <div style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>
                         {fact.value}
                       </div>
-                      <div className="text-xs text-text-muted mt-1">
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
                         更新于 {new Date(fact.updated_at).toLocaleDateString('zh-CN')}
                       </div>
                     </div>
@@ -353,7 +366,7 @@ export function Memory() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
+      {/* Delete Modal */}
       <Modal
         isOpen={deleteModalOpen}
         onClose={() => {
@@ -361,13 +374,12 @@ export function Memory() {
           setDeleteTarget(null);
         }}
         title="确认删除"
-        size="sm"
       >
-        <div className="space-y-4">
-          <p className="text-text-secondary">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <p style={{ color: 'var(--text-secondary)' }}>
             确定要删除这条记忆吗？此操作不可恢复。
           </p>
-          <div className="flex gap-3 justify-end">
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
             <Button
               variant="secondary"
               onClick={() => {
@@ -377,7 +389,7 @@ export function Memory() {
             >
               取消
             </Button>
-            <Button variant="primary" onClick={handleDeleteMemory} disabled={deleting}>
+            <Button variant="danger" onClick={handleDeleteMemory} disabled={deleting}>
               {deleting ? '删除中...' : '确认删除'}
             </Button>
           </div>

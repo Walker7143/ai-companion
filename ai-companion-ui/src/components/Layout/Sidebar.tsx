@@ -6,77 +6,218 @@ import {
   Brain,
   Settings,
   X,
+  ChevronLeft,
+  ChevronRight,
+  Bot,
 } from 'lucide-react';
-import { useUIStore } from '../../stores';
-import { cn } from '../../utils/cn';
+
+interface SidebarProps {
+  collapsed: boolean;
+  mobileOpen: boolean;
+  onClose: () => void;
+  onToggle: () => void;
+}
 
 const navItems = [
-  { path: '/', icon: LayoutDashboard, label: '监控', end: true },
-  { path: '/session', icon: MessageSquare, label: '会话' },
-  { path: '/logs', icon: FileText, label: '日志' },
-  { path: '/memory', icon: Brain, label: '记忆' },
+  { path: '/', icon: LayoutDashboard, label: '监控面板', end: true },
+  { path: '/session', icon: MessageSquare, label: '会话管理' },
+  { path: '/logs', icon: FileText, label: '日志查看' },
+  { path: '/memory', icon: Brain, label: '记忆管理' },
   { path: '/settings', icon: Settings, label: '设置' },
 ];
 
-export function Sidebar() {
-  const { sidebarCollapsed, toggleSidebar } = useUIStore();
+export function Sidebar({ collapsed, mobileOpen, onClose, onToggle }: SidebarProps) {
+  const sidebarWidth = collapsed ? '64px' : '240px';
+
+  const baseStyle: React.CSSProperties = {
+    height: '100vh',
+    display: 'flex',
+    flexDirection: 'column',
+    transition: 'width 200ms ease, transform 200ms ease',
+    backgroundColor: 'var(--bg-secondary)',
+    borderRight: '1px solid var(--border-subtle)',
+  };
+
+  // Mobile overlay style
+  const mobileOverlayStyle: React.CSSProperties = {
+    ...baseStyle,
+    position: 'fixed',
+    left: 0,
+    top: 0,
+    width: '240px',
+    zIndex: 50,
+    transform: mobileOpen ? 'translateX(0)' : 'translateX(-100%)',
+  };
+
+  // Desktop collapsible style
+  const desktopStyle: React.CSSProperties = {
+    ...baseStyle,
+    width: sidebarWidth,
+    position: 'relative',
+  };
 
   return (
     <>
       {/* Mobile overlay */}
-      {sidebarCollapsed && (
+      {mobileOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-          onClick={toggleSidebar}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            zIndex: 40,
+          }}
+          className="lg:hidden"
+          onClick={onClose}
         />
       )}
 
+      {/* Sidebar */}
       <aside
-        className={cn(
-          'fixed lg:static inset-y-0 left-0 z-50 w-56 bg-bg-secondary border-r border-border-subtle transform transition-transform duration-200 lg:translate-x-0',
-          sidebarCollapsed ? '-translate-x-full' : 'translate-x-0'
-        )}
+        style={window.innerWidth < 1024 ? mobileOverlayStyle : desktopStyle}
+        className="hidden lg:flex"
       >
-        <div className="flex flex-col h-full">
-          {/* Mobile close button */}
-          <div className="flex items-center justify-between p-4 border-b border-border-subtle lg:hidden">
-            <span className="font-semibold text-text-primary">菜单</span>
-            <button
-              onClick={toggleSidebar}
-              className="p-1 rounded-md text-text-muted hover:text-text-primary hover:bg-bg-tertiary"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Navigation */}
-          <nav className="flex-1 p-4 space-y-1">
-            {navItems.map((item) => (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                end={item.end}
-                onClick={() => {
-                  if (window.innerWidth < 1024) {
-                    toggleSidebar();
-                  }
-                }}
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-                    isActive
-                      ? 'bg-accent text-white'
-                      : 'text-text-secondary hover:bg-bg-tertiary hover:text-text-primary'
-                  )
-                }
-              >
-                <item.icon className="w-5 h-5" />
-                {item.label}
-              </NavLink>
-            ))}
-          </nav>
-        </div>
+        <SidebarContent collapsed={collapsed} onToggle={onToggle} onClose={onClose} />
       </aside>
+
+      {/* Mobile sidebar */}
+      <aside
+        style={mobileOverlayStyle}
+        className="flex lg:hidden"
+      >
+        <SidebarContent collapsed={false} onToggle={onToggle} onClose={onClose} />
+      </aside>
+    </>
+  );
+}
+
+function SidebarContent({
+  collapsed,
+  onToggle,
+  onClose,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      {/* Header */}
+      <div
+        style={{
+          height: '56px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: collapsed ? 'center' : 'space-between',
+          padding: collapsed ? '0' : '0 16px',
+          borderBottom: '1px solid var(--border-subtle)',
+        }}
+      >
+        {collapsed ? (
+          <Bot className="w-6 h-6" style={{ color: 'var(--accent)' }} />
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Bot className="w-6 h-6" style={{ color: 'var(--accent)' }} />
+              <span style={{ fontWeight: 600, fontSize: '15px', color: 'var(--text-primary)' }}>
+                AI Companion
+              </span>
+            </div>
+            <button
+              onClick={onClose}
+              style={{
+                padding: '6px',
+                borderRadius: '4px',
+                border: 'none',
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+                display: 'flex',
+              }}
+              className="lg:hidden"
+            >
+              <X className="w-5 h-5" style={{ color: 'var(--text-muted)' }} />
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Navigation */}
+      <nav
+        style={{
+          flex: 1,
+          padding: '12px 8px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '2px',
+          overflowY: 'auto',
+        }}
+      >
+        {navItems.map((item) => (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            end={item.end}
+            onClick={onClose}
+            style={({ isActive }) => ({
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              padding: collapsed ? '10px' : '10px 12px',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontWeight: 500,
+              textDecoration: 'none',
+              justifyContent: collapsed ? 'center' : 'flex-start',
+              backgroundColor: isActive ? 'var(--accent)' : 'transparent',
+              color: isActive ? '#ffffff' : 'var(--text-secondary)',
+              transition: 'all 150ms ease',
+            })}
+          >
+            <item.icon style={{ width: '20px', height: '20px', flexShrink: 0 }} />
+            {!collapsed && <span>{item.label}</span>}
+          </NavLink>
+        ))}
+      </nav>
+
+      {/* Collapse toggle - desktop only */}
+      <div
+        style={{
+          padding: '8px',
+          borderTop: '1px solid var(--border-subtle)',
+          display: 'flex',
+          justifyContent: collapsed ? 'center' : 'flex-end',
+        }}
+        className="hidden lg:flex"
+      >
+        <button
+          onClick={onToggle}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            padding: '8px',
+            borderRadius: '6px',
+            border: 'none',
+            backgroundColor: 'transparent',
+            cursor: 'pointer',
+            color: 'var(--text-muted)',
+            width: '100%',
+            transition: 'all 150ms ease',
+          }}
+        >
+          {collapsed ? (
+            <ChevronRight style={{ width: '18px', height: '18px' }} />
+          ) : (
+            <>
+              <ChevronLeft style={{ width: '18px', height: '18px' }} />
+              {!collapsed && (
+                <span style={{ fontSize: '13px' }}>收起</span>
+              )}
+            </>
+          )}
+        </button>
+      </div>
     </>
   );
 }

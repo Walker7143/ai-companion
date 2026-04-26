@@ -1,7 +1,16 @@
 import { create } from 'zustand';
-import { listen } from '@tauri-apps/api/event';
-import { logsApi } from '../api/tauri';
-import type { LogParams, LogEntry, LogStreamEvent } from '../types';
+import { logsApi } from '../api';
+import type { LogEntry } from '../types';
+
+interface LogParams {
+  botId: string;
+  level?: string;
+  type?: string;
+  date?: string;
+  query?: string;
+  page: number;
+  pageSize: number;
+}
 
 interface LogState {
   logs: LogEntry[];
@@ -12,23 +21,23 @@ interface LogState {
   loading: boolean;
   streaming: boolean;
   error: string | null;
-  unlistenFn: (() => void) | null;
+  ws: WebSocket | null;
   fetchLogs: (params: Partial<LogParams>) => Promise<void>;
   setPage: (page: number) => void;
   setFilters: (filters: Partial<LogParams>) => void;
-  startStreaming: (botId: string) => Promise<void>;
+  startStreaming: (botId: string, level?: string) => void;
   stopStreaming: () => void;
   exportLogs: (botId: string, format: 'json' | 'csv') => Promise<string>;
 }
 
 const defaultParams: LogParams = {
-  bot_id: '',
+  botId: '',
   level: undefined,
-  log_type: undefined,
+  type: undefined,
   date: undefined,
   query: undefined,
   page: 1,
-  page_size: 20,
+  pageSize: 20,
 };
 
 export const useLogStore = create<LogState>((set, get) => ({
@@ -40,7 +49,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   loading: false,
   streaming: false,
   error: null,
-  unlistenFn: null,
+  ws: null,
 
   fetchLogs: async (params: Partial<LogParams>) => {
     set({ loading: true, error: null });
@@ -48,7 +57,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       const { pageSize } = get();
       const fullParams: LogParams = {
         ...defaultParams,
-        page_size: pageSize,
+        pageSize,
         ...params,
       };
       const data = await logsApi.getLogs(fullParams);
@@ -75,48 +84,51 @@ export const useLogStore = create<LogState>((set, get) => ({
     get().fetchLogs({ page: 1, ...filters });
   },
 
-  startStreaming: async (botId: string) => {
-    const { unlistenFn, streaming } = get();
-    if (streaming || unlistenFn) return;
+  startStreaming: (botId: string, level?: string) => {
+    const { ws, streaming } = get();
+    if (streaming || ws) return;
 
     set({ streaming: true });
 
     try {
-      // Start streaming on backend
-      await logsApi.streamLogs(botId);
+      const { wsUrl } = logsApi.streamLogs(botId, level);
+      const socket = new WebSocket(wsUrl);
 
-      // Listen for log events
-      const unlisten = await listen<LogStreamEvent>('log-event', (event) => {
-        const newLog: LogEntry = {
-          id: event.payload.id,
-          timestamp: event.payload.timestamp,
-          level: event.payload.level,
-          log_type: event.payload.log_type,
-          platform: event.payload.platform,
-          message: event.payload.message,
-          details: null,
-        };
-        set((state) => ({
-          logs: [newLog, ...state.logs].slice(0, 100), // Keep last 100
-          total: state.total + 1,
-        }));
-      });
+      socket.onmessage = (event) => {
+        try {
+          const newLog: LogEntry = JSON.parse(event.data);
+          set((state) => ({
+            logs: [newLog, ...state.logs].slice(0, 100),
+            total: state.total + 1,
+          }));
+        } catch {
+          // Ignore parse errors
+        }
+      };
 
-      set({ unlistenFn: unlisten });
+      socket.onclose = () => {
+        set({ streaming: false, ws: null });
+      };
+
+      socket.onerror = () => {
+        set({ streaming: false, ws: null, error: 'WebSocket error' });
+      };
+
+      set({ ws: socket });
     } catch (err) {
       set({ streaming: false, error: String(err) });
     }
   },
 
   stopStreaming: () => {
-    const { unlistenFn } = get();
-    if (unlistenFn) {
-      unlistenFn();
-      set({ unlistenFn: null, streaming: false });
+    const { ws } = get();
+    if (ws) {
+      ws.close();
+      set({ ws: null, streaming: false });
     }
   },
 
   exportLogs: async (botId: string, format: 'json' | 'csv') => {
-    return logsApi.exportLogs(botId, format, '');
+    return logsApi.exportLogs(botId, format);
   },
 }));

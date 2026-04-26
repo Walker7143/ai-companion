@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { systemApi } from '../api/tauri';
+import { systemApi } from '../api';
 import type { SystemMetrics, BotMetrics } from '../types';
 
 const POLL_INTERVAL = 5000;

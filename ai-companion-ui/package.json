@@ -6,24 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.10",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2",
     "lucide-react": "^1.11.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.14.2",
     "recharts": "^3.8.1",
+    "sonner": "^1.7.0",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
-    "@tailwindcss/forms": "^0.5.11",
     "@tailwindcss/postcss": "^4.2.4",
-    "@tauri-apps/cli": "^2",
     "@types/node": "^25.6.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

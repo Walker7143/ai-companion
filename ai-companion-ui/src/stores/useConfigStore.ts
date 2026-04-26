@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { configApi } from '../api/tauri';
+import { configApi, botsApi } from '../api';
 import type { BotConfig, BotInfo } from '../types';
 
 interface ConfigState {
@@ -9,7 +9,7 @@ interface ConfigState {
   saving: boolean;
   error: string | null;
   fetchConfig: (botId: string) => Promise<void>;
-  updateConfig: (botId: string, config: BotConfig) => Promise<void>;
+  updateConfig: (botId: string, config: Partial<BotConfig>) => Promise<void>;
   fetchAvailableBots: () => Promise<void>;
   testApiConnection: (provider: string, apiKey: string, baseUrl: string) => Promise<boolean>;
 }
@@ -31,11 +31,11 @@ export const useConfigStore = create<ConfigState>((set) => ({
     }
   },
 
-  updateConfig: async (botId: string, config: BotConfig) => {
+  updateConfig: async (botId: string, config: Partial<BotConfig>) => {
     set({ saving: true, error: null });
     try {
       await configApi.updateConfig(botId, config);
-      set({ config, saving: false });
+      set({ saving: false });
     } catch (err) {
       set({ saving: false, error: String(err) });
       throw err;
@@ -44,7 +44,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
 
   fetchAvailableBots: async () => {
     try {
-      const data = await configApi.getAvailableBots();
+      const data = await botsApi.getBots();
       set({ availableBots: data, error: null });
     } catch (err) {
       set({ error: String(err) });
@@ -53,7 +53,7 @@ export const useConfigStore = create<ConfigState>((set) => ({
 
   testApiConnection: async (provider: string, apiKey: string, baseUrl: string) => {
     try {
-      return await configApi.testApiConnection(provider, apiKey, baseUrl);
+      return await configApi.testConnection(provider, apiKey, baseUrl);
     } catch (err) {
       set({ error: String(err) });
       throw err;

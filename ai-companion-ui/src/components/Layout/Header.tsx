@@ -1,31 +1,74 @@
-import { List, Sun, Moon, Bot } from 'lucide-react';
-import { useThemeStore, useBotStore, useUIStore } from '../../stores';
-import { Button } from '../ui';
+import { Sun, Moon, Bot, Menu } from 'lucide-react';
+import { useThemeStore, useBotStore } from '../../stores';
 
-export function Header() {
+interface HeaderProps {
+  onMenuClick: () => void;
+}
+
+export function Header({ onMenuClick }: HeaderProps) {
   const { theme, toggleTheme } = useThemeStore();
   const { bots, currentBotId, setCurrentBot } = useBotStore();
-  const { toggleSidebar } = useUIStore();
 
   return (
-    <header className="h-14 bg-bg-secondary border-b border-border-subtle flex items-center justify-between px-4">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="sm" onClick={toggleSidebar} className="lg:hidden">
-          <List className="w-5 h-5" />
-        </Button>
-        <div className="flex items-center gap-2">
-          <Bot className="w-6 h-6 text-accent" />
-          <span className="font-semibold text-text-primary hidden sm:block">AI Companion</span>
+    <header
+      style={{
+        height: '56px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0 16px',
+        borderBottom: '1px solid var(--border-subtle)',
+        backgroundColor: 'var(--bg-secondary)',
+      }}
+    >
+      {/* Left section */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {/* Mobile menu button */}
+        <button
+          onClick={onMenuClick}
+          style={{
+            padding: '8px',
+            borderRadius: '6px',
+            border: 'none',
+            backgroundColor: 'transparent',
+            cursor: 'pointer',
+            display: 'flex',
+          }}
+          className="lg:hidden"
+        >
+          <Menu className="w-5 h-5" style={{ color: 'var(--text-primary)' }} />
+        </button>
+
+        {/* Logo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Bot className="w-6 h-6" style={{ color: 'var(--accent)' }} />
+          <span
+            className="hidden lg:block"
+            style={{ fontWeight: 600, fontSize: '15px', color: 'var(--text-primary)' }}
+          >
+            AI Companion
+          </span>
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      {/* Right section */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
         {/* Bot Selector */}
-        <div className="relative">
+        <div style={{ position: 'relative' }}>
           <select
             value={currentBotId || ''}
             onChange={(e) => setCurrentBot(e.target.value)}
-            className="appearance-none pl-3 pr-8 py-1.5 rounded-md bg-bg-tertiary border border-border-subtle text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent cursor-pointer"
+            style={{
+              appearance: 'none',
+              padding: '6px 32px 6px 12px',
+              borderRadius: '6px',
+              border: '1px solid var(--border-subtle)',
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-primary)',
+              fontSize: '13px',
+              cursor: 'pointer',
+              outline: 'none',
+            }}
           >
             {bots.map((bot) => (
               <option key={bot.id} value={bot.id}>
@@ -33,13 +76,40 @@ export function Header() {
               </option>
             ))}
           </select>
-          <Bot className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
+          <Bot
+            style={{
+              position: 'absolute',
+              right: '8px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '14px',
+              height: '14px',
+              color: 'var(--text-muted)',
+              pointerEvents: 'none',
+            }}
+          />
         </div>
 
         {/* Theme Toggle */}
-        <Button variant="ghost" size="sm" onClick={toggleTheme}>
-          {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-        </Button>
+        <button
+          onClick={toggleTheme}
+          style={{
+            padding: '8px',
+            borderRadius: '6px',
+            border: 'none',
+            backgroundColor: 'transparent',
+            cursor: 'pointer',
+            display: 'flex',
+            transition: 'background-color 150ms ease',
+          }}
+          title={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+        >
+          {theme === 'dark' ? (
+            <Sun className="w-5 h-5" style={{ color: 'var(--text-primary)' }} />
+          ) : (
+            <Moon className="w-5 h-5" style={{ color: 'var(--text-primary)' }} />
+          )}
+        </button>
       </div>
     </header>
   );

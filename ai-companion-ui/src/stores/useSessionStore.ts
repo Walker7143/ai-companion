@@ -1,16 +1,14 @@
 import { create } from 'zustand';
-import { sessionApi } from '../api/tauri';
-import type { SessionInfo, SessionDetail, ContextDetail } from '../types';
+import { sessionApi } from '../api';
+import type { SessionInfo, SessionDetail } from '../types';
 
 interface SessionState {
   sessions: SessionInfo[];
   selectedSession: SessionDetail | null;
-  sessionContext: ContextDetail | null;
   loading: boolean;
   error: string | null;
   fetchSessions: (botId: string) => Promise<void>;
   fetchSessionDetail: (sessionKey: string) => Promise<void>;
-  fetchSessionContext: (sessionKey: string) => Promise<void>;
   resetSession: (sessionKey: string) => Promise<void>;
   suspendSession: (sessionKey: string) => Promise<void>;
   clearSelectedSession: () => void;
@@ -19,7 +17,6 @@ interface SessionState {
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   selectedSession: null,
-  sessionContext: null,
   loading: false,
   error: null,
 
@@ -38,16 +35,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const data = await sessionApi.getSessionDetail(sessionKey);
       set({ selectedSession: data, loading: false });
-    } catch (err) {
-      set({ loading: false, error: String(err) });
-    }
-  },
-
-  fetchSessionContext: async (sessionKey: string) => {
-    set({ loading: true, error: null });
-    try {
-      const data = await sessionApi.getSessionContext(sessionKey);
-      set({ sessionContext: data, loading: false });
     } catch (err) {
       set({ loading: false, error: String(err) });
     }
@@ -85,6 +72,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   clearSelectedSession: () => {
-    set({ selectedSession: null, sessionContext: null });
+    set({ selectedSession: null });
   },
 }));

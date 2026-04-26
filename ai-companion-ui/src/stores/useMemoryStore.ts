@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { memoryApi } from '../api/tauri';
+import { memoryApi } from '../api';
 import type { MemoryStats, Message, EpisodicItem, SemanticMemory } from '../types';
 
 interface MemoryState {
@@ -17,7 +17,7 @@ interface MemoryState {
   clearAllMemory: (botId: string) => Promise<void>;
 }
 
-export const useMemoryStore = create<MemoryState>((set) => ({
+export const useMemoryStore = create<MemoryState>((set, get) => ({
   stats: null,
   workingMemory: [],
   episodicMemory: [],
@@ -27,7 +27,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
 
   fetchStats: async (botId: string) => {
     try {
-      const data = await memoryApi.getMemoryStats(botId);
+      const data = await memoryApi.getStats(botId);
       set({ stats: data, error: null });
     } catch (err) {
       set({ error: String(err) });
@@ -37,7 +37,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   fetchWorkingMemory: async (botId: string) => {
     set({ loading: true, error: null });
     try {
-      const data = await memoryApi.getWorkingMemory(botId);
+      const data = await memoryApi.getWorking(botId);
       set({ workingMemory: data, loading: false });
     } catch (err) {
       set({ loading: false, error: String(err) });
@@ -47,7 +47,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   fetchEpisodicMemory: async (botId: string, query?: string) => {
     set({ loading: true, error: null });
     try {
-      const data = await memoryApi.getEpisodicMemory(botId, query);
+      const data = await memoryApi.getEpisodic(botId, query);
       set({ episodicMemory: data, loading: false });
     } catch (err) {
       set({ loading: false, error: String(err) });
@@ -57,7 +57,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   fetchSemanticMemory: async (botId: string) => {
     set({ loading: true, error: null });
     try {
-      const data = await memoryApi.getSemanticMemory(botId);
+      const data = await memoryApi.getSemantic(botId);
       set({ semanticMemory: data, loading: false });
     } catch (err) {
       set({ loading: false, error: String(err) });
@@ -85,7 +85,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
 
   clearAllMemory: async (botId: string) => {
     try {
-      await memoryApi.clearAllMemory(botId);
+      await memoryApi.clearAll(botId);
       set({
         stats: null,
         workingMemory: [],
@@ -98,8 +98,3 @@ export const useMemoryStore = create<MemoryState>((set) => ({
     }
   },
 }));
-
-// Helper to get store actions outside of React
-function get() {
-  return useMemoryStore.getState();
-}
