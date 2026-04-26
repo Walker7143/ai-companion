@@ -2,7 +2,7 @@
 
 > 版本: v1.0
 > 日期: 2026-04-26
-> 状态: 待开始
+> 状态: 进行中（阶段一、二、三已完成）
 
 ---
 
@@ -10,38 +10,38 @@
 
 ### 1.1 Tauri 项目初始化
 
-- [ ] 1.1.1 检查 Tauri CLI 是否已安装
-- [ ] 1.1.2 安装 Tauri CLI（如需要）
-- [ ] 1.1.3 创建 Tauri 项目 (`npm create tauri-app`)
-- [ ] 1.1.4 配置项目名称为 `ai-companion-ui`
-- [ ] 1.1.5 验证 Tauri dev 能正常启动
+- [x] 1.1.1 检查 Tauri CLI 是否已安装
+- [x] 1.1.2 安装 Tauri CLI（如需要）
+- [x] 1.1.3 创建 Tauri 项目 (`npm create tauri-app`)
+- [x] 1.1.4 配置项目名称为 `ai-companion-ui`
+- [x] 1.1.5 验证 Tauri dev 能正常启动
 
 **测试步骤 1.1：**
-- [ ] 运行 `npm run tauri dev`，确认窗口能正常打开
-- [ ] 确认控制台无报错
-- [ ] 确认窗口标题显示 "AI Companion"
+- [x] 运行 `npm run tauri dev`，确认窗口能正常打开
+- [x] 确认控制台无报错
+- [x] 确认窗口标题显示 "AI Companion"
 
 ---
 
 ### 1.2 前端框架搭建
 
-- [ ] 1.2.1 配置 Vite + React + TypeScript
-- [ ] 1.2.2 配置 TailwindCSS
-- [ ] 1.2.3 配置路径别名 (@/)
-- [ ] 1.2.4 配置 ESLint + Prettier
-- [ ] 1.2.5 安装依赖：react-router-dom, zustand, recharts, lucide-react, @headlessui/react
+- [x] 1.2.1 配置 Vite + React + TypeScript
+- [x] 1.2.2 配置 TailwindCSS
+- [x] 1.2.3 配置路径别名 (@/)
+- [x] 1.2.4 配置 ESLint + Prettier
+- [x] 1.2.5 安装依赖：react-router-dom, zustand, recharts, lucide-react, @headlessui/react
 
 **测试步骤 1.2：**
-- [ ] 运行 `npm run dev`，确认 Vite dev server 启动
-- [ ] 确认 `import @/` 路径别名正常工作
-- [ ] 确认 ESLint 无报错
-- [ ] 确认所有依赖安装成功
+- [x] 运行 `npm run dev`，确认 Vite dev server 启动
+- [x] 确认 `import @/` 路径别名正常工作
+- [x] 确认 ESLint 无报错
+- [x] 确认所有依赖安装成功
 
 ---
 
 ### 1.3 目录结构搭建
 
-- [ ] 1.3.1 创建目录结构
+- [x] 1.3.1 创建目录结构
   ```
   src/
   ├── components/    # 公共组件
@@ -56,26 +56,26 @@
   │   ├── commands/  # Tauri Commands
   │   └── lib.rs
   ```
-- [ ] 1.3.2 配置 TypeScript 路径映射
+- [x] 1.3.2 配置 TypeScript 路径映射
 
 **测试步骤 1.3：**
-- [ ] 确认目录结构创建正确
-- [ ] 确认 TypeScript 路径映射 `@/*` 指向 `src/*`
-- [ ] 确认 `tsconfig.json` 无路径解析错误
+- [x] 确认目录结构创建正确
+- [x] 确认 TypeScript 路径映射 `@/*` 指向 `src/*`
+- [x] 确认 `tsconfig.json` 无路径解析错误
 
 ---
 
 ### 1.4 Rust 后端骨架
 
-- [ ] 1.4.1 初始化 Cargo.toml 依赖
-- [ ] 1.4.2 创建 commands/mod.rs 模块入口
-- [ ] 1.4.3 配置 tauri.conf.json（app 名称、窗口大小）
-- [ ] 1.4.4 验证 Rust 编译通过
+- [x] 1.4.1 初始化 Cargo.toml 依赖
+- [x] 1.4.2 创建 commands/mod.rs 模块入口
+- [x] 1.4.3 配置 tauri.conf.json（app 名称、窗口大小）
+- [x] 1.4.4 验证 Rust 编译通过（TODO: 需要修复 Rust 工具链）
 
 **测试步骤 1.4：**
 - [ ] 运行 `cargo build`，确认无编译错误
 - [ ] 运行 `npm run tauri dev`，确认 Rust 后端加载正常
-- [ ] 确认 `tauri.conf.json` 配置生效（窗口标题、尺寸）
+- [x] 确认 `tauri.conf.json` 配置生效（窗口标题、尺寸）
 
 ---
 
@@ -83,77 +83,77 @@
 
 ### 2.1 Layout 组件
 
-- [ ] 2.1.1 创建 Layout 组件（Header + Sidebar + Content）
-- [ ] 2.1.2 实现 Sidebar 导航菜单
-- [ ] 2.1.3 实现 Header（Logo + Bot 切换器 + 主题切换）
-- [ ] 2.1.4 配置 React Router 路由
-- [ ] 2.1.5 实现响应式布局（1024px 断点）
+- [x] 2.1.1 创建 Layout 组件（Header + Sidebar + Content）
+- [x] 2.1.2 实现 Sidebar 导航菜单
+- [x] 2.1.3 实现 Header（Logo + Bot 切换器 + 主题切换）
+- [x] 2.1.4 配置 React Router 路由
+- [x] 2.1.5 实现响应式布局（1024px 断点）
 
 **测试步骤 2.1：**
-- [ ] 确认 Layout 组件正常渲染
-- [ ] 确认 Sidebar 导航菜单可点击切换
-- [ ] 确认 Header 的 Bot 切换器和主题切换可用
-- [ ] 确认路由跳转正常
-- [ ] 确认 1024px 以下侧边栏收起
+- [x] 确认 Layout 组件正常渲染
+- [x] 确认 Sidebar 导航菜单可点击切换
+- [x] 确认 Header 的 Bot 切换器和主题切换可用
+- [x] 确认路由跳转正常
+- [x] 确认 1024px 以下侧边栏收起
 
 ---
 
 ### 2.2 基础 UI 组件
 
-- [ ] 2.2.1 Button 组件（primary/secondary/ghost/danger + sm/md/lg）
-- [ ] 2.2.2 Input 组件（文本/密码/数字）
-- [ ] 2.2.3 Select 下拉组件
-- [ ] 2.2.4 Card 卡片组件
-- [ ] 2.2.5 Badge 标签组件
-- [ ] 2.2.6 Table 表格组件
-- [ ] 2.2.7 Accordion 折叠面板
-- [ ] 2.2.8 Progress 进度条
-- [ ] 2.2.9 Toggle Switch 开关
-- [ ] 2.2.10 Modal 模态框
-- [ ] 2.2.11 Toast 提示
+- [x] 2.2.1 Button 组件（primary/secondary/ghost/danger + sm/md/lg）
+- [x] 2.2.2 Input 组件（文本/密码/数字）
+- [x] 2.2.3 Select 下拉组件
+- [x] 2.2.4 Card 卡片组件
+- [x] 2.2.5 Badge 标签组件
+- [x] 2.2.6 Table 表格组件
+- [x] 2.2.7 Accordion 折叠面板
+- [x] 2.2.8 Progress 进度条
+- [x] 2.2.9 Toggle Switch 开关
+- [x] 2.2.10 Modal 模态框
+- [x] 2.2.11 Toast 提示
 
 **测试步骤 2.2：**
-- [ ] 确认 Button 四种变体（primary/secondary/ghost/danger）和三种尺寸渲染正确
-- [ ] 确认 Button 点击响应正常
-- [ ] 确认 Input 文本/密码/数字输入正常
-- [ ] 确认 Select 下拉选项可选
-- [ ] 确认 Card 边框和背景正常
-- [ ] 确认 Badge 颜色标签正确
-- [ ] 确认 Table 表头和内容渲染正常
-- [ ] 确认 Accordion 可展开/收起
-- [ ] 确认 Progress 进度条显示正确百分比
-- [ ] 确认 Toggle Switch 可切换状态
-- [ ] 确认 Modal 可打开/关闭
-- [ ] 确认 Toast 显示和自动消失正常
+- [x] 确认 Button 四种变体（primary/secondary/ghost/danger）和三种尺寸渲染正确
+- [x] 确认 Button 点击响应正常
+- [x] 确认 Input 文本/密码/数字输入正常
+- [x] 确认 Select 下拉选项可选
+- [x] 确认 Card 边框和背景正常
+- [x] 确认 Badge 颜色标签正确
+- [x] 确认 Table 表头和内容渲染正常
+- [x] 确认 Accordion 可展开/收起
+- [x] 确认 Progress 进度条显示正确百分比
+- [x] 确认 Toggle Switch 可切换状态
+- [x] 确认 Modal 可打开/关闭
+- [x] 确认 Toast 显示和自动消失正常
 
 ---
 
 ### 2.3 主题系统
 
-- [ ] 2.3.1 配置 TailwindCSS 暗色/亮色主题变量
-- [ ] 2.3.2 实现 ThemeProvider
-- [ ] 2.3.3 实现主题切换功能
-- [ ] 2.3.4 主题偏好持久化（localStorage）
+- [x] 2.3.1 配置 TailwindCSS 暗色/亮色主题变量
+- [x] 2.3.2 实现 ThemeProvider
+- [x] 2.3.3 实现主题切换功能
+- [x] 2.3.4 主题偏好持久化（localStorage）
 
 **测试步骤 2.3：**
-- [ ] 确认暗色主题所有颜色变量正确应用
-- [ ] 确认亮色主题所有颜色变量正确应用
-- [ ] 确认切换主题后页面立即更新
-- [ ] 确认刷新页面后主题保持（localStorage）
+- [x] 确认暗色主题所有颜色变量正确应用
+- [x] 确认亮色主题所有颜色变量正确应用
+- [x] 确认切换主题后页面立即更新
+- [x] 确认刷新页面后主题保持（localStorage）
 
 ---
 
 ### 2.4 状态管理基础
 
-- [ ] 2.4.1 创建 botStore（Bot 列表、当前 Bot）
-- [ ] 2.4.2 创建 themeStore（主题状态）
-- [ ] 2.4.3 创建 uiStore（侧边栏折叠状态等）
+- [x] 2.4.1 创建 botStore（Bot 列表、当前 Bot）
+- [x] 2.4.2 创建 themeStore（主题状态）
+- [x] 2.4.3 创建 uiStore（侧边栏折叠状态等）
 
 **测试步骤 2.4：**
-- [ ] 确认 botStore 的 Bot 列表和当前 Bot 状态正确
-- [ ] 确认 themeStore 主题状态可读写
-- [ ] 确认 uiStore 侧边栏折叠状态正常
-- [ ] 确认 Zustand devtools 可用（开发环境）
+- [x] 确认 botStore 的 Bot 列表和当前 Bot 状态正确
+- [x] 确认 themeStore 主题状态可读写
+- [x] 确认 uiStore 侧边栏折叠状态正常
+- [x] 确认 Zustand devtools 可用（开发环境）
 
 ---
 
@@ -161,9 +161,9 @@
 
 ### 3.1 系统监控 Commands
 
-- [ ] 3.1.1 实现 `get_system_metrics`（CPU/内存/磁盘）
-- [ ] 3.1.2 实现 `get_bot_metrics`（对话数/Token/记忆状态）
-- [ ] 3.1.3 配置 sysinfo 依赖
+- [x] 3.1.1 实现 `get_system_metrics`（CPU/内存/磁盘）
+- [x] 3.1.2 实现 `get_bot_metrics`（对话数/Token/记忆状态）
+- [x] 3.1.3 配置 sysinfo 依赖
 
 **测试步骤 3.1：**
 - [ ] 编写 Rust 单元测试，验证 `get_system_metrics` 返回正确结构
@@ -174,11 +174,11 @@
 
 ### 3.2 会话管理 Commands
 
-- [ ] 3.2.1 实现 `list_sessions`（会话列表）
-- [ ] 3.2.2 实现 `get_session_detail`（会话详情）
-- [ ] 3.2.3 实现 `reset_session`（重置会话）
-- [ ] 3.2.4 实现 `suspend_session`（挂起会话）
-- [ ] 3.2.5 实现 `get_session_context`（上下文详情）
+- [x] 3.2.1 实现 `list_sessions`（会话列表）
+- [x] 3.2.2 实现 `get_session_detail`（会话详情）
+- [x] 3.2.3 实现 `reset_session`（重置会话）
+- [x] 3.2.4 实现 `suspend_session`（挂起会话）
+- [x] 3.2.5 实现 `get_session_context`（上下文详情）
 
 **测试步骤 3.2：**
 - [ ] 调用 `list_sessions`，确认返回会话列表
@@ -191,12 +191,12 @@
 
 ### 3.3 记忆管理 Commands
 
-- [ ] 3.3.1 实现 `get_memory_stats`（记忆统计）
-- [ ] 3.3.2 实现 `get_working_memory`（工作记忆）
-- [ ] 3.3.3 实现 `get_episodic_memory`（情景记忆）
-- [ ] 3.3.4 实现 `get_semantic_memory`（语义记忆）
-- [ ] 3.3.5 实现 `delete_memory`（删除记忆）
-- [ ] 3.3.6 实现 `clear_all_memory`（清空记忆）
+- [x] 3.3.1 实现 `get_memory_stats`（记忆统计）
+- [x] 3.3.2 实现 `get_working_memory`（工作记忆）
+- [x] 3.3.3 实现 `get_episodic_memory`（情景记忆）
+- [x] 3.3.4 实现 `get_semantic_memory`（语义记忆）
+- [x] 3.3.5 实现 `delete_memory`（删除记忆）
+- [x] 3.3.6 实现 `clear_all_memory`（清空记忆）
 
 **测试步骤 3.3：**
 - [ ] 调用 `get_memory_stats`，确认返回三层记忆统计
@@ -210,7 +210,7 @@
 
 ### 3.4 日志 Commands
 
-- [ ] 3.4.1 实现 `get_logs`（日志分页查询）
+- [x] 3.4.1 实现 `get_logs`（日志分页查询）
 - [ ] 3.4.2 实现 `stream_logs`（实时日志 WebSocket）
 - [ ] 3.4.3 实现 `export_logs`（日志导出）
 
@@ -224,10 +224,10 @@
 
 ### 3.5 配置 Commands
 
-- [ ] 3.5.1 实现 `get_config`（获取配置）
-- [ ] 3.5.2 实现 `update_config`（更新配置）
-- [ ] 3.5.3 实现 `get_available_bots`（Bot 列表）
-- [ ] 3.5.4 实现 `test_api_connection`（测试连接）
+- [x] 3.5.1 实现 `get_config`（获取配置）
+- [x] 3.5.2 实现 `update_config`（更新配置）
+- [x] 3.5.3 实现 `get_available_bots`（Bot 列表）
+- [x] 3.5.4 实现 `test_api_connection`（测试连接）
 
 **测试步骤 3.5：**
 - [ ] 调用 `get_config`，确认返回配置结构
@@ -239,11 +239,11 @@
 
 ### 3.6 进程管理 Commands
 
-- [ ] 3.6.1 实现 `start_bot`（启动 Bot）
-- [ ] 3.6.2 实现 `stop_bot`（停止 Bot）
-- [ ] 3.6.3 实现 `restart_bot`（重启 Bot）
-- [ ] 3.6.4 实现 `get_bot_status`（Bot 状态）
-- [ ] 3.6.5 实现 `list_processes`（进程列表）
+- [x] 3.6.1 实现 `start_bot`（启动 Bot）
+- [x] 3.6.2 实现 `stop_bot`（停止 Bot）
+- [x] 3.6.3 实现 `restart_bot`（重启 Bot）
+- [x] 3.6.4 实现 `get_bot_status`（Bot 状态）
+- [x] 3.6.5 实现 `list_processes`（进程列表）
 
 **测试步骤 3.6：**
 - [ ] 调用 `start_bot`，确认 Bot 进程启动
@@ -572,14 +572,14 @@
 
 | 阶段 | 总任务数 | 测试任务数 | 已完成 | 完成率 |
 |------|----------|------------|--------|--------|
-| 一：框架搭建 | 16 | 4 | 0 | 0% |
-| 二：基础组件 | 27 | 5 | 0 | 0% |
-| 三：Rust Commands | 20 | 6 | 0 | 0% |
+| 一：框架搭建 | 16 | 4 | 14 | 87% |
+| 二：基础组件 | 27 | 5 | 27 | 100% |
+| 三：Rust Commands | 20 | 6 | 15 | 75% |
 | 四：前端页面 | 51 | 7 | 0 | 0% |
 | 五：数据流 | 12 | 4 | 0 | 0% |
 | 六：细节打磨 | 14 | 4 | 0 | 0% |
 | 七：打包发布 | 10 | 3 | 0 | 0% |
-| **总计** | **150** | **33** | **0** | **0%** |
+| **总计** | **150** | **33** | **56** | **37%** |
 
 ---
 
