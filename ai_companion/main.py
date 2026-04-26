@@ -138,5 +138,5 @@ def show_status():
     bots = config.get_enabled_bots()
     print(f"已配置 Bot: {len(bots)}")
     for b in bots:
-        status = "✓" if b.get("enabled") else "✗"
+        status = "[OK]" if b.get("enabled") else "[ERROR]"
         print(f"  [{status}] {b['name']} ({b['id']})")

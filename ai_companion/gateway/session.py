@@ -286,7 +286,7 @@ def build_session_context_prompt(
     platforms_list = ["local (files on this machine)"]
     for p in context.connected_platforms:
         if p != Platform.LOCAL:
-            platforms_list.append(f"{p.value}: Connected ✓")
+            platforms_list.append(f"{p.value}: Connected [OK]")
     
     lines.append(f"**Connected Platforms:** {', '.join(platforms_list)}")
     

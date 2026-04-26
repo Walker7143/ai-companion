@@ -190,7 +190,7 @@ def show_gateway_status() -> None:
         print(f"[OK] Gateway 运行中 (PID: {pid})")
         print(f"  日志文件: {GATEWAY_LOG_FILE}")
     else:
-        print("✗ Gateway 未运行")
+        print("[ERROR] Gateway 未运行")
 
 
 def tail_logs(lines: int = 50) -> None:
