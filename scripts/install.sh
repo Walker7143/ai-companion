@@ -155,6 +155,21 @@ install_local() {
     $VENV_PIP install -e .
     echo "✓ AI Companion 已安装"
 
+    # Install frontend UI dependencies (for management dashboard)
+    if [ -f "$PROJECT_DIR/ai-companion-ui/package.json" ]; then
+        echo ""
+        echo "📦 安装前端 UI 依赖..."
+        if command -v npm &> /dev/null; then
+            if npm install --prefix "$PROJECT_DIR/ai-companion-ui"; then
+                echo "✓ 前端依赖已安装"
+            else
+                echo "⚠️  前端依赖安装失败（管理后台需要手动 npm install）"
+            fi
+        else
+            echo "⚠️  npm 未找到，跳过前端 UI（管理后台需要 npm）"
+        fi
+    fi
+
     echo ""
     echo "⚙️  初始化配置..."
     if [ ! -f "$USER_DIR/config.yaml" ]; then

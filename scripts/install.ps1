@@ -231,6 +231,23 @@ function Install-Local {
         Set-Location $originalDir
     }
 
+    # Install frontend UI dependencies (for management dashboard)
+    $uiDir = "$ProjectDir\ai-companion-ui"
+    if (Test-Path "$uiDir\package.json") {
+        Write-Host ""
+        Write-Host "Installing frontend UI dependencies..." -ForegroundColor Yellow
+        if (Get-Command npm -ErrorAction SilentlyContinue) {
+            npm install --prefix "$uiDir"
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[OK] Frontend dependencies installed" -ForegroundColor Green
+            } else {
+                Write-Host "[WARN] Frontend dependencies failed (dashboard may need manual setup)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "[WARN] npm not found, skipping frontend UI (管理后台需要 npm)" -ForegroundColor Yellow
+        }
+    }
+
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "Installation complete!" -ForegroundColor Green
