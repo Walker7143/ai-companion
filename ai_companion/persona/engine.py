@@ -65,7 +65,7 @@ class PersonaEngine:
 
     def _load_json(self, path) -> dict:
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}

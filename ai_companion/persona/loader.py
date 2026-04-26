@@ -32,5 +32,5 @@ class PersonaLoader:
         path = self.dir / filename
         if not path.exists():
             return {}
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
