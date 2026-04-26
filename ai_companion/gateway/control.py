@@ -55,50 +55,56 @@ def ensure_log_dir() -> None:
 
 def stop_gateway(silent: bool = False) -> bool:
     """停止 gateway 进程及其子进程（包括 UI）"""
-    pid = get_gateway_pid()
-    if not pid:
+    # 读取 PID 文件，不依赖 os.kill 验证
+    pid = None
+    if GATEWAY_PID_FILE.exists():
+        try:
+            pid = int(GATEWAY_PID_FILE.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            pass
+
+    # 尝试杀死进程（不管 os.kill 验证结果如何）
+    if pid:
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+            else:
+                os.kill(-pid, signal.SIGTERM)
+        except FileNotFoundError:
+            pass  # 进程已不存在
+        except ProcessLookupError:
+            pass
+        except OSError:
+            pass
+
+    # 等待进程退出
+    for _ in range(5):
+        if pid is None or not is_gateway_running():
+            break
+        time.sleep(0.5)
+    else:
+        # 强制杀死
+        if pid:
+            try:
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                else:
+                    os.kill(-pid, signal.SIGKILL)
+            except (FileNotFoundError, ProcessLookupError, OSError):
+                pass
+        time.sleep(1)
+
+    if pid is not None and is_gateway_running():
         if not silent:
+            print(f"[ERROR] 无法停止 Gateway (PID: {pid})，请手动结束进程")
+        elif not silent:
             print("[ERROR] Gateway 未运行")
         return False
 
-    try:
-        if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
-            time.sleep(1)
-        else:
-            # 使用负 PID 触发 process group kill（session leader 的 PGID = PID）
-            # 这会同时杀死网关和其子进程（UI）
-            try:
-                os.kill(-pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            # 等待进程退出
-            for _ in range(10):
-                try:
-                    os.kill(pid, 0)
-                    time.sleep(0.5)
-                except ProcessLookupError:
-                    break
-            else:
-                # 强制杀死
-                try:
-                    os.kill(-pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-
-        remove_gateway_pid()
-        if not silent:
-            print("[OK] Gateway 已停止")
-        return True
-    except ProcessLookupError:
-        remove_gateway_pid()
-        if not silent:
-            print("[OK] Gateway 已停止")
-        return True
-    except Exception as e:
-        if not silent:
-            print(f"[ERROR] 停止失败: {e}")
-        return False
+    remove_gateway_pid()
+    if not silent:
+        print("[OK] Gateway 已停止")
+    return True
 
 
 def start_gateway(sync: bool = False) -> int | None:
