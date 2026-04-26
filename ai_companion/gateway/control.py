@@ -35,7 +35,7 @@ def get_gateway_pid() -> int | None:
 def save_gateway_pid(pid: int) -> None:
     """保存 gateway PID"""
     GATEWAY_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    GATEWAY_PID_FILE.write_text(str(pid))
+    GATEWAY_PID_FILE.write_text(str(pid), encoding="utf-8")
 
 
 def remove_gateway_pid() -> None:
@@ -102,7 +102,7 @@ def start_gateway(sync: bool = False) -> int | None:
 
     # 启动进程
     cmd = [sys.executable, "-m", "ai_companion.gateway"]
-    with open(GATEWAY_LOG_FILE, "a") as log_file:
+    with open(GATEWAY_LOG_FILE, "a", encoding="utf-8") as log_file:
         process = subprocess.Popen(
             cmd,
             stdout=log_file,
@@ -128,7 +128,7 @@ def start_gateway(sync: bool = False) -> int | None:
         # 实时输出日志
         print("\n=== Gateway 日志 ===")
         try:
-            with open(GATEWAY_LOG_FILE, "r") as f:
+            with open(GATEWAY_LOG_FILE, "r", encoding="utf-8") as f:
                 f.seek(0, 2)  # 跳到末尾
                 while is_gateway_running():
                     line = f.readline()
@@ -196,7 +196,7 @@ def tail_logs(lines: int = 50) -> None:
 
     print(f"=== Gateway 最新 {lines} 行日志 ===")
     try:
-        with open(GATEWAY_LOG_FILE, "r") as f:
+        with open(GATEWAY_LOG_FILE, "r", encoding="utf-8") as f:
             all_lines = f.readlines()
             for line in all_lines[-lines:]:
                 print(line, end="")
