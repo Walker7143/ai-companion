@@ -103,14 +103,20 @@ class MiniMaxAdapter(ModelAdapter):
         # 所有重试都失败后，返回错误信息由调用者处理
         raise RuntimeError(f"网络不稳定，MiniMax 请求失败（已重试 {MAX_RETRIES} 次）")
 
-    async def embeddings(self, texts: list[str]) -> list[list[float]]:
-        """调用 MiniMax embeddings API，带重试"""
+    async def embeddings(self, texts: list[str], type: str = "db") -> list[list[float]]:
+        """
+        调用 MiniMax embeddings API，带重试
+
+        Args:
+            texts: 文本列表
+            type: embedding 类型，"db" 用于存储，"query" 用于查询
+        """
         url = f"{self.base_url}/embeddings"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        payload = {"model": "embo-01", "texts": texts}
+        payload = {"model": "embo-01", "texts": texts, "type": type}
 
         last_error = None
         for attempt in range(MAX_RETRIES):
@@ -118,7 +124,17 @@ class MiniMaxAdapter(ModelAdapter):
                 session = await self._get_session()
                 async with session.post(url, headers=headers, json=payload) as resp:
                     data = await resp.json()
-                    return [item["embedding"] for item in data["data"]]
+                    # 检查 API 返回状态
+                    if base_resp := data.get("base_resp"):
+                        status_code = base_resp.get("status_code", 0)
+                        if status_code != 0:
+                            status_msg = base_resp.get("status_msg", "unknown error")
+                            raise RuntimeError(f"MiniMax embeddings API error {status_code}: {status_msg}")
+                    # 解析 vectors
+                    vectors = data.get("vectors")
+                    if vectors is None:
+                        raise RuntimeError("MiniMax embeddings API returned no vectors")
+                    return [item["embedding"] for item in vectors]
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_error = e
                 if attempt < MAX_RETRIES - 1:
