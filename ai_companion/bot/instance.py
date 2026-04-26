@@ -160,6 +160,7 @@ class BotInstance:
             self.proactive_scheduler = ProactiveScheduler(self.proactive_engine)
             self.proactive_scheduler.set_dependencies(self.model, self.memory)
             await self.proactive_scheduler.start()
+            print(f"[OK] {self.name} 人生轨迹已启动")
 
     async def handle_message(self, user_input: str) -> str:
         """处理用户消息，返回回复"""

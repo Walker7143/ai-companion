@@ -16,8 +16,17 @@ sys.path.insert(0, str(_vendor_dir))
 from ai_companion.gateway.cmd import run_gateway
 
 if __name__ == "__main__":
+    # Windows 控制台需要设置编码
+    if sys.platform == "win32":
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+        ]
     )
     asyncio.run(run_gateway())
