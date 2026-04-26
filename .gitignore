@@ -51,6 +51,9 @@ data/bots/*/*.db
 data/bots/*/*.db-wal
 data/bots/*/*.db-shm
 data/bots/*/proactive_state.json
+data/bots/*/life_state.json
+data/suqing/
+data/suqing/memory/
 
 # Built-in bot templates (keep these tracked)
 # Bot persona files are templates that get copied to user dir on setup

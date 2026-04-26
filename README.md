@@ -287,10 +287,10 @@ cp -r data/bots/_template data/bots/mybot
 
 ```bash
 # 单元/集成测试（181 个测试用例）
-python test_comprehensive.py
+python tests/test_comprehensive.py
 
 # 真实使用场景测试（10 项核心功能验证）
-python test_real_usage.py
+python tests/test_real_usage.py
 ```
 
 测试覆盖：配置加载、模型对话、人格系统、记忆系统、BotInstance、主动唤醒、上下文压缩、会话管理、技能系统、Gateway
