@@ -81,7 +81,7 @@ async def run_gateway():
         api_key = model_cfg.get("api_key", "")
 
     if not api_key or api_key.startswith("${"):
-        print("❌ API Key 未配置")
+        print("[ERROR] API Key 未配置")
         print("")
         print("请先配置 API Key：")
         print("  1. 设置环境变量: export MINIMAX_API_KEY='your_key'")
@@ -170,7 +170,7 @@ async def run_gateway():
 
     success = await adapter.connect()
     if not success:
-        print("❌ 飞书连接失败")
+        print("[ERROR] 飞书连接失败")
         print(f"   错误: {adapter.fatal_error_message or '未知错误'}")
         sys.exit(1)
 

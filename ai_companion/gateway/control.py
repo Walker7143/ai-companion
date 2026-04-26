@@ -124,10 +124,10 @@ def start_gateway(sync: bool = False) -> int | None:
 
         # 检查是否启动成功
         if not is_gateway_running():
-            print("❌ Gateway 启动失败")
+            print("[ERROR] Gateway 启动失败")
             return None
 
-        print(f"✓ Gateway 已启动 (PID: {process.pid})")
+        print(f"[OK] Gateway 已启动 (PID: {process.pid})")
         print(f"  日志文件: {GATEWAY_LOG_FILE}")
 
         # 实时输出日志
@@ -147,7 +147,7 @@ def start_gateway(sync: bool = False) -> int | None:
         return None
     else:
         # 异步模式：后台运行
-        print(f"✓ Gateway 已启动 (PID: {process.pid})")
+        print(f"[OK] Gateway 已启动 (PID: {process.pid})")
         print(f"  日志文件: {GATEWAY_LOG_FILE}")
         print("  使用 'python -m ai_companion gateway logs' 查看日志")
         return process.pid
@@ -187,7 +187,7 @@ def show_gateway_status() -> None:
     """显示 gateway 状态"""
     pid = get_gateway_pid()
     if pid:
-        print(f"✓ Gateway 运行中 (PID: {pid})")
+        print(f"[OK] Gateway 运行中 (PID: {pid})")
         print(f"  日志文件: {GATEWAY_LOG_FILE}")
     else:
         print("✗ Gateway 未运行")
@@ -196,7 +196,7 @@ def show_gateway_status() -> None:
 def tail_logs(lines: int = 50) -> None:
     """输出 gateway 最新日志"""
     if not GATEWAY_LOG_FILE.exists():
-        print("❌ 日志文件不存在")
+        print("[ERROR] 日志文件不存在")
         return
 
     print(f"=== Gateway 最新 {lines} 行日志 ===")
