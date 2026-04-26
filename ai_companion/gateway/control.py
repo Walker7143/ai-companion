@@ -54,7 +54,7 @@ def ensure_log_dir() -> None:
 
 
 def stop_gateway(silent: bool = False) -> bool:
-    """停止 gateway 进程"""
+    """停止 gateway 进程及其子进程（包括 UI）"""
     pid = get_gateway_pid()
     if not pid:
         if not silent:
@@ -63,11 +63,15 @@ def stop_gateway(silent: bool = False) -> bool:
 
     try:
         if sys.platform == "win32":
-            # Windows: 使用 taskkill 替代信号
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
             time.sleep(1)
         else:
-            os.kill(pid, signal.SIGTERM)
+            # 使用负 PID 触发 process group kill（session leader 的 PGID = PID）
+            # 这会同时杀死网关和其子进程（UI）
+            try:
+                os.kill(-pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             # 等待进程退出
             for _ in range(10):
                 try:
@@ -77,7 +81,10 @@ def stop_gateway(silent: bool = False) -> bool:
                     break
             else:
                 # 强制杀死
-                os.kill(pid, signal.SIGKILL)
+                try:
+                    os.kill(-pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
         remove_gateway_pid()
         if not silent:
