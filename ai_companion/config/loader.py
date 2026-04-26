@@ -36,7 +36,7 @@ class Config:
         path = self._find_file(filename)
         if not path:
             return {}
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
         data = yaml.safe_load(content) or {}
         self._expand_env_vars(data)
