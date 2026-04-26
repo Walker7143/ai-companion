@@ -114,7 +114,7 @@ class ProactiveConfig:
         return self._config.get("scheduler", {}).get("max_daily", 5)
 
     @property
-    def min_interval_hours(self) -> int:
+    def min_interval_hours(self) -> float:
         return self._config.get("scheduler", {}).get("min_interval_hours", 4)
 
     @property

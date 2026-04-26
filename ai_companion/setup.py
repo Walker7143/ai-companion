@@ -235,7 +235,7 @@ async def run_setup():
             "mode": proactive_mode,
             "check_interval": 60,
             "idle_threshold_hours": int(default_idle),
-            "min_interval_hours": int(default_min_interval),
+            "min_interval_hours": float(default_min_interval),
             "max_daily": int(default_max_daily),
             "emotion_trigger_enabled": True,
             "emotion_keywords": ["难过", "伤心", "生气", "委屈", "累"],
