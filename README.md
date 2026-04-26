@@ -340,6 +340,55 @@ curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/script
 
 ---
 
+## 卸载
+
+### 本地安装卸载
+
+```bash
+# 1. 停止网关服务（如有运行）
+python -m ai_companion gateway stop
+
+# 2. 删除 Python 包
+pip uninstall ai-companion -y
+
+# 3. 删除数据目录（可选，会删除所有 Bot 配置和记忆）
+rm -rf ~/.ai-companion
+
+# 4. 如果使用了虚拟环境
+rm -rf ~/.ai-companion/.venv
+```
+
+### Windows
+
+```powershell
+# 1. 停止网关服务
+python -m ai_companion gateway stop
+
+# 2. 卸载 Python 包
+pip uninstall ai-companion -y
+
+# 3. 删除数据目录
+Remove-Item -Recurse -Force ~/.ai-companion
+
+# 4. 如使用虚拟环境
+Remove-Item -Recurse -Force ~/.ai-companion/.venv
+```
+
+### Docker 卸载
+
+```bash
+# 停止并删除容器
+docker-compose -f ~/.ai-companion/docker-compose.yml down
+
+# 删除数据卷
+docker volume rm ai-companion-data 2>/dev/null
+
+# 删除安装目录
+rm -rf ~/.ai-companion
+```
+
+---
+
 ## 注意事项
 
 - **Python 版本**：本地安装需要 Python 3.11+

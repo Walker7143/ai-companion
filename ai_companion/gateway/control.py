@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 # 项目根目录
-_project_root = Path(__file__).parent.parent.parent.parent
+_project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
 GATEWAY_PID_FILE = Path.home() / ".ai-companion" / "gateway.pid"
@@ -22,11 +22,11 @@ def get_gateway_pid() -> int | None:
     if not GATEWAY_PID_FILE.exists():
         return None
     try:
-        pid = int(GATEWAY_PID_FILE.read_text().strip())
+        pid = int(GATEWAY_PID_FILE.read_text(encoding="utf-8").strip())
         # 检查进程是否存在
         os.kill(pid, 0)
         return pid
-    except (ValueError, FileNotFoundError, ProcessLookupError):
+    except (ValueError, FileNotFoundError, ProcessLookupError, OSError):
         # 清理无效的 PID 文件
         GATEWAY_PID_FILE.unlink(missing_ok=True)
         return None

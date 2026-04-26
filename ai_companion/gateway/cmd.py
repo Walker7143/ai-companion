@@ -11,7 +11,7 @@ import yaml
 from pathlib import Path
 
 # 添加项目根目录到 path
-_project_root = Path(__file__).parent.parent.parent.parent
+_project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
 from ai_companion.config.loader import Config
@@ -31,7 +31,7 @@ def get_data_dir() -> Path:
     user_dir = Path.home() / ".ai-companion" / "data" / "bots"
     if user_dir.exists():
         return user_dir
-    return Path(__file__).parent.parent.parent.parent / "data" / "bots"
+    return Path(__file__).parent.parent.parent / "data" / "bots"
 
 
 def load_feishu_config() -> dict:

@@ -175,7 +175,7 @@ async def run_setup():
             console.print(f"✓ [green]{bot_name}[/green] 已添加")
         else:
             console.print(f"[yellow]⚠ 模板 {bot_id} 不存在，已创建空 Bot[/yellow]")
-            (data_dir / "data" / "bots" / bot_id).mkdir(parents=True, exist_ok=True)
+            (data_dir / "data" / "bots" / bot_id / "persona").mkdir(parents=True, exist_ok=True)
 
         created_bots.append({"id": bot_id, "name": bot_name})
 

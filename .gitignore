@@ -39,7 +39,14 @@ env/
 .LSOverride
 
 # Project specific
+# Note: data/bots/ contains built-in bot templates and should be tracked
 data/
+
+# But keep memory/database files ignored (user data)
+data/bots/*/memory/
+data/bots/*/*.db
+data/bots/*/*.db-wal
+data/bots/*/*.db-shm
 
 # Test files
 test_*.py
