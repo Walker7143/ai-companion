@@ -29,7 +29,7 @@ from ai_companion.bot.instance import BotInstance
 from ai_companion.gateway.config import Platform, PlatformConfig
 from ai_companion.gateway.platforms.feishu import FeishuAdapter
 from ai_companion.gateway.router import PlatformRouter
-from ai_companion.gateway.control import GATEWAY_PID_FILE, save_gateway_pid, remove_gateway_pid
+from ai_companion.gateway.control import GATEWAY_PID_FILE, GATEWAY_LOG_FILE, save_gateway_pid, remove_gateway_pid
 
 logger = logging.getLogger(__name__)
 
@@ -86,21 +86,33 @@ def _start_ui_server() -> bool:
 
     print("[OK] 正在启动 UI 服务器...")
     try:
+        # Open gateway log file for UI server output
+        GATEWAY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        log_file = open(GATEWAY_LOG_FILE, "a", encoding="utf-8")
         _ui_process = subprocess.Popen(
             ["npm", "run", "dev"],
             cwd=str(ui_dir),
-            stdout=subprocess.PIPE,
+            stdout=log_file,
             stderr=subprocess.STDOUT,
         )
         # Give it a moment to fail immediately (e.g. port in use)
         import time
         time.sleep(3)
         if _ui_process.poll() is not None:
-            # Process already exited - capture output and report
-            output = _ui_process.stdout.read() if _ui_process.stdout else ""
+            # Process already exited - capture output from log file tail
+            log_file.close()
+            try:
+                with open(GATEWAY_LOG_FILE, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                # Find recent UI-related log entries
+                ui_lines = [l for l in lines[-50:] if "vite" in l.lower() or "ui" in l.lower() or "1421" in l]
+                output = "".join(ui_lines[-10:]) if ui_lines else ""
+            except Exception:
+                output = ""
             print(f"[ERROR] UI 服务器启动后立即退出")
             print(f"       请手动启动排查: cd {ui_dir} && npm run dev")
-            print(f"       输出: {output[:500]}")
+            if output:
+                print(f"       最近日志: {output[:300]}")
             _ui_process = None
             return False
         print(f"[OK] UI 服务器已启动 (PID: {_ui_process.pid})")
