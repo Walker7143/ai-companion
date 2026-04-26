@@ -62,17 +62,22 @@ def stop_gateway(silent: bool = False) -> bool:
         return False
 
     try:
-        os.kill(pid, signal.SIGTERM)
-        # 等待进程退出
-        for _ in range(10):
-            try:
-                os.kill(pid, 0)
-                time.sleep(0.5)
-            except ProcessLookupError:
-                break
+        if sys.platform == "win32":
+            # Windows: 使用 taskkill 替代信号
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+            time.sleep(1)
         else:
-            # 强制杀死
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, signal.SIGTERM)
+            # 等待进程退出
+            for _ in range(10):
+                try:
+                    os.kill(pid, 0)
+                    time.sleep(0.5)
+                except ProcessLookupError:
+                    break
+            else:
+                # 强制杀死
+                os.kill(pid, signal.SIGKILL)
 
         remove_gateway_pid()
         if not silent:
