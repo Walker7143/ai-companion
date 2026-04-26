@@ -94,11 +94,18 @@ ai_companion/
 │       ├── ollama_adapter.py   # Ollama 本地
 │       └── custom_adapter.py   # 自定义 HTTP API
 ├── gateway/          # 消息网关
-│   ├── session.py    # SessionStore - 会话管理
-│   ├── delivery.py   # DeliveryRouter - 消息投递
+│   ├── cmd.py        # Admin API + 网关入口
+│   ├── control.py    # 网关进程管理（启动/停止）
 │   └── platforms/    # 平台适配
 └── _vendor/          # 第三方库（vendored）
     └── gw_cli/       # Gateway CLI 工具
+
+ai-companion-ui/      # 管理后台 Web UI
+├── src/
+│   ├── pages/        # 页面（Dashboard/Session/Memory/Settings）
+│   ├── stores/       # Zustand 状态管理
+│   └── api/          # 前端 API 调用层
+└── vite.config.ts   # Vite 构建配置
 ```
 
 ---
@@ -232,11 +239,13 @@ ai-companion start --bot suqing  # 指定 Bot
 ### 飞书网关服务
 
 ```bash
-ai-companion gateway start    # 后台启动
+ai-companion gateway start    # 后台启动（自动打开管理后台 UI）
 ai-companion gateway start --sync  # 前台启动
-ai-companion gateway stop     # 停止
+ai-companion gateway stop     # 停止（同时关闭 UI）
 ai-companion gateway logs     # 查看日志
 ```
+
+**管理后台**: 启动后访问 http://localhost:1421，可视化管理所有 Bot 的会话、记忆、配置、日志。
 
 ### 内置命令
 
@@ -421,6 +430,8 @@ A: `rm -rf ~/.ai-companion/data/bots/{bot_id}/memory/*.db`
 | [使用指南](./docs/GUIDE.md) | 详细的配置说明和功能介绍 |
 | [主动唤醒设计](./docs/DESIGN_phase5_proactive.md) | 主动唤醒架构和算法设计 |
 | [主动唤醒实现](./docs/IMPLEMENTATION_phase5_proactive.md) | 主动唤醒实现细节 |
+| [UI 设计方案](./docs/ui/UI_DESIGN.md) | 管理后台设计规范 |
+| [UI 产品规格](./docs/ui/UI_SPEC.md) | 管理后台功能清单 |
 
 ---
 
