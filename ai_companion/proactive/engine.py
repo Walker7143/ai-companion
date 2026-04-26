@@ -359,7 +359,7 @@ class ProactiveEngine:
             # 尝试从 profile.json 读取
             profile_path = Path(self.memory.persona_backstory_path).parent / "profile.json"
             if profile_path.exists():
-                with open(profile_path) as f:
+                with open(profile_path, encoding="utf-8") as f:
                     profile = json.load(f)
                 tags = "".join(profile.get("personality_tags", []))
                 if "傲娇" in tags or "外冷内热" in tags:

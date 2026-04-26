@@ -148,7 +148,7 @@ class PersonaUpdater:
         for fname in ["profile.json", "backstory.json", "values.json", "speaking_style.json"]:
             fpath = persona_dir / fname
             if fpath.exists():
-                with open(fpath) as f:
+                with open(fpath, encoding="utf-8") as f:
                     files_content[fname] = json.load(f)
 
         # 构建 LLM prompt
@@ -196,7 +196,7 @@ class PersonaUpdater:
             path = persona_dir / fname
             fd, tmp = tempfile.mkstemp(dir=persona_dir, suffix=".tmp")
             try:
-                with os.fdopen(fd, "w") as f:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 staged[fname] = tmp
             except Exception:

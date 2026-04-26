@@ -430,13 +430,13 @@ class SemanticStore:
         if not self._persona_backstory_path:
             return
         try:
-            with open(self._persona_backstory_path) as f:
+            with open(self._persona_backstory_path, encoding="utf-8") as f:
                 data = json.load(f)
             moments = data.get("key_moments", [])
             if moment not in moments:
                 moments.append(moment)
                 data["key_moments"] = moments
-                with open(self._persona_backstory_path, "w") as f:
+                with open(self._persona_backstory_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 logger.info(f"[Semantic]  key_moment 已写回人格文件: {moment[:30]}...")
         except Exception as e:
@@ -451,12 +451,12 @@ class SemanticStore:
             # persona_backstory_path = data/bots/suqing/persona/backstory.json
             # profile.json 和 backstory.json 同一目录（persona/）
             profile_path = os.path.join(os.path.dirname(self._persona_backstory_path), "profile.json")
-            with open(profile_path) as f:
+            with open(profile_path, encoding="utf-8") as f:
                 data = json.load(f)
             old_rel = data.get("relationship_to_user", "")
             if old_rel != relationship:
                 data["relationship_to_user"] = relationship
-                with open(profile_path, "w") as f:
+                with open(profile_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
                 logger.info(f"[Semantic]  relationship 已更新: {old_rel} -> {relationship}")
         except Exception as e:
@@ -469,10 +469,10 @@ class SemanticStore:
         try:
             import os
             profile_path = os.path.join(os.path.dirname(self._persona_backstory_path), "profile.json")
-            with open(profile_path) as f:
+            with open(profile_path, encoding="utf-8") as f:
                 data = json.load(f)
             data["attitude_score"] = new_score
-            with open(profile_path, "w") as f:
+            with open(profile_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             logger.info(f"[Semantic]  attitude_score 已写回 profile.json: {new_score}")
         except Exception as e:

@@ -25,7 +25,7 @@ class ProactiveState:
         """从文件加载状态"""
         if self.state_file.exists():
             try:
-                with open(self.state_file) as f:
+                with open(self.state_file, encoding="utf-8") as f:
                     self._state = json.load(f)
                 # 合并新字段（确保新版本添加的字段有默认值）
                 defaults = self._default_state()
@@ -70,7 +70,7 @@ class ProactiveState:
         """保存状态到文件"""
         try:
             self.data_dir.mkdir(parents=True, exist_ok=True)
-            with open(self.state_file, "w") as f:
+            with open(self.state_file, "w", encoding="utf-8") as f:
                 json.dump(self._state, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"[ProactiveState] 保存状态失败: {e}")

@@ -58,7 +58,7 @@ class ProactiveConfig:
         """加载配置文件"""
         if self.config_path.exists():
             try:
-                with open(self.config_path) as f:
+                with open(self.config_path, encoding="utf-8") as f:
                     self._config = self._deep_merge(self.DEFAULT_CONFIG, json.load(f))
                 logger.info(f"[ProactiveConfig] 加载配置: {self.config_path}")
             except Exception as e:
@@ -72,7 +72,7 @@ class ProactiveConfig:
         """保存配置到文件"""
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, "w") as f:
+            with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(self._config, f, ensure_ascii=False, indent=2)
             logger.info(f"[ProactiveConfig] 保存配置: {self.config_path}")
         except Exception as e:

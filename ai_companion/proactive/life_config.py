@@ -56,7 +56,7 @@ class LifeConfig:
         """从文件加载配置"""
         if self._config_path and self._config_path.exists():
             try:
-                with open(self._config_path) as f:
+                with open(self._config_path, encoding="utf-8") as f:
                     self._config = self._deep_merge(DEFAULT_CONFIG.copy(), json.load(f))
                 logger.info(f"[LifeConfig] 加载配置: {self._config_path}")
 
@@ -87,7 +87,7 @@ class LifeConfig:
             return
         try:
             self._config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._config_path, "w") as f:
+            with open(self._config_path, "w", encoding="utf-8") as f:
                 json.dump(self._config, f, ensure_ascii=False, indent=2)
             logger.info(f"[LifeConfig] 保存配置: {self._config_path}")
         except Exception as e:

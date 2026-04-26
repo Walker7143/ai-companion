@@ -142,7 +142,7 @@ class RefusalEngine:
         if self._values is None:
             values_path = self.persona_dir / "values.json"
             try:
-                with open(values_path) as f:
+                with open(values_path, encoding="utf-8") as f:
                     self._values = json.load(f)
             except Exception:
                 logger.warning(f"[RefusalEngine] 加载 values.json 失败: {values_path}")
@@ -154,7 +154,7 @@ class RefusalEngine:
         if self._profile is None:
             profile_path = self.persona_dir / "profile.json"
             try:
-                with open(profile_path) as f:
+                with open(profile_path, encoding="utf-8") as f:
                     self._profile = json.load(f)
             except Exception:
                 logger.warning(f"[RefusalEngine] 加载 profile.json 失败: {profile_path}")
