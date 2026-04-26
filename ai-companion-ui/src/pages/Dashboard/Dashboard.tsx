@@ -113,12 +113,12 @@ export function Dashboard() {
 
   const fetchMetrics = useCallback(async () => {
     try {
-      const [sysMetrics, bMetrics] = await Promise.all([
-        systemApi.getSystemMetrics(),
-        systemApi.getBotMetrics(currentBotId || 'suqing'),
-      ]);
+      const sysMetrics = await systemApi.getSystemMetrics();
       setSystemMetrics(sysMetrics);
-      setBotMetrics(bMetrics);
+      if (currentBotId) {
+        const bMetrics = await systemApi.getBotMetrics(currentBotId);
+        setBotMetrics(bMetrics);
+      }
       setLastRefresh(new Date());
     } catch (err) {
       toast.error(`获取监控数据失败: ${err}`);

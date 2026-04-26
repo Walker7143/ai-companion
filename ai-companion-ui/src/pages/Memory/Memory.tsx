@@ -23,13 +23,13 @@ export function Memory() {
   const [deleting, setDeleting] = useState(false);
 
   const fetchAllData = useCallback(async () => {
-    const botId = currentBotId || 'suqing';
+    if (!currentBotId) return;
     try {
       const [stats, working, episodic, semantic] = await Promise.all([
-        memoryApi.getStats(botId),
-        memoryApi.getWorking(botId),
-        memoryApi.getEpisodic(botId),
-        memoryApi.getSemantic(botId),
+        memoryApi.getStats(currentBotId),
+        memoryApi.getWorking(currentBotId),
+        memoryApi.getEpisodic(currentBotId),
+        memoryApi.getSemantic(currentBotId),
       ]);
       setMemoryStats(stats);
       setWorkingMemory(working);
@@ -51,7 +51,7 @@ export function Memory() {
 
     setDeleting(true);
     try {
-      await memoryApi.deleteMemory(currentBotId || 'suqing', deleteTarget.type, deleteTarget.id);
+      await memoryApi.deleteMemory(currentBotId, deleteTarget.type, deleteTarget.id);
       toast.success('记忆已删除');
       setDeleteModalOpen(false);
       setDeleteTarget(null);
@@ -67,7 +67,7 @@ export function Memory() {
     if (!confirm('确定要清空所有记忆吗？此操作不可恢复。')) return;
 
     try {
-      await memoryApi.clearAll(currentBotId || 'suqing');
+      await memoryApi.clearAll(currentBotId);
       toast.success('所有记忆已清空');
       fetchAllData();
     } catch (err) {
