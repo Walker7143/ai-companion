@@ -239,9 +239,9 @@ ai-companion start --bot suqing  # 指定 Bot
 ### 飞书网关服务
 
 ```bash
-ai-companion gateway start    # 后台启动（自动打开管理后台 UI）
-ai-companion gateway start --sync  # 前台启动
-ai-companion gateway stop     # 停止（同时关闭 UI）
+ai-companion gateway start    # 后台启动（默认，关闭终端后继续运行）
+ai-companion gateway start --sync  # 前台启动（显示日志）
+ai-companion gateway stop     # 停止
 ai-companion gateway logs     # 查看日志
 ```
 

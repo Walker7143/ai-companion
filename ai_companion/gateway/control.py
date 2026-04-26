@@ -120,46 +120,26 @@ def start_gateway(sync: bool = False) -> int | None:
 
     # 启动进程
     cmd = [sys.executable, "-m", "ai_companion.gateway"]
-    with open(GATEWAY_LOG_FILE, "a", encoding="utf-8") as log_file:
-        process = subprocess.Popen(
-            cmd,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True
-        )
-
-    save_gateway_pid(process.pid)
 
     if sync:
-        # 同步模式：等待启动完成，输出日志
-        print("正在启动 Gateway...")
-        time.sleep(3)
-
-        # 检查是否启动成功
-        if not is_gateway_running():
-            print("[ERROR] Gateway 启动失败")
-            return None
-
-        print(f"[OK] Gateway 已启动 (PID: {process.pid})")
-        print(f"  日志文件: {GATEWAY_LOG_FILE}")
-
-        # 实时输出日志
-        print("\n=== Gateway 日志 ===")
-        try:
-            with open(GATEWAY_LOG_FILE, "r", encoding="utf-8") as f:
-                f.seek(0, 2)  # 跳到末尾
-                while is_gateway_running():
-                    line = f.readline()
-                    if line:
-                        print(line, end="")
-                    else:
-                        time.sleep(0.5)
-        except KeyboardInterrupt:
-            print("\n停止日志输出...")
-            print("Gateway 仍在后台运行，使用 'ai-companion gateway stop' 停止")
+        # 前台模式：直接在当前进程运行，显示日志
+        print("正在启动 Gateway（前台模式）...")
+        from ai_companion.gateway.cmd import run_gateway
+        import asyncio
+        asyncio.run(run_gateway(daemon=False))
         return None
     else:
-        # 异步模式：后台运行
+        # 守护进程模式（默认）：后台运行
+        cmd.append("--daemon")
+        with open(GATEWAY_LOG_FILE, "a", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                cmd,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True
+            )
+
+        save_gateway_pid(process.pid)
         print(f"[OK] Gateway 已启动 (PID: {process.pid})")
         print(f"  日志文件: {GATEWAY_LOG_FILE}")
         print("  使用 'ai-companion gateway logs' 查看日志")

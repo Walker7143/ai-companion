@@ -2,6 +2,7 @@
 Gateway 模块入口 - 支持 ai-companion gateway 直接执行
 """
 
+import argparse
 import asyncio
 import logging
 import sys
@@ -22,6 +23,10 @@ if __name__ == "__main__":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+    parser = argparse.ArgumentParser(description="AI Companion Gateway")
+    parser.add_argument("--daemon", action="store_true", help="守护进程模式（关闭终端后继续运行）")
+    args = parser.parse_args()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -29,4 +34,4 @@ if __name__ == "__main__":
             logging.StreamHandler(sys.stdout),
         ]
     )
-    asyncio.run(run_gateway())
+    asyncio.run(run_gateway(daemon=args.daemon))

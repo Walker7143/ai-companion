@@ -4,8 +4,8 @@ AI Companion CLI 入口
 用法:
     ai-companion start          # 启动本地 CLI 对话
     ai-companion gateway       # 启动网关服务（连接飞书）
-    ai-companion gateway start  # 异步启动网关（后台运行）
-    ai-companion gateway start --sync  # 同步启动网关（显示日志）
+    ai-companion gateway start  # 后台启动网关（默认）
+    ai-companion gateway start --sync  # 前台启动网关（显示日志）
     ai-companion gateway stop   # 停止网关
     ai-companion gateway restart  # 重启网关
     ai-companion gateway logs   # 查看网关日志
@@ -48,19 +48,19 @@ def main():
     gateway_subparsers = gateway_parser.add_subparsers(dest="gateway_command")
 
     # gateway start
-    gateway_start = gateway_subparsers.add_parser("start", help="启动网关")
-    gateway_start.add_argument("--sync", action="store_true", help="同步模式（显示日志）")
+    gateway_start = gateway_subparsers.add_parser("start", help="启动网关（后台运行）")
+    gateway_start.add_argument("--sync", action="store_true", help="前台模式（显示日志，按 Ctrl+C 退出）")
 
     # gateway stop
     gateway_subparsers.add_parser("stop", help="停止网关")
 
     # gateway restart
     gateway_restart = gateway_subparsers.add_parser("restart", help="重启网关")
-    gateway_restart.add_argument("--sync", action="store_true", help="同步模式（显示日志）")
+    gateway_restart.add_argument("--sync", action="store_true", help="前台模式（显示日志）")
 
     # gateway replace
     gateway_replace = gateway_subparsers.add_parser("replace", help="替换网关（先停止旧实例再启动新实例）")
-    gateway_replace.add_argument("--sync", action="store_true", help="同步模式（显示日志）")
+    gateway_replace.add_argument("--sync", action="store_true", help="前台模式（显示日志）")
 
     # gateway logs
     gateway_logs = gateway_subparsers.add_parser("logs", help="查看网关日志")
@@ -111,9 +111,9 @@ def main():
         elif args.gateway_command == "status":
             control.show_gateway_status()
         else:
-            # 无子命令时直接运行 gateway
+            # 无子命令时直接运行 gateway（默认后台运行）
             from ai_companion.gateway.cmd import run_gateway
-            asyncio.run(run_gateway())
+            asyncio.run(run_gateway(daemon=True))
     elif args.command == "setup":
         asyncio.run(run_setup())
     elif args.command == "status":

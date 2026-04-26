@@ -1020,7 +1020,16 @@ skill-my-skill/
 
 ## 9. Gateway 配置
 
-### 9.1 Session 重置策略
+### 9.1 网关命令
+
+```bash
+ai-companion gateway start    # 后台启动（默认，关闭终端后继续运行）
+ai-companion gateway start --sync  # 前台启动（显示日志）
+ai-companion gateway stop     # 停止
+ai-companion gateway logs     # 查看日志
+```
+
+### 9.2 Session 重置策略
 
 ```yaml
 gateway:
@@ -1042,7 +1051,7 @@ gateway:
 | `idle_minutes` | 1440 | 空闲超时分钟数（默认24小时） |
 | `notify` | true | 是否发送重置通知 |
 
-### 9.3 会话存储配置
+### 9.2 会话存储配置
 
 ```yaml
 gateway:
@@ -1057,7 +1066,7 @@ gateway:
 | `always_log_local` | true | 是否始终保存本地日志 |
 | `session_store_max_age_days` | 90 | 会话存储最大天数 |
 
-### 9.4 平台显示配置
+### 9.3 平台显示配置
 
 控制各平台的消息显示方式：
 

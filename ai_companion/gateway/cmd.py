@@ -902,7 +902,7 @@ def load_feishu_config() -> dict:
     return None
 
 
-async def run_gateway():
+async def run_gateway(daemon: bool = True):
     """启动网关服务"""
     # 保存 PID
     save_gateway_pid(os.getpid())
@@ -920,6 +920,10 @@ async def run_gateway():
     print("AI Companion Gateway")
     print("=" * 50)
     print()
+
+    if daemon:
+        print("[OK] 守护进程模式，关闭终端后网关将继续运行")
+        print()
 
     # 检查是否启动 UI
     start_ui = os.environ.get("START_UI", "true").lower() in ("true", "1", "yes")
