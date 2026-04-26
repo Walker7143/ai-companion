@@ -52,10 +52,10 @@ def _start_ui_server() -> bool:
         print("[WARN] ai-companion-ui 目录未找到，跳过启动 UI")
         return False
 
-    # Check if npm is available
-    try:
-        subprocess.run(["npm", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    # Check if npm is available (use shutil.which for reliable cross-platform detection)
+    import shutil
+    npm_path = shutil.which("npm")
+    if not npm_path:
         print("[WARN] npm 未安装，无法启动 UI 服务器")
         return False
 
@@ -65,7 +65,7 @@ def _start_ui_server() -> bool:
         print("[INFO] 正在安装前端依赖（首次运行需等待）...")
         try:
             result = subprocess.run(
-                ["npm", "install"],
+                [npm_path, "install"],
                 cwd=str(ui_dir),
                 capture_output=True,
                 text=True,
@@ -90,7 +90,7 @@ def _start_ui_server() -> bool:
         GATEWAY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         log_file = open(GATEWAY_LOG_FILE, "a", encoding="utf-8")
         _ui_process = subprocess.Popen(
-            ["npm", "run", "dev"],
+            [npm_path, "run", "dev"],
             cwd=str(ui_dir),
             stdout=log_file,
             stderr=subprocess.STDOUT,
