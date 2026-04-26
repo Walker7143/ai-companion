@@ -1,5 +1,5 @@
 use serde::Serialize;
-use sysinfo::System;
+use sysinfo::{System, CpuRefreshKind, MemoryRefreshKind, RefreshKind};
 
 #[derive(Serialize)]
 pub struct SystemMetrics {
@@ -35,10 +35,16 @@ pub struct MemoryStats {
 
 #[tauri::command]
 pub async fn get_system_metrics() -> Result<SystemMetrics, String> {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    let sys = System::new_with_specifics(
+        RefreshKind::new()
+            .with_cpu(CpuRefreshKind::everything())
+            .with_memory(MemoryRefreshKind::everything()),
+    );
 
-    let cpu_percent = sys.global_cpu_usage();
+    // Calculate CPU usage by averaging all CPU cores
+    let cpu_percent = sys.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>()
+        / sys.cpus().len() as f32;
+
     let memory_used = sys.used_memory();
     let memory_total = sys.total_memory();
     let memory_percent = if memory_total > 0 {

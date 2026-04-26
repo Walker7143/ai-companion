@@ -64,7 +64,7 @@ pub struct CompressionRecord {
 }
 
 #[tauri::command]
-pub async fn list_sessions(bot_id: String) -> Result<Vec<SessionInfo>, String> {
+pub async fn list_sessions(_bot_id: String) -> Result<Vec<SessionInfo>, String> {
     // TODO: integrate with Python AI Companion core
     Ok(vec![SessionInfo {
         session_key: "20260426_143215_a1b2c3d4".to_string(),
@@ -117,7 +117,7 @@ pub async fn suspend_session(session_key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_session_context(session_key: String) -> Result<ContextDetail, String> {
+pub async fn get_session_context(_session_key: String) -> Result<ContextDetail, String> {
     // TODO: integrate with Python AI Companion core
     let mut semantic_facts = HashMap::new();
     semantic_facts.insert("职业".to_string(), "程序员".to_string());

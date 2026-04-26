@@ -1,6 +1,8 @@
 pub mod commands;
 
+use commands::logs::LogStreamState;
 use log::info;
+use std::sync::{Arc, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,6 +13,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
+        .manage(Arc::new(Mutex::new(LogStreamState::default())))
         .invoke_handler(tauri::generate_handler![
             commands::system::get_system_metrics,
             commands::system::get_bot_metrics,
@@ -26,6 +29,8 @@ pub fn run() {
             commands::memory::delete_memory,
             commands::memory::clear_all_memory,
             commands::logs::get_logs,
+            commands::logs::stream_logs,
+            commands::logs::export_logs,
             commands::config::get_config,
             commands::config::update_config,
             commands::config::get_available_bots,

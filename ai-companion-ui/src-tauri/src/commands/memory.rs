@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize)]
 pub struct MemoryStats {
@@ -45,7 +44,7 @@ pub struct Fact {
 }
 
 #[tauri::command]
-pub async fn get_memory_stats(bot_id: String) -> Result<MemoryStats, String> {
+pub async fn get_memory_stats(_bot_id: String) -> Result<MemoryStats, String> {
     // TODO: integrate with Python AI Companion core
     Ok(MemoryStats {
         working_count: 23,
@@ -59,7 +58,7 @@ pub async fn get_memory_stats(bot_id: String) -> Result<MemoryStats, String> {
 }
 
 #[tauri::command]
-pub async fn get_working_memory(bot_id: String) -> Result<Vec<Message>, String> {
+pub async fn get_working_memory(_bot_id: String) -> Result<Vec<Message>, String> {
     // TODO: integrate with Python AI Companion core
     Ok(vec![
         Message {
@@ -79,9 +78,9 @@ pub async fn get_working_memory(bot_id: String) -> Result<Vec<Message>, String> 
 
 #[tauri::command]
 pub async fn get_episodic_memory(
-    bot_id: String,
-    query: Option<String>,
-    limit: Option<u32>,
+    _bot_id: String,
+    _query: Option<String>,
+    _limit: Option<u32>,
 ) -> Result<Vec<EpisodicItem>, String> {
     // TODO: integrate with Python AI Companion core
     Ok(vec![
@@ -105,7 +104,7 @@ pub async fn get_episodic_memory(
 }
 
 #[tauri::command]
-pub async fn get_semantic_memory(bot_id: String) -> Result<SemanticMemory, String> {
+pub async fn get_semantic_memory(_bot_id: String) -> Result<SemanticMemory, String> {
     // TODO: integrate with Python AI Companion core
     Ok(SemanticMemory {
         facts: vec![

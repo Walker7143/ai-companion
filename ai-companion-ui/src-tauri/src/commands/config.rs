@@ -121,7 +121,7 @@ pub async fn get_config(bot_id: String) -> Result<BotConfig, String> {
 }
 
 #[tauri::command]
-pub async fn update_config(bot_id: String, config: BotConfig) -> Result<(), String> {
+pub async fn update_config(bot_id: String, _config: BotConfig) -> Result<(), String> {
     // TODO: integrate with Python AI Companion core
     log::info!("Updating config for bot: {}", bot_id);
     Ok(())
@@ -157,7 +157,7 @@ pub async fn get_available_bots() -> Result<Vec<BotInfo>, String> {
 #[tauri::command]
 pub async fn test_api_connection(
     provider: String,
-    api_key: String,
+    _api_key: String,
     base_url: String,
 ) -> Result<bool, String> {
     // TODO: implement actual connection test
