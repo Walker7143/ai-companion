@@ -117,9 +117,9 @@ Storage Layer（SQLite + Chroma 向量）
 | 图表 | Recharts 2 |
 
 详细文档：
-- `docs/UI_DESIGN.md` - UI 设计方案（设计规范、页面布局、组件规范）
-- `docs/UI_SPEC.md` - 产品规格（功能清单、交互细节、验收标准）
-- `docs/UI_TECH_DESIGN.md` - 技术设计方案（架构、API、目录结构）
+- `docs/ui/UI_DESIGN.md` - UI 设计方案（设计规范、页面布局、组件规范）
+- `docs/ui/UI_SPEC.md` - 产品规格（功能清单、交互细节、验收标准）
+- `docs/ui/UI_TECH_DESIGN.md` - 技术设计方案（架构、API、目录结构）
 
 开发命令（TODO，待初始化）：
 ```bash
