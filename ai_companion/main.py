@@ -86,6 +86,11 @@ async def main(bot_filter: str = None):
     cli = CLIAdapter(bot_manager)
     await cli.start()
 
+    # 清理资源
+    for bot in bot_manager.bots.values():
+        await bot.close()
+    await model.close()
+
 
 def show_status():
     """显示状态"""
