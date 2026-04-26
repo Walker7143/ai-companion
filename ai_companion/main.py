@@ -1,9 +1,42 @@
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
 
 from .config.loader import Config
+
+# CLI 日志文件
+CLI_LOG_DIR = Path.home() / ".ai-companion" / "logs"
+CLI_LOG_FILE = CLI_LOG_DIR / "cli.log"
+
+def setup_logging():
+    """设置 CLI 日志输出"""
+    CLI_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Windows UTF-8 支持
+    if sys.platform == "win32":
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
+    # 同时输出到控制台和文件
+    file_handler = logging.FileHandler(CLI_LOG_FILE, encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    ))
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(
+        "[%(levelname)s] %(message)s"
+    ))
+
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[console_handler, file_handler]
+    )
 from .model.minimax_adapter import MiniMaxAdapter
 from .bot.manager import BotManager
 from .bot.instance import BotInstance
@@ -20,6 +53,8 @@ def get_data_dir() -> Path:
 
 async def main(bot_filter: str = None):
     """主启动函数"""
+    setup_logging()
+
     # 获取数据目录
     user_dir = Path.home() / ".ai-companion" / "data" / "bots"
     if user_dir.exists():
@@ -94,6 +129,7 @@ async def main(bot_filter: str = None):
 
 def show_status():
     """显示状态"""
+    setup_logging()
     data_dir = get_data_dir()
     print(f"数据目录: {data_dir}")
     print(f"配置文件: {data_dir / 'config'}")
