@@ -102,3 +102,28 @@ Storage Layer（SQLite + Chroma 向量）
 - `config/bots.yaml` - Bot 列表
 - `config/config.yaml` - 主配置
 - `data/bots/{bot_id}/` - 各 Bot 的人格和记忆
+
+## 管理后台 UI
+
+管理后台项目位于 `ai-companion-ui/`，技术栈：
+
+| 层 | 技术 |
+|----|------|
+| 桌面框架 | Tauri 2.x |
+| 前端框架 | React 18 + TypeScript |
+| 构建工具 | Vite 5 |
+| 样式 | TailwindCSS 3 |
+| 状态管理 | Zustand 4 |
+| 图表 | Recharts 2 |
+
+详细文档：
+- `docs/UI_DESIGN.md` - UI 设计方案（设计规范、页面布局、组件规范）
+- `docs/UI_SPEC.md` - 产品规格（功能清单、交互细节、验收标准）
+- `docs/UI_TECH_DESIGN.md` - 技术设计方案（架构、API、目录结构）
+
+开发命令（TODO，待初始化）：
+```bash
+cd ai-companion-ui
+npm install
+npm run tauri dev
+```
