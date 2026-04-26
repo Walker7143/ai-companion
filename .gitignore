@@ -39,14 +39,23 @@ env/
 .LSOverride
 
 # Project specific
-# Note: data/bots/ contains built-in bot templates and should be tracked
-data/
+# User configuration (should not be tracked)
+config/*.yaml
+config/*.yml
+!config/*.example.yaml
+!config/*.yaml.example
 
-# But keep memory/database files ignored (user data)
+# User data (should not be tracked)
 data/bots/*/memory/
 data/bots/*/*.db
 data/bots/*/*.db-wal
 data/bots/*/*.db-shm
+data/bots/*/proactive_state.json
+
+# Built-in bot templates (keep these tracked)
+# Bot persona files are templates that get copied to user dir on setup
+data/bots/*/persona/
+data/bots/*/life.json
 
 # Test files
 test_*.py
