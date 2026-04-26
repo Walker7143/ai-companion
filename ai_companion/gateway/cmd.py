@@ -59,6 +59,31 @@ def _start_ui_server() -> bool:
         print("[WARN] npm 未安装，无法启动 UI 服务器")
         return False
 
+    # Check if node_modules exists, try to install if not
+    node_modules = ui_dir / "node_modules"
+    if not node_modules.exists():
+        print("[INFO] 正在安装前端依赖（首次运行需等待）...")
+        try:
+            result = subprocess.run(
+                ["npm", "install"],
+                cwd=str(ui_dir),
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if result.returncode != 0:
+                print(f"[ERROR] npm install 失败，请手动执行: cd {ui_dir} && npm install")
+                print(f"       错误: {result.stderr[:200]}")
+                return False
+            print("[OK] 前端依赖安装完成")
+        except subprocess.TimeoutExpired:
+            print("[ERROR] npm install 超时，请手动执行: cd %s && npm install" % ui_dir)
+            return False
+        except Exception as e:
+            print(f"[ERROR] npm install 失败: {e}")
+            print(f"       请手动执行: cd {ui_dir} && npm install")
+            return False
+
     print("[OK] 正在启动 UI 服务器...")
     try:
         _ui_process = subprocess.Popen(
@@ -67,6 +92,17 @@ def _start_ui_server() -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
+        # Give it a moment to fail immediately (e.g. port in use)
+        import time
+        time.sleep(3)
+        if _ui_process.poll() is not None:
+            # Process already exited - capture output and report
+            output = _ui_process.stdout.read() if _ui_process.stdout else ""
+            print(f"[ERROR] UI 服务器启动后立即退出")
+            print(f"       请手动启动排查: cd {ui_dir} && npm run dev")
+            print(f"       输出: {output[:500]}")
+            _ui_process = None
+            return False
         print(f"[OK] UI 服务器已启动 (PID: {_ui_process.pid})")
         print(f"     访问地址: http://localhost:1421")
         return True
