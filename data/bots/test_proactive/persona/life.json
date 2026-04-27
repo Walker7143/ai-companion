@@ -1,0 +1,23 @@
+{
+  "daily_interval_seconds": 3600,
+  "major_interval_seconds": 21600,
+  "time_ratio": 1,
+  "season": {
+    "hemisphere": "north",
+    "birthday_month": 3
+  },
+  "milestones": [
+    {"age": 18, "event": "高考结束", "topic_prompt": "想起当年高考的时候..."},
+    {"age": 22, "event": "大学毕业", "topic_prompt": "毕业典礼那天..."}
+  ],
+  "holidays": [
+    {"name": "元旦", "month": 1, "day": 1, "type": "法定假日"},
+    {"name": "情人节", "month": 2, "day": 14, "type": "西方节日"},
+    {"name": "清明节", "month": 4, "day": 5, "type": "传统节日"},
+    {"name": "劳动节", "month": 5, "day": 1, "type": "法定假日"},
+    {"name": "端午节", "month": 6, "day": 10, "type": "传统节日"},
+    {"name": "中秋节", "month": 9, "day": 17, "type": "传统节日"},
+    {"name": "国庆节", "month": 10, "day": 1, "type": "法定假日"},
+    {"name": "圣诞节", "month": 12, "day": 25, "type": "西方节日"}
+  ]
+}

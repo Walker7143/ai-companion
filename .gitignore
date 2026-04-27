@@ -57,6 +57,15 @@ data/suqing/memory/
 
 # Built-in bot templates (keep these tracked)
 # Bot persona files are templates that get copied to user dir on setup
+# Exceptions for tracked test bots - must be BEFORE the generic ignore rules
+!data/bots/test_proactive/
+!data/bots/test_life/
+# Generic persona/life.json ignore (applies to non-excepted bots)
+data/bots/*/memory/
+data/bots/*/proactive_state.json
+data/bots/*/life_state.json
+data/suqing/
+data/suqing/memory/
 data/bots/*/persona/
 data/bots/*/life.json
 

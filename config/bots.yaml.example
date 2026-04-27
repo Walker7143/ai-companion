@@ -1,0 +1,15 @@
+# Bot 列表配置
+# 运行 ai-companion setup 后会自动创建此文件
+
+bots:
+  - id: test_proactive
+    name: 测试酱
+    enabled: true
+
+  - id: test_life
+    name: 时光君
+    enabled: true
+
+  - id: suqing
+    name: 苏晴
+    enabled: true
