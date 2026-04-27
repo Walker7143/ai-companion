@@ -94,7 +94,7 @@ async def run_setup():
             pass
 
     api_key_prompt = Prompt.ask(
-        "[dim]请输入 API Key（直接回车保留现有配置）[/dim]",
+        "[dim]请输入 API Key[/dim]" if not existing_minimax_key else "[dim]请输入 API Key（直接回车保留现有配置）[/dim]",
         password=True,
         default=""
     )
@@ -102,9 +102,11 @@ async def run_setup():
     # 只有用户输入了内容才更新
     if api_key_prompt.strip():
         api_key = api_key_prompt
-    else:
+    elif existing_minimax_key:
         api_key = existing_minimax_key
         console.print("[dim]保留现有 API Key[/dim]")
+    else:
+        api_key = ""
 
     if model_choice == "5":
         custom_url = Prompt.ask("请输入 API URL", default=existing_base_url or "https://api.example.com/v1")
