@@ -176,18 +176,8 @@ async def run_setup():
         dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
 
         if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
-            # 只复制不存在的文件，保留用户已有配置
-            if dst_persona.exists():
-                for src_file in src_persona.rglob("*"):
-                    if src_file.is_file():
-                        dst_file = dst_persona / src_file.relative_to(src_persona)
-                        if not dst_file.exists():
-                            dst_file.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(src_file, dst_file)
-                console.print(f"✓ [green]{bot_name}[/green] 已添加（保留现有配置）")
-            else:
-                shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
-                console.print(f"✓ [green]{bot_name}[/green] 已添加")
+            shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
+            console.print(f"✓ [green]{bot_name}[/green] 已添加")
         else:
             console.print(f"[yellow]⚠ 模板 {bot_id} 不存在，已创建空 Bot[/yellow]")
             (data_dir / "data" / "bots" / bot_id / "persona").mkdir(parents=True, exist_ok=True)
@@ -203,16 +193,7 @@ async def run_setup():
             src_persona = data_dir / "data" / "bots" / bot_id / "persona"
         dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
         if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
-            # 只复制不存在的文件，保留用户已有配置
-            if dst_persona.exists():
-                for src_file in src_persona.rglob("*"):
-                    if src_file.is_file():
-                        dst_file = dst_persona / src_file.relative_to(src_persona)
-                        if not dst_file.exists():
-                            dst_file.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(src_file, dst_file)
-            else:
-                shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
+            shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
         created_bots.append({"id": bot_id, "name": bot_name})
 
     # 更新 bots.yaml
