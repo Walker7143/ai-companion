@@ -1,45 +1,15 @@
 #!/bin/bash
 #
-# AI Companion 国内镜像安装脚本
-# 支持: macOS, Linux (国内用户)
+# AI Companion 一键安装引导程序
+# 用于 curl | bash 远程执行（无需 git）
 #
-# 用法:
-#   ./install-cn.sh          # 自动选择最佳安装方式
-#   ./install-cn.sh --docker # 强制使用 Docker
-#   ./install-cn.sh --local  # 强制本地安装（需要 Python 3.11+）
+# 原理：下载项目压缩包到临时目录，解压后执行安装脚本
 #
 
 set -e
 
-INSTALL_MODE="auto"
+INSTALL_MODE="${1:-auto}"
 PYTHON_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
-
-# 解析参数
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -d|--docker)
-            INSTALL_MODE="docker"
-            shift
-            ;;
-        -l|--local)
-            INSTALL_MODE="local"
-            shift
-            ;;
-        -h|--help)
-            echo "用法: $0 [-d|--docker] [-l|--local] [-h|--help]"
-            echo ""
-            echo "选项:"
-            echo "  -d, --docker    使用 Docker 方式安装（推荐，最简单）"
-            echo "  -l, --local     本地安装（需要 Python 3.11+）"
-            echo "  -h, --help      显示帮助信息"
-            exit 0
-            ;;
-        *)
-            echo "未知参数: $1"
-            exit 1
-            ;;
-    esac
-done
 
 echo "═══════════════════════════════════════════"
 echo "  AI Companion 一键安装 (国内镜像)"
@@ -57,8 +27,9 @@ check_docker() {
     return 1
 }
 
-# 检测 Python（仅检测，不终止）
-check_python_quiet() {
+# 检测 Python
+check_python() {
+    PYTHON_CMD=""
     if command -v python3 &> /dev/null; then
         PYTHON_CMD="python3"
     elif command -v python &> /dev/null; then
@@ -71,6 +42,7 @@ check_python_quiet() {
     if [ "$(echo "$VERSION < 3.11" | bc 2>/dev/null || echo "1")" = "1" ]; then
         return 1
     fi
+    echo "✓ Python $VERSION"
     return 0
 }
 
@@ -81,35 +53,22 @@ get_user_dir() {
 
 # 本地安装
 install_local() {
-    PYTHON_CMD=""
-    if command -v python3 &> /dev/null; then
-        PYTHON_CMD="python3"
-    elif command -v python &> /dev/null; then
-        PYTHON_CMD="python"
-    fi
-
     echo ""
     echo "📦 本地安装模式 (清华镜像)"
     echo ""
 
-    if [ -z "$PYTHON_CMD" ]; then
+    if ! check_python; then
         echo "❌ 未检测到 Python 3.11+"
         echo ""
         echo "请先安装 Python（推荐 anaconda）："
         echo "  macOS: brew install python"
         echo "  Linux: sudo apt install python3 python3-pip"
         echo ""
-        echo "或使用 Docker 模式: $0 --docker"
+        echo "或使用 Docker 模式: bash $0 --docker"
         exit 1
     fi
 
-    VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
-    if [ "$(echo "$VERSION < 3.11" | bc 2>/dev/null || echo "1")" = "1" ]; then
-        echo "❌ Python 版本过低: $VERSION (需要 3.11+)"
-        echo "请升级 Python: https://www.python.org/downloads/"
-        exit 1
-    fi
-    echo "✓ Python $VERSION"
+    PYTHON_CMD="${PYTHON_CMD:-python3}"
 
     echo ""
     echo "📁 创建用户数据目录..."
@@ -128,11 +87,8 @@ install_local() {
 
     echo ""
     echo "📦 安装项目依赖 (清华镜像)..."
-
-    # Install core dependencies first (these don't need compilation)
     $VENV_PIP install aiohttp httpx lark-oapi pyyaml pydantic rich jieba python-dotenv sentence-transformers -i "$PYTHON_INDEX" -q
 
-    # Try chroma-hnswlib with binary wheel
     echo "  Attempting chroma-hnswlib (vector search)..."
     if $VENV_PIP install chroma-hnswlib aiosqlite --only-binary :all: -i "$PYTHON_INDEX" -q 2>/dev/null; then
         echo "✓ chroma-hnswlib installed"
@@ -142,22 +98,17 @@ install_local() {
 
     echo "✓ 项目依赖安装完成"
 
-    # 获取项目目录（必须在安装前定义）
-    # 使用 readlink -f 兼容 Windows Git Bash/MSYS2 环境下的路径格式（如 file:///C:/Users/...）
-    SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-    PROJECT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
-
     echo ""
     echo "📦 安装 AI Companion..."
-    $VENV_PIP install -e "$PROJECT_DIR" -i "$PYTHON_INDEX" -q
+    $VENV_PIP install --no-cache-dir "$PROJECT_DIR" -i "$PYTHON_INDEX" -q
     echo "✓ AI Companion 已安装"
 
-    # Install frontend UI dependencies (for management dashboard)
+    # Install frontend UI dependencies
     if [ -f "$PROJECT_DIR/ai-companion-ui/package.json" ]; then
         echo ""
         echo "📦 安装前端 UI 依赖..."
         if command -v npm &> /dev/null; then
-            if npm install --prefix "$PROJECT_DIR/ai-companion-ui"; then
+            if npm install --prefix "$PROJECT_DIR/ai-companion-ui" 2>/dev/null; then
                 echo "✓ 前端依赖已安装"
             else
                 echo "⚠️  前端依赖安装失败（管理后台需要手动 npm install）"
@@ -201,14 +152,12 @@ install_docker() {
     if ! check_docker; then
         echo "❌ 未检测到 Docker"
         echo "请先安装 Docker: https://docs.docker.com/get-docker/"
-        echo ""
-        echo "或使用本地安装模式: $0"
         exit 1
     fi
 
     echo ""
     echo "📦 构建 Docker 镜像..."
-    docker build -t ai-companion .
+    docker build -t ai-companion "$PROJECT_DIR"
     echo "✓ 镜像构建完成"
 
     echo ""
@@ -223,24 +172,61 @@ install_docker() {
     echo "✓ Docker 安装完成！"
     echo ""
     echo "下一步:"
-    echo "  1. 配置 API Key（编辑 docker-compose.yml 或设置环境变量）:"
-    echo "     # 在 docker-compose.yml 中设置环境变量"
-    echo "     environment:"
-    echo "       - MINIMAX_API_KEY=your_api_key"
+    echo "  1. 配置 API Key（编辑 docker-compose.yml 或设置环境变量）"
     echo ""
     echo "  2. 启动服务:"
     echo "     docker-compose up -d"
-    echo ""
-    echo "  3. 查看日志:"
-    echo "     docker-compose logs -f"
     echo ""
     echo "  配置目录: $USER_DIR"
     echo "  配置文件: $USER_DIR/config/"
     echo "═══════════════════════════════════════════"
 }
 
-# 主流程
-case $INSTALL_MODE in
+# ============================================
+# 主流程：下载项目并执行安装
+# ============================================
+
+echo "📥 正在下载项目..."
+TEMP_DIR=$(mktemp -d)
+trap "rm -rf $TEMP_DIR" EXIT
+
+# Gitee 存档下载 URL
+ARCHIVE_URL="https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/repository/archive/master.tar.gz"
+
+if command -v curl &> /dev/null; then
+    curl -fsSL "$ARCHIVE_URL" -o "$TEMP_DIR/project.tar.gz" || {
+        echo "❌ 下载失败，请检查网络连接"
+        exit 1
+    }
+elif command -v wget &> /dev/null; then
+    wget -q "$ARCHIVE_URL" -O "$TEMP_DIR/project.tar.gz" || {
+        echo "❌ 下载失败，请检查网络连接"
+        exit 1
+    }
+else
+    echo "❌ 需要 curl 或 wget"
+    exit 1
+fi
+
+echo "📦 正在解压项目..."
+mkdir -p "$TEMP_DIR/extracted"
+tar -xzf "$TEMP_DIR/project.tar.gz" -C "$TEMP_DIR/extracted" || {
+    echo "❌ 解压失败"
+    exit 1
+}
+
+# 找到解压后的项目目录（Gitee 会创建一个带 commit hash 的子目录）
+PROJECT_DIR=$(find "$TEMP_DIR/extracted" -mindepth 1 -maxdepth 1 -type d | head -1)
+
+if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/setup.py" ]; then
+    echo "❌ 项目结构异常"
+    exit 1
+fi
+
+echo "✓ 项目已准备就绪"
+
+# 根据安装模式执行
+case "$INSTALL_MODE" in
     docker)
         install_docker
         ;;
@@ -248,15 +234,18 @@ case $INSTALL_MODE in
         install_local
         ;;
     auto)
-        # 自动选择：优先 Docker，否则本地
         if check_docker; then
-            echo "检测到 Docker，将使用 Docker 模式安装（推荐）"
             echo ""
+            echo "检测到 Docker，将使用 Docker 模式安装（推荐）"
             install_docker
         else
-            echo "未检测到 Docker 或无权限，将使用本地安装"
             echo ""
+            echo "未检测到 Docker，将使用本地安装"
             install_local
         fi
+        ;;
+    *)
+        echo "未知安装模式: $INSTALL_MODE"
+        exit 1
         ;;
 esac
