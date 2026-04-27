@@ -151,7 +151,9 @@ install_local() {
     echo "✓ 项目依赖安装完成"
 
     # 获取项目目录
-    PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    # 使用 readlink -f 兼容 Windows Git Bash/MSYS2 环境下的路径格式（如 file:///C:/Users/...）
+    SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+    PROJECT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
     echo ""
     echo "📦 安装 AI Companion..."
