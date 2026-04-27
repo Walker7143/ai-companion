@@ -1,0 +1,24 @@
+{
+  "last_message_time": "2026-04-26T22:12:44.925195",
+  "last_proactive_time": null,
+  "annoyance_level": 0,
+  "today_proactive_count": 0,
+  "last_reset_date": "2026-04-26",
+  "total_proactive_sent": 0,
+  "last_emotion_trigger_time": null,
+  "cooldowns": {},
+  "last_opening_style": "",
+  "miss_level": 0,
+  "insecurity_level": 3,
+  "excitement_level": 3,
+  "last_user_reply_time": "2026-04-26T22:12:44.927036",
+  "unreplied_count": 0,
+  "user_active_hours": {
+    "20": 2,
+    "21": 1,
+    "22": 2
+  },
+  "previous_absence_days": 0,
+  "just_reactivated": false,
+  "last_check_time": "2026-04-26T22:12:04.579115"
+}

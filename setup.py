@@ -31,8 +31,9 @@ setup(
         ],
     },
     package_data={
-        "ai_companion": ["config/*.yaml.example"],
+        "ai_companion": ["config/*.yaml.example", "data/bots/*/persona/*"],
     },
+    include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",

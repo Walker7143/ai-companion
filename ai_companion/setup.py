@@ -169,8 +169,8 @@ async def run_setup():
             console.print(f"[yellow]⚠ Bot {bot_id} 已存在，跳过[/yellow]")
             continue
 
-        # 始终优先从项目目录读取模板（pip 安装后数据目录可能存在旧数据）
-        src_persona = project_dir / "data" / "bots" / bot_id / "persona"
+        # 始终优先从包内目录读取模板（pip 安装后包内才有模板文件）
+        src_persona = project_dir / "ai_companion" / "data" / "bots" / bot_id / "persona"
         if not src_persona.exists():
             src_persona = data_dir / "data" / "bots" / bot_id / "persona"
         dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
@@ -187,8 +187,8 @@ async def run_setup():
     if not created_bots:
         console.print("[yellow]⚠ 未创建任何 Bot，将创建默认 Bot[/yellow]")
         bot_id, bot_name = "suqing", "苏晴"
-        # 优先从项目目录读取模板
-        src_persona = project_dir / "data" / "bots" / bot_id / "persona"
+        # 优先从包内目录读取模板
+        src_persona = project_dir / "ai_companion" / "data" / "bots" / bot_id / "persona"
         if not src_persona.exists():
             src_persona = data_dir / "data" / "bots" / bot_id / "persona"
         dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
