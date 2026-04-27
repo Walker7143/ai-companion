@@ -27,21 +27,37 @@
 
 ### 安装
 
+**国内用户（推荐使用清华镜像）：**
 ```bash
 # 一键安装（自动选择 Docker 或本地）
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.sh | bash
 
 # 强制 Docker 模式
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --docker
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.sh | bash -s -- --docker
+
+# 强制本地安装
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.sh | bash -s -- --local
+
+# 或克隆后本地安装
+git clone https://gitee.com/wang_xiao_wei_7143/ai-girl-friend.git
+cd ai-girl-friend
+./scripts/install-cn.sh
+./scripts/install-cn.sh --docker    # Docker 模式
+./scripts/install-cn.sh --local     # 本地模式
+```
+
+**海外用户：**
+```bash
+# 一键安装
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
 
 # 强制本地安装
 curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --local
 
 # 或克隆后本地安装
-git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
+git clone https://gitee.com/wang_xiao_wei_7143/ai-girl-friend.git
 cd ai-girl-friend
 ./scripts/install.sh
-./scripts/install.sh --docker    # Docker 模式
 ./scripts/install.sh --local     # 本地模式
 ```
 
