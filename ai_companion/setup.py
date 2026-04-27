@@ -169,10 +169,10 @@ async def run_setup():
             console.print(f"[yellow]⚠ Bot {bot_id} 已存在，跳过[/yellow]")
             continue
 
-        # 优先从数据目录读取模板（pip 安装后 project_dir 指向 site-packages，无模板）
-        src_persona = data_dir / "data" / "bots" / bot_id / "persona"
+        # 始终优先从项目目录读取模板（pip 安装后数据目录可能存在旧数据）
+        src_persona = project_dir / "data" / "bots" / bot_id / "persona"
         if not src_persona.exists():
-            src_persona = project_dir / "data" / "bots" / bot_id / "persona"
+            src_persona = data_dir / "data" / "bots" / bot_id / "persona"
         dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
 
         if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
@@ -187,10 +187,10 @@ async def run_setup():
     if not created_bots:
         console.print("[yellow]⚠ 未创建任何 Bot，将创建默认 Bot[/yellow]")
         bot_id, bot_name = "suqing", "苏晴"
-        # 优先从数据目录读取模板
-        src_persona = data_dir / "data" / "bots" / bot_id / "persona"
+        # 优先从项目目录读取模板
+        src_persona = project_dir / "data" / "bots" / bot_id / "persona"
         if not src_persona.exists():
-            src_persona = project_dir / "data" / "bots" / bot_id / "persona"
+            src_persona = data_dir / "data" / "bots" / bot_id / "persona"
         dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
         if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
             shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
