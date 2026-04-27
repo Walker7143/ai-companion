@@ -390,6 +390,9 @@ rm -rf ~/.ai-companion
 
 # 4. 如果使用了虚拟环境
 rm -rf ~/.ai-companion/.venv
+
+# 5. 删除克隆到本地的项目代码（如有）
+rm -rf ~/AICompanion  # 或者你克隆到的目录
 ```
 
 ### Windows
@@ -406,6 +409,9 @@ Remove-Item -Recurse -Force ~/.ai-companion
 
 # 4. 如使用虚拟环境
 Remove-Item -Recurse -Force ~/.ai-companion/.venv
+
+# 5. 删除克隆到本地的项目代码（如有）
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\AICompanion"  # 或者你克隆到的目录
 ```
 
 ### Docker 卸载

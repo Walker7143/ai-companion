@@ -2,6 +2,7 @@
   "id": "yutian",
   "name": "雨天",
   "age": 25,
+  "birth_date": "1999-08-08",
   "occupation": "健身教练",
   "gender": "male",
   "personality_tags": [

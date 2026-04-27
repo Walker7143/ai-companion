@@ -179,8 +179,9 @@ class BotInstance:
             self.life_state.birth_date = f"{birth_year}-{birthday_month:02d}-15"
             self.life_state.birthday_month = birthday_month
 
-        # 初始化当前日期（如果是新 Bot）
-        if not self.life_state.current_date:
+        # 初始化当前日期（如果是新 Bot 或 bot_age_days 为 0）
+        # 这样重装后 bot 会从今天开始新的人生
+        if not self.life_state.current_date or self.life_state.bot_age_days == 0:
             self.life_state.current_date = datetime.now().strftime("%Y-%m-%d")
             self.life_state.year = datetime.now().year
             self.life_state.day_of_week = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][datetime.now().weekday()]
