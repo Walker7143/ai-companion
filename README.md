@@ -27,13 +27,17 @@
 
 ### 安装
 
-| 平台 | 国内用户（推荐） | 海外用户 |
-|------|----------------|---------|
-| macOS/Linux | `curl -fsSL .../install-cn.sh \| bash` | `curl -fsSL .../install.sh \| bash` |
-| Windows | `irm .../install-cn.ps1 \| iex` | `irm .../install-global.ps1 \| iex` |
-| Docker | `curl -fsSL .../install-cn.sh \| bash -s -- --docker` | `curl -fsSL .../install.sh \| bash -s -- --docker` |
+**macOS / Linux（国内用户）：**
+```bash
+curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.sh | bash
+```
 
-详细安装说明和脚本下载：[安装方式](#安装方式)
+**Windows（国内用户）：**
+```powershell
+irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.ps1 -UseBasicParsing | iex
+```
+
+**海外用户**请访问 [Gitee Release](https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/releases) 下载对应脚本。
 
 ### 首次配置
 
@@ -323,11 +327,7 @@ python tests/test_real_usage.py
 
 ## 安装方式
 
-> 详细安装说明请参考上方 [快速开始](#快速开始) 部分。
-
-脚本下载：
-- macOS/Linux: [install-cn.sh](scripts/install-cn.sh) (国内) / [install.sh](scripts/install.sh) (海外)
-- Windows: [install-cn.ps1](scripts/install-cn.ps1) (国内) / [install-global.ps1](scripts/install-global.ps1) (海外)
+详细安装说明请参考上方 [快速开始](#快速开始) 部分。
 
 ---
 
