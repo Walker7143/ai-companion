@@ -119,15 +119,6 @@ install_local() {
     fi
 
     echo ""
-    echo "⚙️  初始化配置..."
-    if [ ! -f "$USER_DIR/config/models.yaml" ]; then
-        mkdir -p "$USER_DIR/config"
-        cp "$PROJECT_DIR/config/models.yaml.example" "$USER_DIR/config/models.yaml" 2>/dev/null || true
-        cp "$PROJECT_DIR/config/bots.yaml" "$USER_DIR/config/bots.yaml" 2>/dev/null || true
-        echo "✓ 配置文件已创建"
-    fi
-
-    echo ""
     echo "═══════════════════════════════════════════"
     echo "✓ 安装完成！"
     echo ""
