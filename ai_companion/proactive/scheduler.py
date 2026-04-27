@@ -8,7 +8,6 @@ import asyncio
 import logging
 import random
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -19,41 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 class ProactiveScheduler:
-    """主动唤醒调度器（后台运行）"""
+    """主动唤醒调度器（后台运行，仅处理消息发送，受黄金时段限制）"""
 
     def __init__(self, engine: "ProactiveEngine"):
-        from .life_config import LifeConfig
-        from .life_state import LifeState
-        from .life_engine import LifeEngine
-
         self.engine = engine
         self.config = engine.config
         self._task: Optional[asyncio.Task] = None
         self._running = False
 
-        # 加载 LifeEngine 相关组件
-        bot_id = engine.bot_id
-        persona_dir = Path(f"data/bots/{bot_id}/persona")
-        self.life_config = LifeConfig(_persona_dir=persona_dir)
-        self.life_config.load()
-        self.life_state = LifeState(bot_id, Path("data/bots"))
-        self.life_engine = LifeEngine(
-            bot_id=bot_id,
-            config=self.life_config,
-            state=self.life_state,
-            model=None,
-            memory=None,
-            persona_dir=persona_dir,
-        )
-
     def set_dependencies(self, model, memory):
-        """由外部注入 model 和 memory 依赖"""
-        self.life_engine.set_model(model)
-        self.life_engine.set_memory(memory)
-        if hasattr(self.engine, '_persona_loader'):
-            self.life_engine.set_persona_loader(self.engine._persona_loader)
-        # 注入 life_engine 到 engine
-        self.engine.set_life_engine(self.life_engine)
+        """由外部注入 model 和 memory 依赖（LifeEngine 已移到 BotInstance，不再需要）"""
+        pass  # 不再需要，LifeEngine 由 BotInstance 独立管理
 
     async def start(self):
         """启动调度器（后台协程）"""
@@ -120,9 +95,7 @@ class ProactiveScheduler:
                 now = datetime.now()
                 logger.debug(f"[ProactiveScheduler] 非黄金时段 ({now.hour}点)，跳过主动触发")
 
-        # Bot 人生轨迹更新（不受黄金时段限制，生命自然流动）
-        if self.config.is_active:
-            await self._tick_life()
+        # 注意：人生轨迹已分离到 LifeScheduler，不在这里处理
 
     def _is_golden_hour(self) -> bool:
         """检查当前是否在黄金时段"""
@@ -181,25 +154,6 @@ class ProactiveScheduler:
             return True
 
         return False
-
-    async def _tick_life(self):
-        """Bot 人生轨迹更新（不受黄金时段限制，生命自然流动）"""
-        try:
-            # 短周期：日常小事（按 time_ratio 缩放）
-            if self.life_config.is_daily_due(self.life_state.last_daily_tick):
-                logger.debug("[ProactiveScheduler] 日常事件到期，执行 tick_daily")
-                await self.life_engine.tick_daily()
-            else:
-                logger.debug(f"[ProactiveScheduler] 日常事件未到期（last_tick={self.life_state.last_daily_tick}）")
-
-            # 长周期：人生大事（按 time_ratio 缩放）
-            if self.life_config.is_major_due(self.life_state.last_major_tick):
-                logger.debug("[ProactiveScheduler] 人生大事到期，执行 tick_major")
-                await self.life_engine.tick_major()
-            else:
-                logger.debug(f"[ProactiveScheduler] 人生大事未到期（last_tick={self.life_state.last_major_tick}）")
-        except Exception as e:
-            logger.error(f"[ProactiveScheduler] _tick_life 异常: {e}")
 
     async def _notify_platform(self, message: str):
         """通知平台发送消息（由平台适配器实现具体发送）"""

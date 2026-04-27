@@ -10,6 +10,10 @@ from ..persona.engine import PersonaEngine
 from ..persona.refusal_engine import RefusalEngine
 from ..persona.refusal_category import RefusalCategory
 from ..proactive import ProactiveConfig, ProactiveState, ProactiveEngine, ProactiveScheduler, create_platform
+from ..proactive.life_config import LifeConfig
+from ..proactive.life_state import LifeState
+from ..proactive.life_engine import LifeEngine
+from ..proactive.life_scheduler import LifeScheduler
 from ..skill import SkillDispatcher, SkillRegistry, ImageGenerationSkill, TTSSkill, MultimodalSender, create_channel
 
 if TYPE_CHECKING:
@@ -87,6 +91,20 @@ class BotInstance:
         )
         self.proactive_scheduler: Optional[ProactiveScheduler] = None
         self._proactive_platform = None
+
+        # ── 人生轨迹系统 ─────────────────────────────────────
+        self.life_config = LifeConfig(persona_dir)
+        self.life_config.load()
+        self.life_state = LifeState(self.id, data_dir or Path(__file__).parent.parent.parent / "data" / "bots")
+        self.life_engine = LifeEngine(
+            bot_id=self.id,
+            config=self.life_config,
+            state=self.life_state,
+            model=model,
+            memory=memory,
+            persona_dir=persona_dir,
+        )
+        self.life_scheduler: Optional[LifeScheduler] = None
 
         # ── 技能系统 ─────────────────────────────────────
         self.skill_dispatcher = SkillDispatcher()
@@ -182,13 +200,27 @@ class BotInstance:
             self.memory.start_session()
         self._initialized = True
 
-        # 启动主动唤醒调度器
+        # 启动主动唤醒调度器（发送消息，受黄金时段限制）
         if self.proactive_config.is_active:
             self.proactive_scheduler = ProactiveScheduler(self.proactive_engine)
             self.proactive_scheduler.set_dependencies(self.model, self.memory)
             await self.proactive_scheduler.start()
-            print(f"[OK] {self.name} 人生轨迹已启动")
             logger.info(f"[BotInstance] 主动唤醒配置: idle_threshold={self.proactive_config.idle_threshold_hours}h, max_daily={self.proactive_config.max_daily}, 黄金时段={self.proactive_config.preferred_contact_times}")
+
+            # 启动人生轨迹调度器（独立周期，不受黄金时段限制）
+            self.life_scheduler = LifeScheduler(
+                life_engine=self.life_engine,
+                life_config=self.life_config,
+                life_state=self.life_state,
+            )
+            self.life_engine.set_model(self.model)
+            if self.memory:
+                self.life_engine.set_memory(self.memory)
+            if hasattr(self, '_persona_loader'):
+                self.life_engine.set_persona_loader(self._persona_loader)
+            await self.life_scheduler.start()
+            print(f"[OK] {self.name} 人生轨迹已启动")
+            print(f"     日常事件间隔: {self.life_config.daily_interval}s, 人生大事间隔: {self.life_config.major_interval}s")
         else:
             logger.info(f"[BotInstance] {self.name} 处于静默模式，跳过调度器")
 
@@ -344,6 +376,8 @@ class BotInstance:
         """关闭时清理资源"""
         if self.proactive_scheduler:
             await self.proactive_scheduler.stop()
+        if self.life_scheduler:
+            await self.life_scheduler.stop()
         if self.memory:
             await self.memory.close()
         # 关闭 MiniMax adapter 的 session

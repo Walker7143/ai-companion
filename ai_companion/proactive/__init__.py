@@ -18,6 +18,7 @@ from .platform import ProactivePlatform, CLIPlatform, FeishuPlatform, WebhookPla
 from .life_config import LifeConfig
 from .life_state import LifeEvent, MajorLifeEvent, LifeState
 from .life_engine import LifeEngine
+from .life_scheduler import LifeScheduler
 
 __all__ = [
     "ProactiveConfig",
@@ -35,4 +36,5 @@ __all__ = [
     "MajorLifeEvent",
     "LifeState",
     "LifeEngine",
+    "LifeScheduler",
 ]
