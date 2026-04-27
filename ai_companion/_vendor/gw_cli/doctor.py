@@ -31,7 +31,7 @@ load_dotenv(PROJECT_ROOT / ".env", override=False, encoding="utf-8")
 from ai_companion._vendor.gw_cli.colors import Colors, color
 from ai_companion._vendor.gw_cli.models import _HERMES_USER_AGENT
 from ..hermes_constants import OPENROUTER_MODELS_URL
-from utils import base_url_host_matches
+from ai_companion.utils import base_url_host_matches
 
 
 _PROVIDER_ENV_HINTS = (
@@ -420,7 +420,7 @@ def run_doctor(args):
                             model_section[k] = raw_config.pop(k)
                         else:
                             raw_config.pop(k)
-                    from utils import atomic_yaml_write
+                    from ai_companion.utils import atomic_yaml_write
                     atomic_yaml_write(config_path, raw_config)
                     check_ok("Migrated stale root-level keys into model section")
                     fixed_count += 1

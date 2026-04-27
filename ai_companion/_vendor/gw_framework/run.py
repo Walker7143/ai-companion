@@ -89,7 +89,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Resolve AI Companion home directory (respects HERMES_HOME override)
 from ai_companion._vendor.gw_constants import get_hermes_home
-from utils import atomic_yaml_write, base_url_host_matches, is_truthy_value
+from ai_companion.utils import atomic_yaml_write, base_url_host_matches, is_truthy_value
 _hermes_home = get_hermes_home()
 
 # Load environment variables from ~/.gw/.env first.

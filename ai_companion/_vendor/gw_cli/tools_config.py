@@ -25,7 +25,7 @@ from ai_companion._vendor.gw_cli.nous_subscription import (
     get_nous_subscription_features,
 )
 from tools.tool_backend_helpers import fal_key_is_configured, managed_nous_tools_enabled
-from utils import base_url_hostname
+from ai_companion.utils import base_url_hostname
 
 logger = logging.getLogger(__name__)
 

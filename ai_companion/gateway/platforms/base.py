@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 _vendor_dir = Path(__file__).parent.parent.parent / "_vendor"
 sys.path.insert(0, str(_vendor_dir))
 
-from utils import normalize_proxy_url
+from ai_companion.utils import normalize_proxy_url
 
 logger = logging.getLogger(__name__)
 

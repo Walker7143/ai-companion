@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 
 from ..hermes_constants import get_hermes_home
-from utils import env_var_enabled
+from ai_companion.utils import env_var_enabled
 
 try:
     import yaml

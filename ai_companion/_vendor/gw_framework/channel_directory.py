@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from ai_companion._vendor.gw_cli.config import get_hermes_home
-from utils import atomic_json_write
+from ai_companion.utils import atomic_json_write
 
 logger = logging.getLogger(__name__)
 

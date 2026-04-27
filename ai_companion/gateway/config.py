@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from enum import Enum
 
-from utils import is_truthy_value
+from ai_companion.utils import is_truthy_value
 
 from .constants import get_hermes_home
 

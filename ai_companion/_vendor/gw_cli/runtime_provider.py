@@ -29,7 +29,7 @@ from ai_companion._vendor.gw_cli.auth import (
 )
 from ai_companion._vendor.gw_cli.config import get_compatible_custom_providers, load_config
 from ..hermes_constants import OPENROUTER_BASE_URL
-from utils import base_url_host_matches, base_url_hostname
+from ai_companion.utils import base_url_host_matches, base_url_hostname
 
 
 def _normalize_custom_provider_name(value: str) -> str:
