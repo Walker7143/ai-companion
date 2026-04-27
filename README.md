@@ -323,41 +323,11 @@ python tests/test_real_usage.py
 
 ## 安装方式
 
-详细安装说明请参考上方 [快速开始](#快速开始) 部分。
+> 详细安装说明请参考上方 [快速开始](#快速开始) 部分。
 
-### macOS / Linux
-
-```bash
-# 国内用户（推荐清华镜像）
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.sh | bash
-
-# 海外用户
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
-
-# 或克隆后本地安装
-git clone https://gitee.com/wang_xiao_wei_7143/ai-girl-friend.git
-cd ai-girl-friend
-./scripts/install-cn.sh --local   # 国内
-./scripts/install.sh --local      # 海外
-```
-
-### Windows
-
-```powershell
-# 国内用户（推荐清华镜像）
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.ps1 -UseBasicParsing | iex
-
-# 海外用户
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-global.ps1 -UseBasicParsing | iex
-```
-
-### Docker
-
-```bash
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.sh | bash -s -- --docker
-# 或克隆后
-./scripts/install-cn.sh --docker
-```
+脚本下载：
+- macOS/Linux: [install-cn.sh](scripts/install-cn.sh) (国内) / [install.sh](scripts/install.sh) (海外)
+- Windows: [install-cn.ps1](scripts/install-cn.ps1) (国内) / [install-global.ps1](scripts/install-global.ps1) (海外)
 
 ---
 
