@@ -129,12 +129,39 @@ class BotInstance:
         self.refusal_engine.set_model(model)
         self.proactive_engine.set_model(model)
 
-    def set_proactive_platform(self, platform_type: str = None, **kwargs):
+    def set_proactive_platform(self, platform_type: str = None, feishu_adapter=None, **kwargs):
         """设置主动消息发送平台"""
+        if feishu_adapter:
+            # 直接使用传入的飞书适配器
+            self._proactive_platform = feishu_adapter
+            self.proactive_engine._platform_sender = lambda msg: self._wrap_feishu_send(msg, feishu_adapter)
+            return
+
         ptype = platform_type or self.proactive_config.platform_type
         self._proactive_platform = create_platform(ptype, **kwargs)
         # 设置回调
         self.proactive_engine._platform_sender = lambda msg: self._proactive_platform.send(self.id, msg)
+
+    async def _wrap_feishu_send(self, message: str, adapter) -> bool:
+        """包装飞书发送（适配 proactive 引擎的接口）"""
+        try:
+            # 优先使用用户最近发消息的 chat_id（动态获取）
+            chat_id = getattr(self, "_feishu_chat_id", None)
+            if not chat_id:
+                # 尝试从 proactive 配置获取
+                chat_id = self.proactive_config.get("home_channel")
+            if not chat_id:
+                # 尝试从 platform 配置获取
+                feishu_cfg = self.proactive_config.get("platform", {})
+                chat_id = feishu_cfg.get("home_channel")
+            if not chat_id:
+                logger.warning(f"[BotInstance] 未配置 home_channel，无法发送主动消息")
+                return False
+            result = await adapter.send(chat_id=chat_id, content=message)
+            return result.success if hasattr(result, 'success') else result
+        except Exception as e:
+            logger.error(f"[BotInstance] 飞书发送失败: {e}")
+            return False
 
     def set_channel(self, channel_type: str = "cli", **kwargs):
         """设置消息通道（用于多模态发送）"""

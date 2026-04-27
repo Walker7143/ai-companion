@@ -970,6 +970,17 @@ async def run_gateway(daemon: bool = True):
     for bot_config in config.get_enabled_bots():
         bot_config = {**bot_config, "data_dir": str(data_dir)}
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
+
+        # 设置主动消息发送平台（需要飞书适配器在 init 之前设置）
+        if feishu_config:
+            # 先创建飞书适配器（用于主动消息发送）
+            platform_config = PlatformConfig(
+                enabled=True,
+                extra=feishu_config
+            )
+            feishu_adapter = FeishuAdapter(platform_config)
+            bot.set_proactive_platform(feishu_adapter=feishu_adapter)
+
         await bot.init()
         bot_manager.register(bot)
         print(f"[OK] 加载 Bot: {bot.name}")
@@ -1012,6 +1023,10 @@ async def run_gateway(daemon: bool = True):
 
             if not bot:
                 return "没有可用的 Bot"
+
+            # 记录用户所在的 chat_id，作为主动消息的发送目标
+            if event.source and hasattr(event.source, 'chat_id'):
+                bot._feishu_chat_id = event.source.chat_id
 
             try:
                 response = await bot.handle_message(event.text)
