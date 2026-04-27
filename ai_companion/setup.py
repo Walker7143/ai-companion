@@ -175,7 +175,7 @@ async def run_setup():
             src_persona = project_dir / "data" / "bots" / bot_id / "persona"
         dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
 
-        if src_persona.exists():
+        if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
             shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
             console.print(f"✓ [green]{bot_name}[/green] 已添加")
         else:
@@ -192,7 +192,7 @@ async def run_setup():
         if not src_persona.exists():
             src_persona = project_dir / "data" / "bots" / bot_id / "persona"
         dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
-        if src_persona.exists():
+        if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
             shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
         created_bots.append({"id": bot_id, "name": bot_name})
 
