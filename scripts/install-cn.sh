@@ -103,6 +103,15 @@ install_local() {
     $VENV_PIP install --no-cache-dir "$PROJECT_DIR" -i "$PYTHON_INDEX" -q
     echo "✓ AI Companion 已安装"
 
+    # 复制 Bot 模板到数据目录（pip 不打包运行时数据）
+    echo ""
+    echo "📦 复制 Bot 人格模板..."
+    if [ -d "$PROJECT_DIR/data/bots" ]; then
+        mkdir -p "$USER_DIR/data/bots"
+        cp -r "$PROJECT_DIR/data/bots"/* "$USER_DIR/data/bots/" 2>/dev/null || true
+        echo "✓ Bot 模板已准备"
+    fi
+
     # Install frontend UI dependencies
     if [ -f "$PROJECT_DIR/ai-companion-ui/package.json" ]; then
         echo ""
