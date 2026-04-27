@@ -93,7 +93,7 @@ class BotInstance:
         self._proactive_platform = None
 
         # ── 人生轨迹系统 ─────────────────────────────────────
-        self.life_config = LifeConfig(persona_dir)
+        self.life_config = LifeConfig(_persona_dir=persona_dir)
         self.life_config.load()
         self.life_state = LifeState(self.id, data_dir or Path(__file__).parent.parent.parent / "data" / "bots")
         self.life_engine = LifeEngine(
@@ -101,10 +101,13 @@ class BotInstance:
             config=self.life_config,
             state=self.life_state,
             model=model,
-            memory=memory,
+            memory=self.memory,
             persona_dir=persona_dir,
         )
         self.life_scheduler: Optional[LifeScheduler] = None
+
+        # 初始化日期和年龄（从 profile.json 读取）
+        self._init_life_from_profile()
 
         # ── 技能系统 ─────────────────────────────────────
         self.skill_dispatcher = SkillDispatcher()
@@ -141,6 +144,54 @@ class BotInstance:
         elif "温柔" in tags:
             return "温柔"
         return "默认"
+
+    def _init_life_from_profile(self):
+        """从 profile.json 初始化 Bot 的出生日期和初始年龄"""
+        profile = self.persona.profile
+        if not profile:
+            return
+
+        # 设置初始年龄
+        initial_age = profile.get("age", 20)
+        if self.life_state.initial_age is None:
+            self.life_state.initial_age = initial_age
+
+        # 设置生日月份
+        birth_date = profile.get("birth_date")
+        if birth_date:
+            self.life_state.birth_date = birth_date
+            self.life_config.birth_date = birth_date
+            # 从 birth_date 提取月份
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(birth_date, "%Y-%m-%d")
+                self.life_state.birthday_month = dt.month
+                self.life_config.season_birthday_month = dt.month
+            except Exception:
+                pass
+        else:
+            # 如果没有 birth_date，从 age 和当前日期反推
+            from datetime import datetime
+            current_year = datetime.now().year
+            birth_year = current_year - initial_age
+            # 假设生日在配置的月份
+            birthday_month = self.life_config.season_birthday_month or 6
+            self.life_state.birth_date = f"{birth_year}-{birthday_month:02d}-15"
+            self.life_state.birthday_month = birthday_month
+
+        # 初始化当前日期（如果是新 Bot）
+        if not self.life_state.current_date:
+            self.life_state.current_date = datetime.now().strftime("%Y-%m-%d")
+            self.life_state.year = datetime.now().year
+            self.life_state.day_of_week = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][datetime.now().weekday()]
+            self.life_state.is_weekend = datetime.now().weekday() >= 5
+
+            # 初始化季节
+            current_month = datetime.now().month
+            self.life_state.current_month = current_month
+            self.life_state.current_season = self.life_engine._get_season(current_month)
+
+        logger.info(f"[BotInstance] 初始化人生轨迹: initial_age={initial_age}, birth_date={self.life_state.birth_date}")
 
     def set_model(self, model: "ModelAdapter"):
         self.model = model

@@ -20,6 +20,22 @@ DEFAULT_CONFIG = {
     "time_ratio_warning_threshold": 500,
     "max_events": 20,
     "max_context_bits": 2000,
+    "season": {
+        "hemisphere": "north",         # north | south（南半球季节相反）
+        "birthday_month": 1,          # 生日月份，影响季节计算起点
+    },
+    "milestones": [],                   # 年龄里程碑配置
+    "holidays": [                      # 节假日配置
+        {"name": "元旦", "month": 1, "day": 1, "type": "法定假日"},
+        {"name": "情人节", "month": 2, "day": 14, "type": "西方节日"},
+        {"name": "清明节", "month": 4, "day": 5, "type": "传统节日"},
+        {"name": "劳动节", "month": 5, "day": 1, "type": "法定假日"},
+        {"name": "端午节", "month": 6, "day": 10, "type": "传统节日"},
+        {"name": "中秋节", "month": 9, "day": 17, "type": "传统节日"},
+        {"name": "国庆节", "month": 10, "day": 1, "type": "法定假日"},
+        {"name": "圣诞节", "month": 12, "day": 25, "type": "西方节日"},
+    ],
+    "birth_date": None,                # Bot 出生日期（YYYY-MM-DD格式）
 }
 
 
@@ -32,6 +48,11 @@ class LifeConfig:
     time_ratio_warning_threshold: int = 500
     max_events: int = 20
     max_context_bits: int = 2000
+    season_hemisphere: str = "north"
+    season_birthday_month: int = 1
+    milestones: list = field(default_factory=list)
+    holidays: list = field(default_factory=list)
+    birth_date: Optional[str] = None
 
     # 内部状态
     _persona_dir: Optional[Path] = field(default=None, repr=False)
@@ -67,6 +88,20 @@ class LifeConfig:
                 self.time_ratio_warning_threshold = self._config.get("time_ratio_warning_threshold", 500)
                 self.max_events = self._config.get("max_events", 20)
                 self.max_context_bits = self._config.get("max_context_bits", 2000)
+
+                # 季节配置
+                season_cfg = self._config.get("season", {})
+                self.season_hemisphere = season_cfg.get("hemisphere", "north")
+                self.season_birthday_month = season_cfg.get("birthday_month", 1)
+
+                # 里程碑配置
+                self.milestones = self._config.get("milestones", [])
+
+                # 节假日配置
+                self.holidays = self._config.get("holidays", DEFAULT_CONFIG["holidays"])
+
+                # 出生日期
+                self.birth_date = self._config.get("birth_date")
 
                 # 检查警告阈值
                 if self.time_ratio > self.time_ratio_warning_threshold:

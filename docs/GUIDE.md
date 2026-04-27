@@ -505,6 +505,7 @@ bots:
 ## 4. Bot 人生轨迹
 
 > Bot 具备独立人生轨迹，会生成日常小事和人生大事，这些事件会影响 Bot 的情绪和行为。
+> 详细设计文档：[DESIGN_phase6_life_timeline.md](./DESIGN_phase6_life_timeline.md)
 
 ### 4.1 概述
 
@@ -515,6 +516,17 @@ Bot 人生轨迹系统（LifeEngine）让 Bot 具备「自己的生活」：
 | 日常小事 | 短周期 | 低概率生成，可分享给用户 | 保存在 life_events，可遗忘 |
 | 人生大事 | 长周期 | 触发人格更新 | 永久保存，更新到人格文件 |
 
+**新增功能（v2）**：
+
+| 功能 | 说明 |
+|------|------|
+| 季节系统 | Bot 知道自己活在哪个季节（春夏秋冬），影响事件生成 |
+| 日期时间线 | Bot 知道自己活在几月几日、周几 |
+| 节假日系统 | Bot 知道春节、中秋、国庆等节假日 |
+| 生日自动触发 | 每年的生日会自动生成事件 |
+| 年龄里程碑 | 在特定年龄（如18岁高考）触发固定事件 |
+| 实际年龄计算 | 基于 profile.json 的初始年龄 + bot_age_days 计算 |
+
 ### 4.2 配置文件
 
 `data/bots/{bot_id}/persona/life.json`：
@@ -524,12 +536,53 @@ Bot 人生轨迹系统（LifeEngine）让 Bot 具备「自己的生活」：
   "daily_interval_seconds": 3600,
   "major_interval_seconds": 21600,
   "time_ratio": 1,
+  "time_ratio_warning_threshold": 500,
   "max_events": 20,
-  "max_context_bits": 2000
+  "max_context_bits": 2000,
+  "season": {
+    "hemisphere": "north",
+    "birthday_month": 6
+  },
+  "milestones": [
+    {"age": 18, "event": "高考结束", "topic_prompt": "想起当年高考的时候..."},
+    {"age": 22, "event": "大学毕业", "topic_prompt": "毕业典礼那天..."}
+  ],
+  "holidays": [
+    {"name": "元旦", "month": 1, "day": 1, "type": "法定假日"},
+    {"name": "情人节", "month": 2, "day": 14, "type": "西方节日"},
+    {"name": "清明节", "month": 4, "day": 5, "type": "传统节日"},
+    {"name": "劳动节", "month": 5, "day": 1, "type": "法定假日"},
+    {"name": "端午节", "month": 6, "day": 10, "type": "传统节日"},
+    {"name": "中秋节", "month": 9, "day": 17, "type": "传统节日"},
+    {"name": "国庆节", "month": 10, "day": 1, "type": "法定假日"},
+    {"name": "圣诞节", "month": 12, "day": 25, "type": "西方节日"}
+  ],
+  "birth_date": null
 }
 ```
 
-### 4.3 配置项说明
+### 4.3 profile.json 新增字段
+
+为了让人生轨迹系统正确工作，需要在 `profile.json` 中配置：
+
+```json
+{
+  "id": "suqing",
+  "name": "苏晴",
+  "age": 26,
+  "birth_date": "1998-06-15",
+  "occupation": "自由插画师"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `age` | 是 | Bot 初始年龄（系统会基于此计算实际年龄） |
+| `birth_date` | 推荐 | Bot 出生日期（YYYY-MM-DD 格式），用于计算生日和当前日期 |
+
+> 如果不配置 `birth_date`，系统会根据 `age` 和当前日期反推一个出生日期（假设生日在配置的 `season.birthday_month` 月）。
+
+### 4.4 配置项说明
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -538,8 +591,114 @@ Bot 人生轨迹系统（LifeEngine）让 Bot 具备「自己的生活」：
 | `time_ratio` | 1 | Bot 时间与现实时间的比率 |
 | `max_events` | 20 | 最多保留日常事件数 |
 | `max_context_bits` | 2000 | 事件描述最多占用字符数 |
+| `season.hemisphere` | "north" | 北半球/南半球（影响季节计算） |
+| `season.birthday_month` | 1 | 生日月份（用于初始化） |
+| `milestones` | [] | 年龄里程碑列表 |
+| `holidays` | 默认8个 | 节假日列表 |
+| `birth_date` | null | Bot 出生日期 |
 
-### 4.4 time_ratio 时间加速
+### 4.5 季节系统
+
+Bot 知道自己活在哪个季节，这会影响生成的事件：
+
+| 季节 | 月份 | 心情标签 | 适合的事件类型 |
+|------|------|----------|----------------|
+| 春 | 3, 4, 5 | 温暖、希望、慵懒 | 踏青、赏花、春游 |
+| 夏 | 6, 7, 8 | 炎热、烦躁、活力 | 游泳、晒黑、空调病 |
+| 秋 | 9, 10, 11 | 凉爽、感慨、收获 | 赏叶、秋游、年终总结 |
+| 冬 | 12, 1, 2 | 寒冷、慵懒、期待 | 滑雪、感冒、圣诞 |
+
+**南半球支持**：
+```json
+"season": {
+  "hemisphere": "south"
+}
+```
+南半球季节与北半球相反（6月是冬季，12月是夏季）。
+
+### 4.6 日期时间线
+
+Bot 知道自己活在现实中的哪一天：
+
+| 状态字段 | 说明 |
+|----------|------|
+| `current_date` | 当前日期（YYYY-MM-DD） |
+| `day_of_week` | 周几（周一~周日） |
+| `year` | 当前年份 |
+| `is_weekend` | 是否周末 |
+| `current_month` | 当前月份（1-12） |
+| `current_season` | 当前季节（春夏秋冬） |
+
+每天 `tick_daily` 时，`current_date` 会推进：
+- `time_ratio >= 1440` 时，每天推进 1 天
+- `time_ratio < 1440` 时，每次推进 1 天（不受加速影响）
+
+### 4.7 节假日系统
+
+节假日影响事件生成。默认节假日：
+
+| 节日 | 日期 | 类型 |
+|------|------|------|
+| 元旦 | 1月1日 | 法定假日 |
+| 情人节 | 2月14日 | 西方节日 |
+| 清明节 | 4月5日 | 传统节日 |
+| 劳动节 | 5月1日 | 法定假日 |
+| 端午节 | 6月10日 | 传统节日 |
+| 中秋节 | 9月17日 | 传统节日 |
+| 国庆节 | 10月1日 | 法定假日 |
+| 圣诞节 | 12月25日 | 西方节日 |
+
+可以在 `life.json` 中自定义节假日：
+```json
+"holidays": [
+  {"name": "端午节", "month": 6, "day": 10, "type": "传统节日"}
+]
+```
+
+### 4.8 生日自动触发
+
+当 `current_date` 推进到 Bot 的生日日期时，会自动触发生日事件：
+- 检查条件：`current_date.month == birth_date.month AND current_date.day == birth_date.day AND current_date.year > birth_date.year`
+- 生成的 `MajorLifeEvent` 描述为"度过了X岁生日"
+- 重要性设为 8.0，可分享给用户
+
+### 4.9 年龄里程碑系统
+
+配置里程碑后，Bot 在达到特定年龄时会触发固定事件：
+
+```json
+"milestones": [
+  {"age": 18, "event": "高考结束", "topic_prompt": "想起当年高考的时候..."},
+  {"age": 22, "event": "大学毕业", "topic_prompt": "毕业典礼那天..."},
+  {"age": 30, "event": "三十岁", "topic_prompt": "三十岁了，感慨时间..."}
+]
+```
+
+| 字段 | 说明 |
+|------|------|
+| `age` | 触发年龄（Bot 实际年龄 = profile.age + bot_age_days // 365） |
+| `event` | 事件名称 |
+| `topic_prompt` | 话题切入语（用于主动消息分享） |
+
+**里程碑触发逻辑**：
+1. 每次 `tick_daily` 时计算当前实际年龄
+2. 如果 `current_age > last_checked_age`，检查是否有新的里程碑年龄
+3. 同一个里程碑只触发一次（记录在 `triggered_milestones` 列表中）
+4. 如果 `time_ratio` 很高（跨年龄跳跃），会遍历中间所有待触发里程碑
+
+**人生阶段判断**：
+
+| 年龄范围 | 阶段 |
+|----------|------|
+| < 15岁 | 少年时期 |
+| 15-17岁 | 高中时期 |
+| 18-21岁 | 大学时期 |
+| 22-29岁 | 职场初期 |
+| 30-39岁 | 职场中期 |
+| 40-59岁 | 中年时期 |
+| >= 60岁 | 退休时期 |
+
+### 4.10 time_ratio 时间加速
 
 time_ratio 控制 Bot 内部时间的流逝速度。实际触发间隔受 LifeScheduler 轮询周期（10秒）限制：
 
@@ -555,7 +714,7 @@ time_ratio 控制 Bot 内部时间的流逝速度。实际触发间隔受 LifeSc
 > - time_ratio 最大有效值为 **360**（因为 LifeScheduler 每 10 秒检查一次）
 > - 超过 360 的值效果不会再加快，只是 Bot 年龄增长更快
 
-### 4.5 状态文件
+### 4.11 状态文件
 
 `data/bots/{bot_id}/life_state.json`：
 
@@ -594,11 +753,22 @@ time_ratio 控制 Bot 内部时间的流逝速度。实际触发间隔受 LifeSc
   "bot_current_activity": "在家画水彩",
   "bot_age_days": 45,
   "last_daily_tick": "2026-04-25T09:00:00",
-  "last_major_tick": "2026-04-24T00:00:00"
+  "last_major_tick": "2026-04-24T00:00:00",
+  "current_season": "春",
+  "current_month": 4,
+  "birthday_month": 6,
+  "birth_date": "1998-06-15",
+  "current_date": "2026-04-27",
+  "day_of_week": "周三",
+  "year": 2026,
+  "is_weekend": false,
+  "last_checked_age": 26,
+  "triggered_milestones": [],
+  "_initial_age": 26
 }
 ```
 
-### 4.6 LifeEvent 字段说明
+### 4.12 LifeEvent 字段说明
 
 | 字段 | 说明 |
 |------|------|
@@ -614,7 +784,7 @@ time_ratio 控制 Bot 内部时间的流逝速度。实际触发间隔受 LifeSc
 | `related_to_user` | 是否与用户相关 |
 | `context_bits` | 描述的字符数 |
 
-### 4.7 事件如何影响 Bot
+### 4.13 事件如何影响 Bot
 
 **日常小事**：
 - Bot 可能主动提起最近发生的日常小事
@@ -626,20 +796,34 @@ time_ratio 控制 Bot 内部时间的流逝速度。实际触发间隔受 LifeSc
 - 可能更新 `profile.json` 或 `backstory.json`
 - 影响 Bot 的长期性格发展
 
-### 4.8 查看 Bot 状态
+### 4.14 查看 Bot 状态
 
 Bot 当前的活动和情绪状态：
 - `bot_mood`：当前心情（如"愉悦"、"平静"、"有点累"）
 - `bot_current_activity`：当前活动（如"在家画水彩"、"在外面散步"）
 - `bot_age_days`：Bot 的"年龄"（按 Bot 时间计算）
+- `bot_real_age`：实际年龄（profile.age + bot_age_days // 365）
+- `life_stage`：当前人生阶段（如"职场中期"）
 
-### 4.9 调整事件生成频率
+### 4.15 人生轨迹日志
+
+人生轨迹相关日志独立保存在：
+```
+~/.ai-companion/logs/life.log
+```
+
+而 Gateway 其他日志在：
+```
+~/.ai-companion/logs/gateway.log
+```
+
+### 4.16 调整事件生成频率
 
 ```json
 {
-  "daily_interval_seconds": 1800,    // 减小则更频繁生成日常事件
-  "major_interval_seconds": 10800,   // 减小则更频繁生成人生大事
-  "time_ratio": 24                   // 加速 Bot 时间
+  "daily_interval_seconds": 1800,
+  "major_interval_seconds": 10800,
+  "time_ratio": 24
 }
 ```
 

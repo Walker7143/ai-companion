@@ -82,6 +82,20 @@ class LifeState:
             "bot_age_days": 0,
             "last_daily_tick": None,
             "last_major_tick": None,
+            # 季节和日期系统
+            "current_season": "春",
+            "current_month": 1,
+            "birthday_month": 1,
+            "birth_date": None,
+            "current_date": None,
+            "day_of_week": "周一",
+            "year": 2024,
+            "is_weekend": False,
+            # 里程碑系统
+            "last_checked_age": 0,
+            "triggered_milestones": [],
+            # 内部状态
+            "_initial_age": None,
         }
 
     def load(self):
@@ -169,6 +183,105 @@ class LifeState:
     @last_major_tick.setter
     def last_major_tick(self, value: datetime):
         self._state["last_major_tick"] = value.isoformat() if value else None
+        self.save()
+
+    @property
+    def current_season(self) -> str:
+        return self._state.get("current_season", "春")
+
+    @current_season.setter
+    def current_season(self, value: str):
+        self._state["current_season"] = value
+        self.save()
+
+    @property
+    def current_month(self) -> int:
+        return self._state.get("current_month", 1)
+
+    @current_month.setter
+    def current_month(self, value: int):
+        self._state["current_month"] = value
+        self.save()
+
+    @property
+    def birthday_month(self) -> int:
+        return self._state.get("birthday_month", 1)
+
+    @birthday_month.setter
+    def birthday_month(self, value: int):
+        self._state["birthday_month"] = value
+        self.save()
+
+    @property
+    def birth_date(self) -> Optional[str]:
+        return self._state.get("birth_date")
+
+    @birth_date.setter
+    def birth_date(self, value: Optional[str]):
+        self._state["birth_date"] = value
+        self.save()
+
+    @property
+    def current_date(self) -> Optional[str]:
+        return self._state.get("current_date")
+
+    @current_date.setter
+    def current_date(self, value: Optional[str]):
+        self._state["current_date"] = value
+        self.save()
+
+    @property
+    def day_of_week(self) -> str:
+        return self._state.get("day_of_week", "周一")
+
+    @day_of_week.setter
+    def day_of_week(self, value: str):
+        self._state["day_of_week"] = value
+        self.save()
+
+    @property
+    def year(self) -> int:
+        return self._state.get("year", 2024)
+
+    @year.setter
+    def year(self, value: int):
+        self._state["year"] = value
+        self.save()
+
+    @property
+    def is_weekend(self) -> bool:
+        return self._state.get("is_weekend", False)
+
+    @is_weekend.setter
+    def is_weekend(self, value: bool):
+        self._state["is_weekend"] = value
+        self.save()
+
+    @property
+    def last_checked_age(self) -> int:
+        return self._state.get("last_checked_age", 0)
+
+    @last_checked_age.setter
+    def last_checked_age(self, value: int):
+        self._state["last_checked_age"] = value
+        self.save()
+
+    @property
+    def triggered_milestones(self) -> list:
+        return self._state.get("triggered_milestones", [])
+
+    @triggered_milestones.setter
+    def triggered_milestones(self, value: list):
+        self._state["triggered_milestones"] = value
+        self.save()
+
+    @property
+    def initial_age(self) -> Optional[int]:
+        return self._state.get("_initial_age")
+
+    @initial_age.setter
+    def initial_age(self, value: Optional[int]):
+        self._state["_initial_age"] = value
         self.save()
 
     def add_event(self, event: LifeEvent):

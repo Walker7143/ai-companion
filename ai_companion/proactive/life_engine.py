@@ -5,6 +5,8 @@ LifeEngine - Bot 独立人生轨迹引擎
 1. 生成日常小事（低概率）
 2. 判断并生成人生大事（更新人格文件）
 3. 管理事件上下文和 Bot 年龄
+4. 季节和节假日系统
+5. 年龄里程碑系统
 """
 
 import json
@@ -13,7 +15,7 @@ import re
 import tempfile
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -25,28 +27,42 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 季节定义（北半球）
+SEASONS = {
+    "春": {"months": [3, 4, 5], "mood_tags": ["温暖", "希望", "慵懒"]},
+    "夏": {"months": [6, 7, 8], "mood_tags": ["炎热", "烦躁", "活力"]},
+    "秋": {"months": [9, 10, 11], "mood_tags": ["凉爽", "感慨", "收获"]},
+    "冬": {"months": [12, 1, 2], "mood_tags": ["寒冷", "慵懒", "期待"]},
+}
+
+WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
 # 日常小事生成 Prompt
 LIFE_DAILY_PROMPT = """【Bot角色】
-你是{both_name}，{age}岁，职业是{occupation}。
+你是{both_name}，{age_years}岁，职业是{occupation}。
 性格特点：{personality_tags}
 
-【任务】
-分析 Bot 当前生活状态，判断是否应该产生值得记录的日常小事。
+【当前时间背景】
+季节：{season}（{month}月）
+人生阶段：{life_stage}
+日期：{current_date}，{day_of_week}
+{holiday_context}
+{birthday_context}
 
 【Bot 当前状态】
 Bot 当前心情：{bot_mood}
 Bot 当前活动：{bot_current_activity}
-Bot 年龄：{bot_age_days} 天
+Bot 出生天数：{bot_age_days} 天
 最近发生的事件：{recent_events}
 
 【判断规则】
 1. 不要每天都生成事件——无聊的日常不值得记录
-2. 只有有情绪波动、有意义的事才生成，例如：
-   - 有情绪波动的事（兴奋、沮丧、感慨）
-   - 生活中的小变化（新尝试、意外发现）
-   - 工作/学习上的进展或挫折
-   - 看到/想到有感触的事
-3. 过于平凡的事不要生成，如"吃了个饭"、"睡了个觉"、"上了个班"
+2. 事件要符合 Bot 的年龄、季节、职业背景：
+   - 学生可能有考试、社团、实习
+   - 职场人有加班、项目完成、职业发展
+   - 夏天可能游泳、晒黑、空调病
+   - 冬天可能滑雪、感冒、年终总结
+3. 只有有情绪波动、有意义的事才生成
 4. 如果 Bot 状态平稳，输出空数组 []
 5. 生成的事件 importance 在 1-10 之间
 6. shareable 表示这件事是否值得主动分享给用户
@@ -60,7 +76,7 @@ Bot 年龄：{bot_age_days} 天
 
 # 人生大事生成 Prompt
 LIFE_MAJOR_PROMPT = """【Bot角色】
-你是{both_name}，{age}岁，职业是{occupation}。
+你是{both_name}，{age_years}岁，职业是{occupation}。
 性格特点：{personality_tags}
 
 【任务】
@@ -69,7 +85,8 @@ LIFE_MAJOR_PROMPT = """【Bot角色】
 【Bot 当前状态】
 Bot 当前心情：{bot_mood}
 Bot 当前活动：{bot_current_activity}
-Bot 年龄：{bot_age_days} 天
+Bot 出生天数：{bot_age_days} 天（相当于 {age_years} 岁）
+人生阶段：{life_stage}
 最近发生的事件：{recent_events}
 你们的关系：{relationship_desc}
 
@@ -259,6 +276,15 @@ class LifeEngine:
                 f"可能会影响生成事件的质量。"
             )
 
+        # 推进日期
+        self._advance_date()
+
+        # 检查生日
+        await self._check_birthday()
+
+        # 检查里程碑
+        await self._check_milestones()
+
         # 生成事件
         event = await self.generate_daily_event()
         if event:
@@ -272,6 +298,38 @@ class LifeEngine:
         self.state.save()
 
         return event
+
+    async def _check_birthday(self):
+        """检查是否到达生日"""
+        if not self.state.current_date or not self.state.birth_date:
+            return
+
+        try:
+            current = datetime.strptime(self.state.current_date, "%Y-%m-%d")
+            birth = datetime.strptime(self.state.birth_date, "%Y-%m-%d")
+            if current.month == birth.month and current.day == birth.day and current.year > birth.year:
+                await self.generate_birthday_event()
+        except Exception as e:
+            logger.debug(f"[LifeEngine] 生日检查失败: {e}")
+
+    async def _check_milestones(self):
+        """检查是否触发里程碑"""
+        if not self.config.milestones:
+            return
+
+        current_age = self._calc_real_age()
+        if current_age <= self.state.last_checked_age:
+            return
+
+        triggered = self.state.triggered_milestones
+        for milestone in self.config.milestones:
+            if milestone["age"] > self.state.last_checked_age and milestone["age"] <= current_age:
+                if milestone["age"] not in triggered:
+                    await self.generate_milestone_event(milestone)
+                    triggered.append(milestone["age"])
+                    self.state.triggered_milestones = triggered
+
+        self.state.last_checked_age = current_age
 
     async def tick_major(self) -> Optional["MajorLifeEvent"]:
         """执行一次人生大事检查"""
@@ -302,16 +360,25 @@ class LifeEngine:
             for e in recent
         ]) or "最近没有发生特别的事"
 
+        # 构建完整上下文
+        life_context = self._build_life_context()
+
+        # 检查节假日和生日
+        holiday_context, birthday_context = self._check_special_date()
+
         prompt = LIFE_DAILY_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             both_name=getattr(self, "bot_name", self.bot_id),
-            age=getattr(self, "bot_age", 22),
+            age_years=self._calc_real_age(),
             occupation=getattr(self, "occupation", "未知"),
             personality_tags=self._personality_type,
             bot_mood=self.state.bot_mood,
             bot_current_activity=self.state.bot_current_activity,
             bot_age_days=self.state.bot_age_days,
             recent_events=recent_str,
+            **life_context,
+            holiday_context=holiday_context,
+            birthday_context=birthday_context,
         )
 
         try:
@@ -352,6 +419,160 @@ class LifeEngine:
             logger.error(f"[LifeEngine] 生成日常事件失败: {e}")
             return None
 
+    def _build_life_context(self) -> dict:
+        """构建完整的人生上下文"""
+        season_info = self._get_season_info()
+        age_years = self._calc_real_age()
+        life_stage = self._calc_life_stage(age_years)
+
+        return {
+            "season": season_info["season"],
+            "month": season_info["month"],
+            "life_stage": life_stage,
+            "current_date": self.state.current_date or "未知",
+            "day_of_week": self.state.day_of_week or "周一",
+        }
+
+    def _get_season_info(self) -> dict:
+        """获取当前季节信息"""
+        month = self.state.current_month or 1
+        season = self._get_season(month)
+        return {
+            "season": season,
+            "month": month,
+            "mood_tags": SEASONS.get(season, {}).get("mood_tags", ["平静"]),
+        }
+
+    def _get_season(self, month: int) -> str:
+        """根据月份获取季节"""
+        if self.config.season_hemisphere == "south":
+            # 南半球季节相反
+            month_offset = {12: "夏", 1: "夏", 2: "夏", 3: "冬", 4: "冬", 5: "冬",
+                           6: "春", 7: "春", 8: "春", 9: "秋", 10: "秋", 11: "秋"}
+            return month_offset.get(month, "春")
+
+        for season, info in SEASONS.items():
+            if month in info["months"]:
+                return season
+        return "春"
+
+    def _calc_real_age(self) -> int:
+        """计算 Bot 当前实际年龄（岁）"""
+        initial_age = self.state.initial_age or getattr(self, "bot_age", 20)
+        return initial_age + self.state.bot_age_days // 365
+
+    def _calc_life_stage(self, age_years: int) -> str:
+        """计算人生阶段"""
+        if age_years < 15:
+            return "少年时期"
+        elif age_years < 18:
+            return "高中时期"
+        elif age_years < 22:
+            return "大学时期"
+        elif age_years < 30:
+            return "职场初期"
+        elif age_years < 40:
+            return "职场中期"
+        elif age_years < 60:
+            return "中年时期"
+        else:
+            return "退休时期"
+
+    def _check_special_date(self) -> tuple:
+        """检查是否是节假日或生日"""
+        holiday_context = ""
+        birthday_context = ""
+
+        if self.state.current_date and self.config.holidays:
+            try:
+                current = datetime.strptime(self.state.current_date, "%Y-%m-%d")
+                month_day = (current.month, current.day)
+
+                for holiday in self.config.holidays:
+                    if (holiday["month"], holiday["day"]) == month_day:
+                        holiday_context = f"今天是{holiday['name']}（{holiday['type']}）"
+                        break
+
+                # 检查生日
+                if self.state.birth_date:
+                    birth = datetime.strptime(self.state.birth_date, "%Y-%m-%d")
+                    if current.month == birth.month and current.day == birth.day:
+                        birthday_context = "今天是 Bot 的生日！"
+            except Exception:
+                pass
+
+        return holiday_context, birthday_context
+
+    def _advance_date(self):
+        """推进当前日期（每次 tick_daily 调用）"""
+        if not self.state.current_date:
+            # 首次初始化：从 birth_date 或当前日期开始
+            if self.state.birth_date:
+                self.state.current_date = self.state.birth_date
+            else:
+                self.state.current_date = datetime.now().strftime("%Y-%m-%d")
+
+        try:
+            current = datetime.strptime(self.state.current_date, "%Y-%m-%d")
+            # 根据 time_ratio 推进天数（time_ratio=1440 时每天推进1天）
+            days_to_add = max(1, self.config.time_ratio // 1440) if self.config.time_ratio >= 1440 else 1
+            current += timedelta(days=days_to_add)
+
+            self.state.current_date = current.strftime("%Y-%m-%d")
+            self.state.year = current.year
+            self.state.day_of_week = WEEKDAYS[current.weekday()]
+            self.state.is_weekend = current.weekday() >= 5
+
+            # 更新季节
+            self.state.current_month = current.month
+            self.state.current_season = self._get_season(current.month)
+        except Exception as e:
+            logger.error(f"[LifeEngine] 日期推进失败: {e}")
+
+    async def generate_milestone_event(self, milestone: dict) -> Optional["MajorLifeEvent"]:
+        """强制生成里程碑事件"""
+        from .life_state import MajorLifeEvent
+
+        event = MajorLifeEvent(
+            description=milestone["event"],
+            mood_before="期待",
+            mood_after="感慨",
+            importance=9.0,
+            shareable=True,
+            topic_prompt=milestone.get("topic_prompt", ""),
+            mood_tags=["重要节点"],
+            related_to_user=False,
+            context_bits=len(milestone["event"]),
+        )
+
+        self.state.add_major_event(event)
+        await self._apply_major_event(event)
+        logger.info(f"[LifeEngine] 里程碑事件: {milestone['event']} at age {milestone['age']}")
+
+        return event
+
+    async def generate_birthday_event(self) -> Optional["MajorLifeEvent"]:
+        """生成生日事件"""
+        from .life_state import MajorLifeEvent
+
+        age = self._calc_real_age()
+        event = MajorLifeEvent(
+            description=f"度过了{age}岁生日",
+            mood_before="期待",
+            mood_after="感慨",
+            importance=8.0,
+            shareable=True,
+            topic_prompt=f"今天是我{age}岁生日！",
+            mood_tags=["生日", "重要节点"],
+            related_to_user=False,
+            context_bits=10,
+        )
+
+        self.state.add_major_event(event)
+        logger.info(f"[LifeEngine] 生日事件: {age}岁生日")
+
+        return event
+
     async def generate_major_event(self) -> Optional["MajorLifeEvent"]:
         """生成人生大事"""
         from .life_state import MajorLifeEvent
@@ -362,10 +583,14 @@ class LifeEngine:
             for e in recent
         ]) or "最近没有特别的事"
 
+        # 构建完整上下文
+        life_context = self._build_life_context()
+        age_years = self._calc_real_age()
+
         prompt = LIFE_MAJOR_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             both_name=getattr(self, "bot_name", self.bot_id),
-            age=getattr(self, "bot_age", 22),
+            age_years=age_years,
             occupation=getattr(self, "occupation", "未知"),
             personality_tags=self._personality_type,
             bot_mood=self.state.bot_mood,
@@ -373,6 +598,7 @@ class LifeEngine:
             bot_age_days=self.state.bot_age_days,
             recent_events=recent_str,
             relationship_desc="普通朋友",
+            life_stage=life_context["life_stage"],
         )
 
         try:
@@ -424,6 +650,14 @@ class LifeEngine:
             "bot_mood": self.state.bot_mood,
             "bot_current_activity": self.state.bot_current_activity,
             "bot_age_days": self.state.bot_age_days,
+            "bot_real_age": self._calc_real_age(),
+            "current_season": self.state.current_season,
+            "current_month": self.state.current_month,
+            "current_date": self.state.current_date,
+            "day_of_week": self.state.day_of_week,
+            "year": self.state.year,
+            "is_weekend": self.state.is_weekend,
+            "life_stage": self._calc_life_stage(self._calc_real_age()),
             "life_events_count": len(self.state.life_events),
             "major_events_count": len(self.state.major_life_events),
             "last_daily_tick": self.state.last_daily_tick.isoformat() if self.state.last_daily_tick else None,
