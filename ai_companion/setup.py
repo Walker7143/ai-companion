@@ -222,12 +222,11 @@ async def run_setup():
         console.print(f"选择: [green]{platform_choice}[/green]")
 
         console.print("\n主动唤醒模式:")
-        console.print("  1. idle     - 空闲触发（用户沉默后主动联系）")
-        console.print("  2. active   - 活跃模式（更积极主动）")
-        console.print("  3. silent   - 静默模式（不主动发送）")
+        console.print("  1. 启用 - Bot 会主动联系你")
+        console.print("  2. 禁用 - Bot 不会主动发送消息")
 
-        mode_choice = Prompt.ask("选择模式", choices=["1", "2", "3"], default="1")
-        mode_map = {"1": "idle", "2": "active", "3": "silent"}
+        mode_choice = Prompt.ask("选择模式", choices=["1", "2"], default="1")
+        mode_map = {"1": "active", "2": "silent"}
         proactive_mode = mode_map[mode_choice]
 
         proactive_config = {

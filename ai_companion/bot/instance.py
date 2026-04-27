@@ -188,6 +188,9 @@ class BotInstance:
             self.proactive_scheduler.set_dependencies(self.model, self.memory)
             await self.proactive_scheduler.start()
             print(f"[OK] {self.name} 人生轨迹已启动")
+            logger.info(f"[BotInstance] 主动唤醒配置: idle_threshold={self.proactive_config.idle_threshold_hours}h, max_daily={self.proactive_config.max_daily}, 黄金时段={self.proactive_config.preferred_contact_times}")
+        else:
+            logger.info(f"[BotInstance] {self.name} 处于静默模式，跳过调度器")
 
     async def handle_message(self, user_input: str) -> str:
         """处理用户消息，返回回复"""

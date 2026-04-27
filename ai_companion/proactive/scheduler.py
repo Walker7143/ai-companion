@@ -82,6 +82,7 @@ class ProactiveScheduler:
 
     async def _run(self):
         """调度器主循环"""
+        logger.info(f"[ProactiveScheduler] 调度器开始运行，等待 {self.config.check_interval} 秒后首次检查")
         while self._running:
             try:
                 await self._tick()
@@ -91,33 +92,37 @@ class ProactiveScheduler:
                 logger.error(f"[ProactiveScheduler] 调度异常: {e}")
 
             # 等待下一次检查
+            logger.debug(f"[ProactiveScheduler] 本次检查完成，{self.config.check_interval} 秒后进行下次检查")
             await asyncio.sleep(self.config.check_interval)
 
     async def _tick(self):
         """执行一次检查"""
+        logger.info("[ProactiveScheduler] _tick() 被调用")
         if not self.config.is_active:
+            logger.info(f"[ProactiveScheduler] Bot {self.engine.bot_id} 处于静默模式，跳过检查")
             return
 
         # 更新最后检查时间
         self.engine.state._state["last_check_time"] = datetime.now().isoformat()
+        self.engine.state.save()
 
-        # 检查空闲触发
-        if self.config.idle_reminder_enabled:
-            # 检查黄金时段
-            if not self._is_golden_hour():
-                logger.debug("[ProactiveScheduler] 非黄金时段，跳过主动触发")
-            else:
+        # 检查空闲触发（主动消息发送受黄金时段限制）
+        if self.config.idle_reminder_enabled and self.config.is_active:
+            if self._is_golden_hour():
+                logger.info("[ProactiveScheduler] 黄金时段，检查是否需要发送主动消息")
                 message = await self.engine.check_and_maybe_remind()
                 if message:
                     logger.info(f"[ProactiveScheduler] 已发送主动消息: {message[:30]}...")
-                    # 通知平台发送（通过回调）
                     await self._notify_platform(message)
+                else:
+                    logger.debug("[ProactiveScheduler] 检查完成，暂无消息需要发送")
+            else:
+                now = datetime.now()
+                logger.debug(f"[ProactiveScheduler] 非黄金时段 ({now.hour}点)，跳过主动触发")
 
-        # 检查情绪触发（这个在 handle_message 中触发，这里只做延迟检查）
-        # ...
-
-        # Bot 人生轨迹更新
-        await self._tick_life()
+        # Bot 人生轨迹更新（不受黄金时段限制，生命自然流动）
+        if self.config.is_active:
+            await self._tick_life()
 
     def _is_golden_hour(self) -> bool:
         """检查当前是否在黄金时段"""
@@ -178,15 +183,21 @@ class ProactiveScheduler:
         return False
 
     async def _tick_life(self):
-        """Bot 人生轨迹更新"""
+        """Bot 人生轨迹更新（不受黄金时段限制，生命自然流动）"""
         try:
             # 短周期：日常小事（按 time_ratio 缩放）
             if self.life_config.is_daily_due(self.life_state.last_daily_tick):
+                logger.debug("[ProactiveScheduler] 日常事件到期，执行 tick_daily")
                 await self.life_engine.tick_daily()
+            else:
+                logger.debug(f"[ProactiveScheduler] 日常事件未到期（last_tick={self.life_state.last_daily_tick}）")
 
             # 长周期：人生大事（按 time_ratio 缩放）
             if self.life_config.is_major_due(self.life_state.last_major_tick):
+                logger.debug("[ProactiveScheduler] 人生大事到期，执行 tick_major")
                 await self.life_engine.tick_major()
+            else:
+                logger.debug(f"[ProactiveScheduler] 人生大事未到期（last_tick={self.life_state.last_major_tick}）")
         except Exception as e:
             logger.error(f"[ProactiveScheduler] _tick_life 异常: {e}")
 

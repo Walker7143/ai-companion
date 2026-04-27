@@ -8,6 +8,7 @@ import aiohttp
 import asyncio
 import json
 import logging
+import logging.handlers
 import os
 import signal
 import subprocess
@@ -1076,9 +1077,41 @@ async def run_gateway(daemon: bool = True):
         print("[OK] 网关已停止")
 
 
+class AiohttpAccessFilter(logging.Filter):
+    """过滤 aiohttp.access 的 INFO 日志，只打印 warn 和 error"""
+
+    def filter(self, record):
+        if record.name == "aiohttp.access" and record.levelno == logging.INFO:
+            return False
+        return True
+
+
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    )
+    def setup_logging():
+        """配置日志，同时输出到 stdout 和文件"""
+        import pathlib
+        log_dir = pathlib.Path.home() / ".ai-companion" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "gateway.log"
+
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.addFilter(AiohttpAccessFilter())
+
+        # Console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            handlers=[console_handler, file_handler],
+        )
+
+    setup_logging()
     asyncio.run(run_gateway())

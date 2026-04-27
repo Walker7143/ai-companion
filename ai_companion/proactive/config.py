@@ -41,7 +41,7 @@ class ProactiveConfig:
             "webhook_url": None,
         },
         # 黄金时段配置
-        "preferred_contact_times": ["19:00-22:00", "12:00-13:00"],
+        "preferred_contact_times": ["09:00-23:00"],
         "timezone": "Asia/Shanghai",
         # 随机触发配置
         "random_trigger_prob": 0.05,  # 5% 概率随机提前
@@ -112,7 +112,7 @@ class ProactiveConfig:
     @property
     def is_active(self) -> bool:
         """Bot 是否处于活跃模式（会主动发消息）"""
-        return self.enabled and self.mode == "active"
+        return self.enabled
 
     @property
     def check_interval(self) -> int:
