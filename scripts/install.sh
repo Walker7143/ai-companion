@@ -83,7 +83,7 @@ check_pip_works() {
 
 # 获取用户数据目录
 get_user_dir() {
-    USER_DIR="$HOME/ai-companion"
+    USER_DIR="$HOME/.ai-companion"
 }
 
 # 本地安装
@@ -172,7 +172,7 @@ install_local() {
 
     echo ""
     echo "⚙️  初始化配置..."
-    if [ ! -f "$USER_DIR/config.yaml" ]; then
+    if [ ! -f "$USER_DIR/config/models.yaml" ]; then
         mkdir -p "$USER_DIR/config"
         cp config/bots.yaml.example "$USER_DIR/config/bots.yaml" 2>/dev/null || true
         cp config/models.yaml.example "$USER_DIR/config/models.yaml" 2>/dev/null || true
