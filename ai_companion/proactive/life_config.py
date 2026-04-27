@@ -146,11 +146,15 @@ class LifeConfig:
         return self._config.copy()
 
     def is_daily_due(self, last_tick: Optional[datetime]) -> bool:
-        """检查日常事件是否到期"""
+        """检查日常事件是否到期（Bot 时间 1 天）"""
         if last_tick is None:
             return True
         elapsed = (datetime.now() - last_tick).total_seconds()
-        return elapsed >= self.daily_interval
+        # Bot 时间 1 天 = 86400 秒
+        # time_ratio=1: 每 86400 秒触发一次（1:1）
+        # time_ratio=24: 每 3600 秒触发一次（24倍速）
+        bot_seconds_per_day = 86400
+        return elapsed * self.time_ratio >= bot_seconds_per_day
 
     def is_major_due(self, last_tick: Optional[datetime]) -> bool:
         """检查人生大事是否到期"""

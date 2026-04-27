@@ -15,6 +15,7 @@ import re
 import tempfile
 import shutil
 import uuid
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -184,13 +185,24 @@ class PersonaUpdater:
                 system_prompt=None
             )
 
-            # 解析 JSON
-            json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", response, re.DOTALL)
-            if not json_match:
-                logger.warning("[PersonaUpdater] 无法解析 LLM 返回的 JSON")
+            # 解析 JSON（改进：支持多层嵌套）
+            try:
+                # 方法1：尝试从 ```json 块中提取
+                json_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", response)
+                if json_match:
+                    updates = json.loads(json_match.group(1))
+                else:
+                    # 方法2：找第一个 { 和最后一个 }
+                    first_brace = response.find('{')
+                    last_brace = response.rfind('}')
+                    if first_brace == -1 or last_brace == -1 or last_brace <= first_brace:
+                        logger.warning("[PersonaUpdater] 无法找到 JSON 边界")
+                        return False
+                    json_str = response[first_brace:last_brace + 1]
+                    updates = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.warning(f"[PersonaUpdater] JSON 解析失败: {e}")
                 return False
-
-            updates = json.loads(json_match.group())
 
             # 原子写入所有文件
             self._write_all_files(persona_dir, updates)
@@ -222,9 +234,6 @@ class PersonaUpdater:
 
         for fname, tmp in staged.items():
             shutil.move(tmp, persona_dir / fname)
-
-
-import os
 
 
 class LifeEngine:
@@ -504,7 +513,15 @@ class LifeEngine:
         return holiday_context, birthday_context
 
     def _advance_date(self):
-        """推进当前日期（每次 tick_daily 调用）"""
+        """推进当前日期（每次 tick_daily 调用）
+
+        每次调用推进的 Bot 天数 = elapsed * time_ratio / 86400
+        - time_ratio=1: 每次调用推进 1 天（elapsed 需要 >= 86400 秒 = 1 现实天）
+        - time_ratio=24: 每次调用推进 1 天（elapsed 需要 >= 3600 秒）
+        - time_ratio=360: 每次调用推进 1 天（elapsed 需要 >= 240 秒）
+
+        但为了避免浮点数精度问题，最小推进 1 天。
+        """
         if not self.state.current_date:
             # 首次初始化：从 birth_date 或当前日期开始
             if self.state.birth_date:
@@ -514,8 +531,14 @@ class LifeEngine:
 
         try:
             current = datetime.strptime(self.state.current_date, "%Y-%m-%d")
-            # 根据 time_ratio 推进天数（time_ratio=1440 时每天推进1天）
-            days_to_add = max(1, self.config.time_ratio // 1440) if self.config.time_ratio >= 1440 else 1
+
+            # 计算自上次 tick 以来经过的 Bot 天数
+            elapsed = (datetime.now() - (self.state.last_daily_tick or datetime.fromtimestamp(0))).total_seconds()
+            bot_days_elapsed = elapsed * self.config.time_ratio / 86400
+
+            # 每次调用至少推进 1 天，最多推进 bot_days_elapsed 天
+            # 这确保了 time_ratio 越大，Bot 时间推进越快
+            days_to_add = max(1, int(bot_days_elapsed))
             current += timedelta(days=days_to_add)
 
             self.state.current_date = current.strftime("%Y-%m-%d")
@@ -552,8 +575,20 @@ class LifeEngine:
         return event
 
     async def generate_birthday_event(self) -> Optional["MajorLifeEvent"]:
-        """生成生日事件"""
+        """生成生日事件（每年只触发一次）"""
         from .life_state import MajorLifeEvent
+
+        # 检查是否今年已经生成过生日事件（去重）
+        if not self.state.current_date:
+            return None
+
+        current = datetime.strptime(self.state.current_date, "%Y-%m-%d")
+        birthday_key = f"{current.year}-birthday"
+
+        # 检查是否已触发过今年的生日
+        triggered = self.state._state.get("_triggered_birthdays", [])
+        if birthday_key in triggered:
+            return None
 
         age = self._calc_real_age()
         event = MajorLifeEvent(
@@ -569,6 +604,9 @@ class LifeEngine:
         )
 
         self.state.add_major_event(event)
+        triggered.append(birthday_key)
+        self.state._state["_triggered_birthdays"] = triggered
+        self.state.save()
         logger.info(f"[LifeEngine] 生日事件: {age}岁生日")
 
         return event
