@@ -150,9 +150,12 @@ install_local() {
 
     echo "✓ 项目依赖安装完成"
 
+    # 获取项目目录
+    PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
     echo ""
     echo "📦 安装 AI Companion..."
-    $VENV_PIP install -e .
+    $VENV_PIP install -e "$PROJECT_DIR" -q
     echo "✓ AI Companion 已安装"
 
     # Install frontend UI dependencies (for management dashboard)

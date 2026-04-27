@@ -142,13 +142,15 @@ install_local() {
 
     echo "✓ 项目依赖安装完成"
 
+    # 获取项目目录（必须在安装前定义）
+    PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
     echo ""
     echo "📦 安装 AI Companion..."
-    $VENV_PIP install -e . -i "$PYTHON_INDEX" -q
+    $VENV_PIP install -e "$PROJECT_DIR" -i "$PYTHON_INDEX" -q
     echo "✓ AI Companion 已安装"
 
     # Install frontend UI dependencies (for management dashboard)
-    PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
     if [ -f "$PROJECT_DIR/ai-companion-ui/package.json" ]; then
         echo ""
         echo "📦 安装前端 UI 依赖..."
