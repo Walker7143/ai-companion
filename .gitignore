@@ -72,6 +72,8 @@ data/bots/*/life.json
 # Test files
 test_*.py
 *.log
+.artifacts/
+tests/data/
 
 # Temporary files
 *.tmp

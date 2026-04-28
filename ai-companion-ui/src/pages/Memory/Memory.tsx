@@ -47,7 +47,7 @@ export function Memory() {
   }, [fetchAllData]);
 
   const handleDeleteMemory = async () => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || !currentBotId) return;
 
     setDeleting(true);
     try {
@@ -65,6 +65,7 @@ export function Memory() {
 
   const handleClearAll = async () => {
     if (!confirm('确定要清空所有记忆吗？此操作不可恢复。')) return;
+    if (!currentBotId) return;
 
     try {
       await memoryApi.clearAll(currentBotId);

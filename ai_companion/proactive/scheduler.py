@@ -88,7 +88,6 @@ class ProactiveScheduler:
                 message = await self.engine.check_and_maybe_remind()
                 if message:
                     logger.info(f"[ProactiveScheduler] 已发送主动消息: {message[:30]}...")
-                    await self._notify_platform(message)
                 else:
                     logger.debug("[ProactiveScheduler] 检查完成，暂无消息需要发送")
             else:

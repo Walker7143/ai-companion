@@ -83,8 +83,8 @@ export const memoryApi = {
   deleteMemory: (botId: string, type: string, id: string): Promise<void> =>
     fetchApi<void>(`/admin/memory/${botId}/${type}/${id}`, { method: 'DELETE' }),
 
-  clearAll: (_botId: string): Promise<void> =>
-    Promise.resolve(),  // Not implemented in backend yet
+  clearAll: (botId: string): Promise<void> =>
+    fetchApi<void>(`/admin/memory/${botId}/all`, { method: 'DELETE' }),
 };
 
 // Logs API

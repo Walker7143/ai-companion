@@ -1,10 +1,14 @@
 {
-  "daily_interval_seconds": 60,
-  "major_interval_seconds": 300,
-  "time_ratio": 60,
-  "time_ratio_warning_threshold": 500,
+  "daily_interval_seconds": 10,
+  "major_interval_seconds": 60,
+  "time_ratio": 8640,
+  "time_ratio_warning_threshold": 10000,
   "max_events": 20,
   "max_context_bits": 2000,
+  "event_policy": {
+    "unexpected_event_probability": 0.01,
+    "unexpected_event_cooldown_days": 365
+  },
   "season": {
     "hemisphere": "north",
     "birthday_month": 4

@@ -5,7 +5,7 @@ import type { LogEntry } from '../../types';
 
 export function Logs() {
   const { logs, fetchLogs, loading } = useLogStore();
-  const [page, setPage] = useState(1);
+  const [page] = useState(1);
 
   useEffect(() => {
     fetchLogs({ page, pageSize: 20 });

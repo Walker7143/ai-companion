@@ -9,12 +9,14 @@ Bot 的人生事件分为两类：
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, date
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
+
+MAX_DAILY_LIFE_EVENTS = 100
 
 
 @dataclass
@@ -31,6 +33,9 @@ class LifeEvent:
     mood_tags: list = field(default_factory=list)
     related_to_user: bool = False
     context_bits: int = 0
+    scenario_key: str = ""
+    scenario_category: str = ""
+    source: str = ""
 
     def __post_init__(self):
         if not self.id:
@@ -43,7 +48,8 @@ class LifeEvent:
 
     @classmethod
     def from_dict(cls, data: dict) -> "LifeEvent":
-        return cls(**data)
+        allowed = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in allowed})
 
 
 @dataclass
@@ -77,11 +83,18 @@ class LifeState:
         return {
             "life_events": [],
             "major_life_events": [],
+            "life_journal": [],
+            "scenario_history": {},
+            "major_scenario_history": {},
             "bot_mood": "平静",
             "bot_current_activity": "在家休息",
             "bot_age_days": 0,
             "last_daily_tick": None,
             "last_major_tick": None,
+            "last_daily_event_date": None,
+            "last_major_event_date": None,
+            "last_major_probability_check_date": None,
+            "last_unexpected_event_date": None,
             # 季节和日期系统
             "current_season": "春",
             "current_month": 1,
@@ -104,6 +117,8 @@ class LifeState:
             try:
                 with open(self.state_file, encoding="utf-8") as f:
                     self._state = json.load(f)
+                if self._enforce_life_events_hard_limit():
+                    self.save()
                 logger.info(f"[LifeState] 加载状态: {self.state_file}")
             except Exception as e:
                 logger.warning(f"[LifeState] 加载状态失败: {e}，使用空状态")
@@ -127,6 +142,7 @@ class LifeState:
     @life_events.setter
     def life_events(self, events: list):
         self._state["life_events"] = [e.to_dict() if isinstance(e, LifeEvent) else e for e in events]
+        self._enforce_life_events_hard_limit()
         self.save()
 
     @property
@@ -183,6 +199,42 @@ class LifeState:
     @last_major_tick.setter
     def last_major_tick(self, value: datetime):
         self._state["last_major_tick"] = value.isoformat() if value else None
+        self.save()
+
+    @property
+    def last_daily_event_date(self) -> Optional[str]:
+        return self._state.get("last_daily_event_date")
+
+    @last_daily_event_date.setter
+    def last_daily_event_date(self, value: Optional[str]):
+        self._state["last_daily_event_date"] = value
+        self.save()
+
+    @property
+    def last_major_event_date(self) -> Optional[str]:
+        return self._state.get("last_major_event_date")
+
+    @last_major_event_date.setter
+    def last_major_event_date(self, value: Optional[str]):
+        self._state["last_major_event_date"] = value
+        self.save()
+
+    @property
+    def last_major_probability_check_date(self) -> Optional[str]:
+        return self._state.get("last_major_probability_check_date")
+
+    @last_major_probability_check_date.setter
+    def last_major_probability_check_date(self, value: Optional[str]):
+        self._state["last_major_probability_check_date"] = value
+        self.save()
+
+    @property
+    def last_unexpected_event_date(self) -> Optional[str]:
+        return self._state.get("last_unexpected_event_date")
+
+    @last_unexpected_event_date.setter
+    def last_unexpected_event_date(self, value: Optional[str]):
+        self._state["last_unexpected_event_date"] = value
         self.save()
 
     @property
@@ -288,7 +340,26 @@ class LifeState:
         """添加日常事件"""
         events = self._state.get("life_events", [])
         events.append(event.to_dict())
+        if len(events) > MAX_DAILY_LIFE_EVENTS:
+            del events[:len(events) - MAX_DAILY_LIFE_EVENTS]
         self._state["life_events"] = events
+        if self.current_date:
+            self._state["last_daily_event_date"] = self.current_date
+        self.record_scenario(event.scenario_key, major=False)
+        self._append_journal_record(
+            record_type="daily_event",
+            description=event.description,
+            event_id=event.id,
+            metadata={
+                "importance": event.importance,
+                "shareable": event.shareable,
+                "mood_before": event.mood_before,
+                "mood_after": event.mood_after,
+                "scenario_key": event.scenario_key,
+                "scenario_category": event.scenario_category,
+                "source": event.source,
+            },
+        )
         self.save()
 
     def add_major_event(self, event: MajorLifeEvent):
@@ -296,10 +367,145 @@ class LifeState:
         events = self._state.get("major_life_events", [])
         events.append(event.to_dict())
         self._state["major_life_events"] = events
+        if self.current_date:
+            self._state["last_major_event_date"] = self.current_date
+        self.record_scenario(event.scenario_key, major=True)
+        self._append_journal_record(
+            record_type="major_event",
+            description=event.description,
+            event_id=event.id,
+            metadata={
+                "importance": event.importance,
+                "mood_before": event.mood_before,
+                "mood_after": event.mood_after,
+                "mood_tags": event.mood_tags,
+                "scenario_key": event.scenario_key,
+                "scenario_category": event.scenario_category,
+                "source": event.source,
+            },
+        )
         self.save()
+
+    @property
+    def life_journal(self) -> list[dict[str, Any]]:
+        return self._state.get("life_journal", [])
+
+    def add_daily_progress_record(
+        self,
+        date_str: str,
+        day_of_week: str,
+        is_weekend: bool,
+        month: int,
+        season: str,
+    ):
+        description = f"度过了 {date_str}（{day_of_week}）"
+        self._append_journal_record(
+            record_type="day_passed",
+            description=description,
+            date_str=date_str,
+            metadata={
+                "day_of_week": day_of_week,
+                "is_weekend": is_weekend,
+                "month": month,
+                "season": season,
+            },
+        )
+        self.save()
+
+    def _append_journal_record(
+        self,
+        record_type: str,
+        description: str,
+        date_str: Optional[str] = None,
+        event_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ):
+        records = self._state.get("life_journal", [])
+        record = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now().isoformat(),
+            "record_type": record_type,
+            "date": date_str or self._state.get("current_date"),
+            "description": description,
+        }
+        if event_id:
+            record["event_id"] = event_id
+        if metadata:
+            record["metadata"] = metadata
+        records.append(record)
+        self._state["life_journal"] = records
+
+    def days_since_last_daily_event(self, current_date: Optional[str]) -> Optional[int]:
+        if not current_date:
+            return None
+        last_date = self._state.get("last_daily_event_date")
+        if not last_date:
+            return None
+        try:
+            current = date.fromisoformat(current_date)
+            last = date.fromisoformat(last_date)
+            return (current - last).days
+        except ValueError:
+            return None
+
+    def _scenario_history_key(self, major: bool = False) -> str:
+        return "major_scenario_history" if major else "scenario_history"
+
+    def get_scenario_history(self, major: bool = False) -> dict:
+        key = self._scenario_history_key(major)
+        value = self._state.get(key)
+        if not isinstance(value, dict):
+            value = {}
+            self._state[key] = value
+        return value
+
+    def record_scenario(self, scenario_key: Optional[str], major: bool = False):
+        if not scenario_key:
+            return
+        history = self.get_scenario_history(major=major)
+        current = self._state.get("current_date") or datetime.now().strftime("%Y-%m-%d")
+        item = history.get(scenario_key, {})
+        history[scenario_key] = {
+            "last_date": current,
+            "count": int(item.get("count", 0)) + 1,
+            "last_timestamp": datetime.now().isoformat(),
+        }
+        self._state[self._scenario_history_key(major)] = history
+
+    def days_since_scenario(self, scenario_key: str, current_date: Optional[str], major: bool = False) -> Optional[int]:
+        if not scenario_key or not current_date:
+            return None
+        item = self.get_scenario_history(major=major).get(scenario_key)
+        if not item:
+            return None
+        last_date = item.get("last_date")
+        if not last_date:
+            return None
+        try:
+            current = date.fromisoformat(current_date)
+            last = date.fromisoformat(last_date)
+            return (current - last).days
+        except ValueError:
+            return None
+
+    def is_scenario_on_cooldown(
+        self,
+        scenario_key: str,
+        current_date: Optional[str],
+        cooldown_days: int,
+        major: bool = False,
+    ) -> bool:
+        if not scenario_key or cooldown_days <= 0:
+            return False
+        gap_days = self.days_since_scenario(scenario_key, current_date, major=major)
+        return gap_days is not None and gap_days < cooldown_days
 
     def prune_events(self, max_events: int = 20, max_context_bits: int = 2000):
         """清理低重要性事件，保留最近的事件"""
+        try:
+            max_events = min(MAX_DAILY_LIFE_EVENTS, max(1, int(max_events)))
+        except (TypeError, ValueError):
+            max_events = MAX_DAILY_LIFE_EVENTS
         events = self._state.get("life_events", [])
 
         # 计算总 context bits
@@ -315,6 +521,13 @@ class LifeState:
 
         self._state["life_events"] = events
         self.save()
+
+    def _enforce_life_events_hard_limit(self) -> bool:
+        events = self._state.get("life_events", [])
+        if not isinstance(events, list) or len(events) <= MAX_DAILY_LIFE_EVENTS:
+            return False
+        self._state["life_events"] = events[-MAX_DAILY_LIFE_EVENTS:]
+        return True
 
     def get_recent_shareable_events(self, limit: int = 2) -> list:
         """获取最近可分享的事件"""

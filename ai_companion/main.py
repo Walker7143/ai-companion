@@ -1,43 +1,12 @@
 import asyncio
-import logging
 import os
 import sys
 from pathlib import Path
 
 from .config.loader import Config
+from .logging_utils import setup_logging
+from .model.factory import ModelFactory
 
-# CLI 日志文件
-CLI_LOG_DIR = Path.home() / ".ai-companion" / "logs"
-CLI_LOG_FILE = CLI_LOG_DIR / "cli.log"
-
-def setup_logging():
-    """设置 CLI 日志输出"""
-    CLI_LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Windows UTF-8 支持
-    if sys.platform == "win32":
-        import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-    # 同时输出到控制台和文件
-    file_handler = logging.FileHandler(CLI_LOG_FILE, encoding="utf-8")
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    ))
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.WARNING)
-    console_handler.setFormatter(logging.Formatter(
-        "[%(levelname)s] %(message)s"
-    ))
-
-    logging.basicConfig(
-        level=logging.INFO,
-        handlers=[console_handler, file_handler]
-    )
-from .model.minimax_adapter import MiniMaxAdapter
 from .bot.manager import BotManager
 from .bot.instance import BotInstance
 from .cli.adapter import CLIAdapter
@@ -53,7 +22,13 @@ def get_data_dir() -> Path:
 
 async def main(bot_filter: str = None):
     """主启动函数"""
-    setup_logging()
+    # 先加载配置，便于按 bot 名称分日志文件
+    config = Config()
+    bot_name_for_log = None
+    if bot_filter:
+        selected = next((b for b in config.get_enabled_bots() if b.get("id") == bot_filter), None)
+        bot_name_for_log = selected.get("name") if selected else bot_filter
+    setup_logging(bot_name=bot_name_for_log)
 
     # 获取数据目录
     user_dir = Path.home() / ".ai-companion" / "data" / "bots"
@@ -63,32 +38,36 @@ async def main(bot_filter: str = None):
         project_data = Path(__file__).parent.parent.parent / "data" / "bots"
         data_dir = project_data
 
-    # 加载配置（优先用户目录，其次项目目录）
-    config = Config()
+    # 已在上方加载配置
 
-    # 检查 API Key
-    api_key = os.environ.get("MINIMAX_API_KEY", "")
+    model_cfg = config.get_model_config()
+    provider = model_cfg.get("provider", config.default_provider)
+    env_key_map = {
+        "minimax": "MINIMAX_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "claude": "ANTHROPIC_API_KEY",
+    }
+    env_key = env_key_map.get(provider)
+    api_key = os.environ.get(env_key, "") if env_key else ""
     if not api_key:
-        # 尝试从配置文件读取
-        model_cfg = config.get_model_config()
         api_key = model_cfg.get("api_key", "")
 
-    if not api_key or api_key.startswith("${"):
+    if provider in env_key_map and (not api_key or api_key.startswith("${")):
         print("[ERROR] API Key 未配置")
         print("")
-        print("请先配置 API Key：")
-        print("  1. 设置环境变量: export MINIMAX_API_KEY='your_key'")
+        print(f"请先配置 {provider} 的 API Key：")
+        print(f"  1. 设置环境变量: export {env_key}='your_key'")
         print("  2. 或运行: ai-companion setup")
         sys.exit(1)
 
-    # 初始化模型
-    model_cfg = config.get_model_config()
+    # 初始化模型（按 provider 动态创建）
     try:
-        model = MiniMaxAdapter(
-            api_key=api_key,
-            base_url=model_cfg["base_url"],
-            model=model_cfg["model"],
+        model = ModelFactory.create_from_runtime_config(
+            model_config=model_cfg,
+            provider=provider,
+            api_key=api_key if provider in env_key_map else None,
         )
+        print(f"[OK] 模型初始化成功: provider={provider}, model={model_cfg.get('model', '')}")
     except Exception as e:
         print(f"[ERROR] 模型初始化失败: {e}")
         sys.exit(1)
@@ -107,7 +86,9 @@ async def main(bot_filter: str = None):
 
         bot_config = {**bot_config, "data_dir": str(data_dir)}
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
-        await bot.init()
+        # CLI 模式下延迟启动后台调度器：
+        # 仅在用户真正与该 Bot 开始对话后再启动人生轨迹/主动唤醒。
+        await bot.init(start_schedulers=False)
         bot_manager.register(bot)
         print(f"[OK] 加载 Bot: {bot.name}")
 

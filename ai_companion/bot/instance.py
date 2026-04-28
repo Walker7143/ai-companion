@@ -32,11 +32,16 @@ class BotInstance:
         self.name = config["name"]
         self.description = config.get("description", "")
 
+        # 解析 data_dir：优先使用参数，其次使用 config 中的值
+        if data_dir is None and "data_dir" in config:
+            data_dir = Path(config["data_dir"])
+
+        # 统一保存 data_dir 供后续使用
+        self._data_dir = data_dir if data_dir else (Path(config["data_dir"]) if "data_dir" in config else Path(__file__).parent.parent.parent / "data" / "bots")
+
         # 人格文件目录：优先用户目录，不存在则用项目目录
         if data_dir:
             persona_dir = data_dir / self.id / "persona"
-        elif "data_dir" in config:
-            persona_dir = Path(config["data_dir"]) / self.id / "persona"
         else:
             persona_dir = Path(__file__).parent.parent.parent / "data" / "bots" / self.id / "persona"
 
@@ -70,7 +75,7 @@ class BotInstance:
             persona_backstory_path = str(persona_dir / "backstory.json")
             self.memory = MemoryEngine(
                 bot_id=self.id,
-                memory_dir=data_dir or (Path(__file__).parent.parent.parent / "data" / "bots"),
+                memory_dir=self._data_dir,
                 config=memory_config,
                 persona_backstory_path=persona_backstory_path,
             )
@@ -80,7 +85,7 @@ class BotInstance:
 
         # ── 主动唤醒系统 ─────────────────────────────────────
         self.proactive_config = ProactiveConfig(persona_dir)
-        self.proactive_state = ProactiveState(self.id, data_dir or Path(__file__).parent.parent.parent / "data" / "bots")
+        self.proactive_state = ProactiveState(self.id, self._data_dir)
         self.proactive_engine = ProactiveEngine(
             bot_id=self.id,
             config=self.proactive_config,
@@ -91,11 +96,12 @@ class BotInstance:
         )
         self.proactive_scheduler: Optional[ProactiveScheduler] = None
         self._proactive_platform = None
+        self._schedulers_started = False
 
         # ── 人生轨迹系统 ─────────────────────────────────────
         self.life_config = LifeConfig(_persona_dir=persona_dir)
         self.life_config.load()
-        self.life_state = LifeState(self.id, data_dir or Path(__file__).parent.parent.parent / "data" / "bots")
+        self.life_state = LifeState(self.id, self._data_dir)
         self.life_engine = LifeEngine(
             bot_id=self.id,
             config=self.life_config,
@@ -134,7 +140,10 @@ class BotInstance:
 
     def _detect_personality_type(self) -> str:
         """检测性格类型"""
-        tags = "".join(self.persona.profile.get("personality_tags", []))
+        return self._detect_personality_type_from_profile(self.persona.profile)
+
+    def _detect_personality_type_from_profile(self, profile: dict) -> str:
+        tags = "".join(profile.get("personality_tags", []))
         if "傲娇" in tags or "外冷内热" in tags:
             return "傲娇"
         elif "活泼" in tags or "开朗" in tags:
@@ -144,6 +153,53 @@ class BotInstance:
         elif "温柔" in tags:
             return "温柔"
         return "默认"
+
+    def _sync_runtime_profile(self, profile: dict):
+        """把最新 profile.json 同步到依赖人格字段的运行时对象。"""
+        if not isinstance(profile, dict):
+            return
+
+        self.name = profile.get("name", self.name)
+        initial_age = profile.get("age", self.life_state.initial_age or 20)
+        birth_date = profile.get("birth_date")
+        if birth_date:
+            self.life_state.birth_date = birth_date
+            self.life_config.birth_date = birth_date
+            try:
+                dt = datetime.strptime(birth_date, "%Y-%m-%d")
+                self.life_state.birthday_month = dt.month
+                self.life_config.season_birthday_month = dt.month
+            except Exception:
+                pass
+
+        self.life_engine.refresh_bot_info_from_profile(profile)
+
+        self.proactive_engine.bot_name = profile.get("name", self.id)
+        self.proactive_engine.age = self.life_engine.get_status().get("bot_real_age", initial_age)
+        self.proactive_engine.occupation = profile.get("occupation", "未知")
+        self.proactive_engine.personality_type = self._detect_personality_type_from_profile(profile)
+
+    def _refresh_runtime_settings(self):
+        """重新读取 persona/config，保证本轮对话使用最新 Bot 设置。"""
+        try:
+            self.persona = self.persona_loader.load()
+            self.persona_engine.persona = self.persona
+            self._sync_runtime_profile(self.persona.profile)
+        except Exception as e:
+            logger.warning(f"[BotInstance] 刷新 persona 失败，沿用上一次运行时设置: {e}")
+
+        try:
+            self.refusal_engine.reload()
+        except Exception as e:
+            logger.debug(f"[BotInstance] 刷新拒绝引擎缓存失败（忽略）: {e}")
+
+        try:
+            self.proactive_config.load()
+            self.life_config.load()
+            if self.life_state.birth_date:
+                self.life_config.birth_date = self.life_state.birth_date
+        except Exception as e:
+            logger.warning(f"[BotInstance] 刷新 proactive/life 配置失败，沿用当前配置: {e}")
 
     def _init_life_from_profile(self):
         """从 profile.json 初始化 Bot 的出生日期和初始年龄"""
@@ -192,6 +248,9 @@ class BotInstance:
             self.life_state.current_month = current_month
             self.life_state.current_season = self.life_engine._get_season(current_month)
 
+        # 设置依赖 profile 的运行时信息（用于事件生成和主动消息）
+        self._sync_runtime_profile(profile)
+
         logger.info(f"[BotInstance] 初始化人生轨迹: initial_age={initial_age}, birth_date={self.life_state.birth_date}")
 
     def set_model(self, model: "ModelAdapter"):
@@ -212,18 +271,48 @@ class BotInstance:
         # 设置回调
         self.proactive_engine._platform_sender = lambda msg: self._proactive_platform.send(self.id, msg)
 
+    def _ensure_proactive_platform_sender(self):
+        """确保主动唤醒有发送通道；CLI 默认打印到终端。"""
+        if self.proactive_engine._platform_sender:
+            return
+
+        ptype = self.proactive_config.platform_type
+        if ptype == "webhook":
+            webhook_url = self.proactive_config.webhook_url
+            if webhook_url:
+                self.set_proactive_platform("webhook", webhook_url=webhook_url)
+            else:
+                logger.warning("[BotInstance] proactive platform=webhook 但未配置 webhook_url")
+            return
+
+        if ptype == "feishu":
+            # Gateway 会注入 feishu_adapter；没有注入时不伪装发送成功。
+            logger.warning("[BotInstance] proactive platform=feishu 但未注入 feishu_adapter")
+            return
+
+        self.set_proactive_platform("cli")
+
     async def _wrap_feishu_send(self, message: str, adapter) -> bool:
         """包装飞书发送（适配 proactive 引擎的接口）"""
         try:
             # 优先使用用户最近发消息的 chat_id（动态获取）
             chat_id = getattr(self, "_feishu_chat_id", None)
+            proactive_cfg = self.proactive_config.to_dict() if hasattr(self.proactive_config, "to_dict") else {}
             if not chat_id:
                 # 尝试从 proactive 配置获取
-                chat_id = self.proactive_config.get("home_channel")
+                home_channel = proactive_cfg.get("home_channel")
+                if isinstance(home_channel, dict):
+                    chat_id = home_channel.get("chat_id") or home_channel.get("group_id")
+                else:
+                    chat_id = home_channel
             if not chat_id:
                 # 尝试从 platform 配置获取
-                feishu_cfg = self.proactive_config.get("platform", {})
-                chat_id = feishu_cfg.get("home_channel")
+                feishu_cfg = proactive_cfg.get("platform", {}) if isinstance(proactive_cfg, dict) else {}
+                chat_id = (
+                    feishu_cfg.get("home_channel")
+                    or feishu_cfg.get("chat_id")
+                    or feishu_cfg.get("group_id")
+                )
             if not chat_id:
                 logger.warning(f"[BotInstance] 未配置 home_channel，无法发送主动消息")
                 return False
@@ -242,8 +331,12 @@ class BotInstance:
             skill_dispatcher=self.skill_dispatcher
         )
 
-    async def init(self):
-        """初始化记忆引擎（启动时调用一次）"""
+    async def init(self, start_schedulers: bool = True):
+        """初始化 Bot 运行时。
+
+        Args:
+            start_schedulers: 是否同时启动后台调度器（proactive/life）。
+        """
         if self.memory:
             await self.memory.init()
             if self.model:
@@ -251,30 +344,53 @@ class BotInstance:
             self.proactive_engine.set_memory(self.memory)
             self.memory.start_session()
         self._initialized = True
+        if start_schedulers:
+            await self._ensure_schedulers_started()
+        else:
+            logger.info(f"[BotInstance] {self.name} 已初始化（延迟启动调度器）")
+
+    async def _ensure_schedulers_started(self):
+        """按需启动后台调度器（只启动一次）。"""
+        if self._schedulers_started:
+            return
 
         # 启动主动唤醒调度器（发送消息，受黄金时段限制）
         if self.proactive_config.is_active:
+            self._ensure_proactive_platform_sender()
             self.proactive_scheduler = ProactiveScheduler(self.proactive_engine)
             self.proactive_scheduler.set_dependencies(self.model, self.memory)
             await self.proactive_scheduler.start()
             logger.info(f"[BotInstance] 主动唤醒配置: idle_threshold={self.proactive_config.idle_threshold_hours}h, max_daily={self.proactive_config.max_daily}, 黄金时段={self.proactive_config.preferred_contact_times}")
-
-            # 启动人生轨迹调度器（独立周期，不受黄金时段限制）
-            self.life_scheduler = LifeScheduler(
-                life_engine=self.life_engine,
-                life_config=self.life_config,
-                life_state=self.life_state,
-            )
-            self.life_engine.set_model(self.model)
-            if self.memory:
-                self.life_engine.set_memory(self.memory)
-            if hasattr(self, '_persona_loader'):
-                self.life_engine.set_persona_loader(self._persona_loader)
-            await self.life_scheduler.start()
-            print(f"[OK] {self.name} 人生轨迹已启动")
-            print(f"     日常事件间隔: {self.life_config.daily_interval}s, 人生大事间隔: {self.life_config.major_interval}s")
         else:
-            logger.info(f"[BotInstance] {self.name} 处于静默模式，跳过调度器")
+            logger.info(f"[BotInstance] {self.name} 处于静默模式，跳过主动唤醒调度器")
+
+        # 启动人生轨迹调度器（独立周期，不受黄金时段限制）
+        self.life_scheduler = LifeScheduler(
+            life_engine=self.life_engine,
+            life_config=self.life_config,
+            life_state=self.life_state,
+        )
+        self.life_engine.set_model(self.model)
+        if self.memory:
+            self.life_engine.set_memory(self.memory)
+        self.life_engine.set_persona_loader(self.persona_loader)
+        await self.life_scheduler.start()
+        print(f"[OK] {self.name} 人生轨迹已启动")
+        print(f"     日常事件间隔: {self.life_config.daily_interval}s, 人生大事间隔: {self.life_config.major_interval}s")
+        self._schedulers_started = True
+
+    async def ensure_schedulers_started(self):
+        """公开方法：确保后台调度器已启动。"""
+        await self._ensure_schedulers_started()
+
+    def _build_system_prompt(self, adjustment_note: str = "", memory_suffix: str | None = None) -> str:
+        life_context = self.life_engine.get_status() if self.life_engine else None
+        system_prompt = self.persona_engine.build_system_prompt(life_context=life_context)
+        if memory_suffix:
+            system_prompt = system_prompt + "\n\n" + memory_suffix
+        if adjustment_note:
+            system_prompt = system_prompt + adjustment_note
+        return system_prompt
 
     async def handle_message(self, user_input: str) -> str:
         """处理用户消息，返回回复"""
@@ -283,6 +399,11 @@ class BotInstance:
         if not self._initialized:
             logger.warning("[BotInstance] handle_message called before init(), initializing now...")
             await self.init()
+        elif not self._schedulers_started:
+            # CLI 延迟启动模式下，在首次对话时再启动后台调度器。
+            await self._ensure_schedulers_started()
+
+        self._refresh_runtime_settings()
 
         # 0. 用户发消息了，通知主动唤醒系统
         self.proactive_engine.on_user_message_received()
@@ -325,11 +446,10 @@ class BotInstance:
             ctx = await self.memory.load_context(user_input)
 
             # 3. 构建带人格的记忆增强 system prompt
-            system_prompt = self.persona_engine.build_system_prompt()
-            if ctx.get("system_suffix"):
-                system_prompt = system_prompt + "\n\n" + ctx["system_suffix"]
-            if adjustment_note:
-                system_prompt = system_prompt + adjustment_note
+            system_prompt = self._build_system_prompt(
+                adjustment_note=adjustment_note,
+                memory_suffix=ctx.get("system_suffix"),
+            )
 
             # 4. 构建 messages
             messages = ctx.get("working_history", [])
@@ -347,9 +467,7 @@ class BotInstance:
                 else logger.error(f"[Memory] 写入异常: {t.exception()}")
             )
         else:
-            system_prompt = self.persona_engine.build_system_prompt()
-            if adjustment_note:
-                system_prompt = system_prompt + adjustment_note
+            system_prompt = self._build_system_prompt(adjustment_note=adjustment_note)
             messages = [{"role": "user", "content": user_input}]
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
@@ -430,6 +548,7 @@ class BotInstance:
             await self.proactive_scheduler.stop()
         if self.life_scheduler:
             await self.life_scheduler.stop()
+        self._schedulers_started = False
         if self.memory:
             await self.memory.close()
         # 关闭 MiniMax adapter 的 session

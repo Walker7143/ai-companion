@@ -8,7 +8,7 @@ class PersonaEngine:
     def __init__(self, persona: Persona):
         self.persona = persona
 
-    def build_system_prompt(self) -> str:
+    def build_system_prompt(self, life_context: dict | None = None) -> str:
         # 每次重新读文件，确保拿到的关系/态度是最新的
         profile = self._load_json(self.persona.persona_dir / "profile.json")
         backstory = self._load_json(self.persona.persona_dir / "backstory.json")
@@ -19,10 +19,16 @@ class PersonaEngine:
 
         # 1. 基础信息
         name = profile.get('name', '未知')
-        age = profile.get('age', '?')
+        age = self._current_age(profile, life_context)
         occupation = profile.get('occupation', '未知')
         lines.append(f"你是{name}，{age}岁，{occupation}。")
         lines.append("")
+
+        # 1.1 当前人生轨迹状态（如果启用 life timeline）
+        life_lines = self._format_life_context(profile, life_context)
+        if life_lines:
+            lines.extend(life_lines)
+            lines.append("")
 
         # 2. 性格
         traits = "、".join(profile.get("personality_tags", []))
@@ -62,6 +68,65 @@ class PersonaEngine:
                 lines.append(f"  - {emo}: {desc}")
 
         return "\n".join(lines)
+
+    def _current_age(self, profile: dict, life_context: dict | None) -> object:
+        if life_context and life_context.get("bot_real_age") is not None:
+            return life_context["bot_real_age"]
+        return profile.get('age', '?')
+
+    def _format_life_context(self, profile: dict, life_context: dict | None) -> list[str]:
+        if not life_context:
+            birth_date = profile.get("birth_date")
+            return [f"出生日期：{birth_date}"] if birth_date else []
+
+        lines = ["【当前人生轨迹状态】"]
+
+        current_date = life_context.get("current_date")
+        day_of_week = life_context.get("day_of_week")
+        if current_date:
+            if day_of_week:
+                lines.append(f"当前日期：{current_date}（{day_of_week}）")
+            else:
+                lines.append(f"当前日期：{current_date}")
+
+        birth_date = life_context.get("birth_date") or profile.get("birth_date")
+        if birth_date:
+            lines.append(f"出生日期：{birth_date}")
+
+        if life_context.get("bot_real_age") is not None:
+            lines.append(f"当前年龄：{life_context['bot_real_age']}岁")
+
+        if life_context.get("life_stage"):
+            lines.append(f"当前人生阶段：{life_context['life_stage']}")
+        if life_context.get("bot_mood"):
+            lines.append(f"当前心情：{life_context['bot_mood']}")
+        if life_context.get("bot_current_activity"):
+            lines.append(f"当前状态：{life_context['bot_current_activity']}")
+
+        recent_major = life_context.get("recent_major_life_events") or []
+        if recent_major:
+            lines.append("近期重要人生事件：")
+            lines.extend(self._format_recent_events(recent_major))
+
+        recent_daily = life_context.get("recent_life_events") or []
+        if recent_daily:
+            lines.append("近期日常事件：")
+            lines.extend(self._format_recent_events(recent_daily))
+
+        lines.append("重要：当用户询问年龄、出生日期、当前年份、当前生活状态或最近经历时，必须以本段为准；profile.age 只是初始年龄，不代表当前年龄。")
+        return lines
+
+    def _format_recent_events(self, events: list) -> list[str]:
+        lines = []
+        for event in events[-5:]:
+            if isinstance(event, dict):
+                description = str(event.get("description", "")).strip()
+            else:
+                description = str(event).strip()
+            if not description:
+                continue
+            lines.append(f"  - {description}")
+        return lines
 
     def _load_json(self, path) -> dict:
         try:

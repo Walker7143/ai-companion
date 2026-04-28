@@ -13,12 +13,27 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+MAX_DAILY_EVENTS = 100
+
 DEFAULT_CONFIG = {
     "daily_interval_seconds": 3600,      # 1h Bot 时间（秒）
     "major_interval_seconds": 21600,    # 6h Bot 时间（秒）
     "time_ratio": 1,                    # 默认 1:1
     "time_ratio_warning_threshold": 500,
-    "max_events": 20,
+    "daily_event_min_gap_days": 2,      # 至少每 N 天产出 1 个日常事件
+    "major_event_fixed_probability": 0.05,  # 每个 Bot 日的大事固定概率（0-1）
+    "event_policy": {
+        "scenario_cooldown_days": 14,
+        "major_scenario_cooldown_days": 180,
+        "unexpected_event_probability": 0.01,
+        "unexpected_event_cooldown_days": 365,
+        "llm_recent_event_limit": 20,
+        "llm_forbidden_scenario_limit": 12,
+        "disabled_scenarios": [],
+        "scenario_weights": {},
+        "custom_scenarios": [],
+    },
+    "max_events": MAX_DAILY_EVENTS,
     "max_context_bits": 2000,
     "season": {
         "hemisphere": "north",         # north | south（南半球季节相反）
@@ -46,7 +61,18 @@ class LifeConfig:
     major_interval_seconds: int = 21600
     time_ratio: int = 1
     time_ratio_warning_threshold: int = 500
-    max_events: int = 20
+    daily_event_min_gap_days: int = 2
+    major_event_fixed_probability: float = 0.05
+    scenario_cooldown_days: int = 14
+    major_scenario_cooldown_days: int = 180
+    unexpected_event_probability: float = 0.01
+    unexpected_event_cooldown_days: int = 365
+    llm_recent_event_limit: int = 20
+    llm_forbidden_scenario_limit: int = 12
+    disabled_scenarios: list = field(default_factory=list)
+    scenario_weights: dict = field(default_factory=dict)
+    custom_scenarios: list = field(default_factory=list)
+    max_events: int = MAX_DAILY_EVENTS
     max_context_bits: int = 2000
     season_hemisphere: str = "north"
     season_birthday_month: int = 1
@@ -86,7 +112,28 @@ class LifeConfig:
                 self.major_interval_seconds = self._config.get("major_interval_seconds", 21600)
                 self.time_ratio = self._config.get("time_ratio", 1)
                 self.time_ratio_warning_threshold = self._config.get("time_ratio_warning_threshold", 500)
-                self.max_events = self._config.get("max_events", 20)
+                self.daily_event_min_gap_days = max(1, int(self._config.get("daily_event_min_gap_days", 2)))
+                self.major_event_fixed_probability = min(
+                    1.0,
+                    max(0.0, float(self._config.get("major_event_fixed_probability", 0.05))),
+                )
+                event_policy = self._config.get("event_policy", {})
+                self.scenario_cooldown_days = max(0, int(event_policy.get("scenario_cooldown_days", 14)))
+                self.major_scenario_cooldown_days = max(0, int(event_policy.get("major_scenario_cooldown_days", 180)))
+                self.unexpected_event_probability = min(
+                    1.0,
+                    max(0.0, float(event_policy.get("unexpected_event_probability", 0.01))),
+                )
+                self.unexpected_event_cooldown_days = max(0, int(event_policy.get("unexpected_event_cooldown_days", 365)))
+                self.llm_recent_event_limit = max(3, int(event_policy.get("llm_recent_event_limit", 20)))
+                self.llm_forbidden_scenario_limit = max(0, int(event_policy.get("llm_forbidden_scenario_limit", 12)))
+                self.disabled_scenarios = event_policy.get("disabled_scenarios", []) or []
+                self.scenario_weights = event_policy.get("scenario_weights", {}) or {}
+                self.custom_scenarios = event_policy.get("custom_scenarios", []) or []
+                self.max_events = min(
+                    MAX_DAILY_EVENTS,
+                    max(1, int(self._config.get("max_events", MAX_DAILY_EVENTS))),
+                )
                 self.max_context_bits = self._config.get("max_context_bits", 2000)
 
                 # 季节配置

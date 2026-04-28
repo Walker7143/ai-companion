@@ -24,7 +24,7 @@ _project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
 from ai_companion.config.loader import Config
-from ai_companion.model.minimax_adapter import MiniMaxAdapter
+from ai_companion.model.factory import ModelFactory
 from ai_companion.bot.manager import BotManager
 from ai_companion.bot.instance import BotInstance
 from ai_companion.gateway.config import Platform, PlatformConfig
@@ -681,6 +681,75 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
+    async def handle_memory_delete(request):
+        """DELETE /api/v1/admin/memory/:bot_id/:memory_type/:memory_id"""
+        bot_id = request.match_info["bot_id"]
+        memory_type = request.match_info["memory_type"]
+        memory_id = request.match_info["memory_id"]
+
+        type_to_db = {
+            "working": "working.db",
+            "episodic": "episodic.db",
+            "semantic": "semantic.db",
+        }
+        db_name = type_to_db.get(memory_type)
+        if not db_name:
+            return web.json_response({"error": f"Unknown memory type: {memory_type}"}, status=400)
+
+        db_path = _get_memory_db_path(bot_id, db_name)
+        if not db_path:
+            return web.json_response({"error": "Memory db not found"}, status=404)
+
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(db_path))
+            if memory_type == "working":
+                cur = conn.execute("DELETE FROM messages WHERE id = ?", (memory_id,))
+            elif memory_type == "episodic":
+                cur = conn.execute("DELETE FROM episodic_memory WHERE id = ?", (memory_id,))
+            else:  # semantic
+                cur = conn.execute("DELETE FROM user_facts WHERE key = ?", (memory_id,))
+            conn.commit()
+            deleted = cur.rowcount
+            conn.close()
+            return web.json_response({"ok": True, "deleted": deleted})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_memory_clear_all(request):
+        """DELETE /api/v1/admin/memory/:bot_id/all"""
+        bot_id = request.match_info["bot_id"]
+        deleted = {
+            "working_messages": 0,
+            "working_summaries": 0,
+            "episodic": 0,
+            "semantic": 0,
+        }
+
+        def _delete_rows(path: Path | None, sql: str, key: str):
+            if not path:
+                return
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(path))
+                cur = conn.execute(sql)
+                conn.commit()
+                deleted[key] += max(cur.rowcount, 0)
+                conn.close()
+            except Exception:
+                pass
+
+        working_db = _get_memory_db_path(bot_id, "working.db")
+        episodic_db = _get_memory_db_path(bot_id, "episodic.db")
+        semantic_db = _get_memory_db_path(bot_id, "semantic.db")
+
+        _delete_rows(working_db, "DELETE FROM messages", "working_messages")
+        _delete_rows(working_db, "DELETE FROM summaries", "working_summaries")
+        _delete_rows(episodic_db, "DELETE FROM episodic_memory", "episodic")
+        _delete_rows(semantic_db, "DELETE FROM user_facts", "semantic")
+
+        return web.json_response({"ok": True, "deleted": deleted})
+
     async def handle_config(request):
         """GET /api/v1/admin/config/:bot_id"""
         bot_id = request.match_info["bot_id"]
@@ -841,6 +910,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/working", handle_memory_working)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/episodic", handle_memory_episodic)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/semantic", handle_memory_semantic)
+    _admin_app.router.add_delete("/api/v1/admin/memory/{bot_id}/all", handle_memory_clear_all)
+    _admin_app.router.add_delete("/api/v1/admin/memory/{bot_id}/{memory_type}/{memory_id}", handle_memory_delete)
     _admin_app.router.add_get("/api/v1/admin/config/{bot_id}", handle_config)
     _admin_app.router.add_put("/api/v1/admin/config/{bot_id}", handle_config_update)
     _admin_app.router.add_post("/api/v1/admin/config/{bot_id}/test", handle_config_test)
@@ -903,6 +974,56 @@ def load_feishu_config() -> dict:
     return None
 
 
+def _extract_feishu_target_id_from_bot(bot) -> str:
+    """从 Bot proactive 配置提取可用于主动发送的飞书目标（群聊/会话 ID）。"""
+    try:
+        cfg = bot.proactive_config.to_dict() if hasattr(bot.proactive_config, "to_dict") else {}
+    except Exception:
+        cfg = {}
+
+    # 兼容几种可能结构
+    home = cfg.get("home_channel")
+    if isinstance(home, dict):
+        chat_id = home.get("chat_id") or home.get("group_id")
+        if chat_id:
+            return str(chat_id)
+    elif home:
+        return str(home)
+
+    platform_cfg = cfg.get("platform", {}) if isinstance(cfg, dict) else {}
+    if isinstance(platform_cfg, dict):
+        for key in ("home_channel", "chat_id", "group_id"):
+            v = platform_cfg.get(key)
+            if v:
+                return str(v)
+    return ""
+
+
+def _should_start_gateway_schedulers_for_bot(bot, feishu_config: dict) -> tuple[bool, str]:
+    """网关启动时判断是否应立即启动某 Bot 的 proactive/life 轮询。"""
+    pc = getattr(bot, "proactive_config", None)
+    if not pc:
+        return False, "missing_proactive_config"
+
+    # 仅 active + 非 silent 才考虑
+    if not pc.is_active:
+        return False, f"inactive(mode={pc.mode},enabled={pc.enabled})"
+
+    # 发送通道必须是 feishu，cli/webhook 跳过
+    platform_type = (pc.platform_type or "cli").lower()
+    if platform_type != "feishu":
+        return False, f"platform={platform_type}"
+
+    # 需要至少有飞书机器人配置（app_id）或 Bot 级别目标群聊/chat_id
+    has_feishu_robot = bool(feishu_config and feishu_config.get("app_id"))
+    target_id = _extract_feishu_target_id_from_bot(bot)
+    has_target = bool(target_id)
+    if not (has_feishu_robot or has_target):
+        return False, "feishu_target_missing"
+
+    return True, f"platform=feishu has_robot={has_feishu_robot} has_target={has_target}"
+
+
 async def run_gateway(daemon: bool = True):
     """启动网关服务"""
     # 保存 PID
@@ -936,29 +1057,34 @@ async def run_gateway(daemon: bool = True):
     config = Config()
     feishu_config = load_feishu_config()
 
-    # 检查 API Key
-    api_key = os.environ.get("MINIMAX_API_KEY", "")
+    model_cfg = config.get_model_config()
+    provider = model_cfg.get("provider", config.default_provider)
+    env_key_map = {
+        "minimax": "MINIMAX_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "claude": "ANTHROPIC_API_KEY",
+    }
+    env_key = env_key_map.get(provider)
+    api_key = os.environ.get(env_key, "") if env_key else ""
     if not api_key:
-        model_cfg = config.get_model_config()
         api_key = model_cfg.get("api_key", "")
 
-    if not api_key or api_key.startswith("${"):
+    if provider in env_key_map and (not api_key or api_key.startswith("${")):
         print("[ERROR] API Key 未配置")
         print("")
-        print("请先配置 API Key：")
-        print("  1. 设置环境变量: export MINIMAX_API_KEY='your_key'")
+        print(f"请先配置 {provider} 的 API Key：")
+        print(f"  1. 设置环境变量: export {env_key}='your_key'")
         print("  2. 或运行: ai-companion setup")
         sys.exit(1)
 
-    # 初始化模型
-    model_cfg = config.get_model_config()
+    # 初始化模型（按 provider 动态创建）
     try:
-        model = MiniMaxAdapter(
-            api_key=api_key,
-            base_url=model_cfg["base_url"],
-            model=model_cfg["model"],
+        model = ModelFactory.create_from_runtime_config(
+            model_config=model_cfg,
+            provider=provider,
+            api_key=api_key if provider in env_key_map else None,
         )
-        print(f"[OK] 模型初始化成功: {model_cfg['model']}")
+        print(f"[OK] 模型初始化成功: provider={provider}, model={model_cfg.get('model', '')}")
     except Exception as e:
         print(f"[ERROR] 模型初始化失败: {e}")
         sys.exit(1)
@@ -982,7 +1108,14 @@ async def run_gateway(daemon: bool = True):
             feishu_adapter = FeishuAdapter(platform_config)
             bot.set_proactive_platform(feishu_adapter=feishu_adapter)
 
-        await bot.init()
+        # 网关默认先初始化，不全量拉起轮询；按规则选择性启动
+        await bot.init(start_schedulers=False)
+        should_start, reason = _should_start_gateway_schedulers_for_bot(bot, feishu_config)
+        if should_start:
+            await bot.ensure_schedulers_started()
+            print(f"[OK] 启动轮询: {bot.name} ({bot.id}) [{reason}]")
+        else:
+            print(f"[SKIP] 跳过轮询: {bot.name} ({bot.id}) [{reason}]")
         bot_manager.register(bot)
         print(f"[OK] 加载 Bot: {bot.name}")
 

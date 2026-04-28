@@ -720,12 +720,24 @@ class ProactiveEngine:
         message = await self.generate_message(decision.reason)
 
         # 发送并更新状态
-        await self._send_proactive_message(message)
+        sent = await self._send_proactive_message(message)
+        return message if sent else None
 
-        return message
-
-    async def _send_proactive_message(self, message: str):
+    async def _send_proactive_message(self, message: str) -> bool:
         """发送主动消息并更新状态"""
+        if not self._platform_sender:
+            logger.warning(f"[ProactiveEngine] 未配置 platform_sender，消息未发送: {message[:50]}...")
+            return False
+
+        try:
+            sent = await self._platform_sender(message)
+            if sent is False:
+                logger.warning(f"[ProactiveEngine] 平台返回发送失败: {message[:50]}...")
+                return False
+        except Exception as e:
+            logger.error(f"[ProactiveEngine] 发送主动消息失败: {e}")
+            return False
+
         self.state.increment_proactive()
         # Bot 主动发消息后，用户没回复则增加未回复计数
         self.state.unreplied_count = self.state.unreplied_count + 1
@@ -734,15 +746,8 @@ class ProactiveEngine:
         cooldown_end = datetime.now() + timedelta(hours=self.config.min_interval_hours)
         self.state.set_cooldown("idle_reminder", cooldown_end)
 
-        # 调用平台发送消息
-        if self._platform_sender:
-            try:
-                await self._platform_sender(message)
-                logger.info(f"[ProactiveEngine] 主动消息已发送: {message[:50]}...")
-            except Exception as e:
-                logger.error(f"[ProactiveEngine] 发送主动消息失败: {e}")
-        else:
-            logger.warning(f"[ProactiveEngine] 未配置 platform_sender，消息未发送: {message[:50]}...")
+        logger.info(f"[ProactiveEngine] 主动消息已发送: {message[:50]}...")
+        return True
 
     def on_user_message_received(self, has_real_content: bool = True):
         """用户发消息时调用

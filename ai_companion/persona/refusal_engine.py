@@ -137,6 +137,11 @@ class RefusalEngine:
         """注入 LLM 模型用于推断"""
         self._model = model
 
+    def reload(self):
+        """清空人格缓存，让下一次检查重新读取最新 persona 文件。"""
+        self._values = None
+        self._profile = None
+
     def _load_values(self) -> dict:
         """加载人格价值观配置"""
         if self._values is None:

@@ -30,6 +30,23 @@ class ModelFactory:
         "custom": CustomAdapter,
     }
 
+    _RUNTIME_ALLOWED_KWARGS: dict[str, set[str]] = {
+        "minimax": {"api_key", "base_url", "model", "timeout"},
+        "openai": {"api_key", "base_url", "model", "timeout"},
+        "claude": {"api_key", "base_url", "model", "timeout"},
+        "ollama": {"base_url", "model", "timeout"},
+        "custom": {
+            "api_url",
+            "model",
+            "auth_type",
+            "api_key",
+            "headers",
+            "request_template",
+            "response_field",
+            "timeout",
+        },
+    }
+
     @classmethod
     def create(cls, provider: str, **kwargs) -> ModelAdapter:
         """
@@ -103,6 +120,37 @@ class ModelFactory:
         logger.info(f"[ModelFactory] 创建 {provider} 适配器，模型: {params.get('model', 'unknown')}")
 
         return cls.create(provider, **params)
+
+    @classmethod
+    def create_from_runtime_config(
+        cls,
+        model_config: dict,
+        provider: str = None,
+        api_key: str = None,
+    ) -> ModelAdapter:
+        """
+        根据运行时扁平配置创建适配器。
+
+        model_config 示例：
+            {"provider":"minimax","api_key":"...","base_url":"...","model":"..."}
+        """
+        if not isinstance(model_config, dict):
+            raise ValueError("model_config 必须是 dict")
+
+        provider = (provider or model_config.get("provider", "minimax")).lower()
+        raw = dict(model_config)
+        raw.pop("provider", None)
+        if api_key:
+            raw["api_key"] = api_key
+
+        # custom 适配器使用 api_url 字段
+        if provider == "custom" and not raw.get("api_url") and raw.get("base_url"):
+            raw["api_url"] = raw["base_url"]
+
+        allowed = cls._RUNTIME_ALLOWED_KWARGS.get(provider, set(raw.keys()))
+        kwargs = {k: v for k, v in raw.items() if k in allowed and v not in (None, "")}
+        logger.info(f"[ModelFactory] 运行时创建 {provider} 适配器，参数: {sorted(kwargs.keys())}")
+        return cls.create(provider, **kwargs)
 
     @classmethod
     def register(cls, name: str, adapter_cls: Type[ModelAdapter]):

@@ -165,7 +165,7 @@ export function Settings() {
   const providerOptions = [
     { value: 'minimax', label: 'MiniMax' },
     { value: 'openai', label: 'OpenAI' },
-    { value: 'anthropic', label: 'Anthropic' },
+    { value: 'claude', label: 'Claude' },
     { value: 'ollama', label: 'Ollama' },
     { value: 'custom', label: '自定义' },
   ];

@@ -54,8 +54,6 @@ class LifeScheduler:
     async def _run(self):
         """调度器主循环"""
         logger.info("[LifeScheduler] 开始运行")
-        last_daily_check = 0
-        last_major_check = 0
 
         while self._running:
             try:
@@ -63,8 +61,9 @@ class LifeScheduler:
 
                 # 检查日常事件
                 elapsed = (now - (self.state.last_daily_tick or datetime.fromtimestamp(0))).total_seconds()
+                logger.info(f"[LifeScheduler] 检查日常事件: elapsed={elapsed:.1f}s, daily_interval={self.config.daily_interval}s")
                 if elapsed >= self.config.daily_interval:
-                    logger.debug(f"[LifeScheduler] 日常事件到期，执行 tick_daily")
+                    logger.info(f"[LifeScheduler] 执行 tick_daily")
                     await self.life_engine.tick_daily()
                 else:
                     remaining = self.config.daily_interval - elapsed
@@ -83,9 +82,12 @@ class LifeScheduler:
                 break
             except Exception as e:
                 logger.error(f"[LifeScheduler] 调度异常: {e}")
+                import traceback
+                logger.error(f"[LifeScheduler] 堆栈: {traceback.format_exc()}")
 
-            # 等待一小段时间后再次检查（避免频繁轮询）
-            await asyncio.sleep(10)
+            # 自适应轮询：默认不超过 10s，极速测试可降到 1s。
+            poll_interval = max(1, min(10, self.config.daily_interval, self.config.major_interval))
+            await asyncio.sleep(poll_interval)
 
     def get_status(self) -> dict:
         """获取调度器状态"""

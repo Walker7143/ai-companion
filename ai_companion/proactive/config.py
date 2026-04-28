@@ -71,6 +71,7 @@ class ProactiveConfig:
                     loaded = yaml.safe_load(content)
                     if loaded is None:
                         raise ValueError("YAML 内容为空")
+                loaded = self._normalize_legacy_config(loaded)
                 self._config = self._deep_merge(self.DEFAULT_CONFIG, loaded)
                 logger.info(f"[ProactiveConfig] 加载配置: {self.config_path}")
             except Exception as e:
@@ -80,6 +81,78 @@ class ProactiveConfig:
         else:
             self._config = self.DEFAULT_CONFIG.copy()
             self.save()  # 创建默认配置
+
+    def _normalize_legacy_config(self, loaded: dict) -> dict:
+        """兼容旧版扁平 proactive.json 结构，规范为当前嵌套结构。"""
+        if not isinstance(loaded, dict):
+            return {}
+
+        cfg = dict(loaded)
+
+        # 兼容旧枚举：idle -> silent
+        if cfg.get("mode") == "idle":
+            cfg["mode"] = "silent"
+
+        scheduler = cfg.get("scheduler")
+        if not isinstance(scheduler, dict):
+            scheduler = {}
+
+        flat_scheduler_map = {
+            "check_interval_seconds": ("check_interval_seconds", "check_interval"),
+            "idle_threshold_hours": ("idle_threshold_hours",),
+            "max_daily": ("max_daily",),
+            "min_interval_hours": ("min_interval_hours",),
+            "max_idle_days": ("max_idle_days",),
+        }
+        for target_key, aliases in flat_scheduler_map.items():
+            if target_key in scheduler:
+                continue
+            for alias in aliases:
+                if alias in cfg and cfg.get(alias) is not None:
+                    scheduler[target_key] = cfg.get(alias)
+                    break
+        cfg["scheduler"] = scheduler
+
+        triggers = cfg.get("triggers")
+        if not isinstance(triggers, dict):
+            triggers = {}
+
+        idle_reminder = triggers.get("idle_reminder")
+        if not isinstance(idle_reminder, dict):
+            idle_reminder = {}
+        if "enabled" not in idle_reminder and "idle_reminder_enabled" in cfg:
+            idle_reminder["enabled"] = cfg.get("idle_reminder_enabled")
+        if "idle_hours" not in idle_reminder:
+            if cfg.get("idle_reminder_hours") is not None:
+                idle_reminder["idle_hours"] = cfg.get("idle_reminder_hours")
+            elif cfg.get("idle_threshold_hours") is not None:
+                idle_reminder["idle_hours"] = cfg.get("idle_threshold_hours")
+        if idle_reminder:
+            triggers["idle_reminder"] = idle_reminder
+
+        emotion_trigger = triggers.get("emotion_trigger")
+        if not isinstance(emotion_trigger, dict):
+            emotion_trigger = {}
+        if "enabled" not in emotion_trigger and "emotion_trigger_enabled" in cfg:
+            emotion_trigger["enabled"] = cfg.get("emotion_trigger_enabled")
+        if "keywords" not in emotion_trigger and cfg.get("emotion_keywords") is not None:
+            emotion_trigger["keywords"] = cfg.get("emotion_keywords")
+        if "response_delay_minutes" not in emotion_trigger and cfg.get("emotion_response_delay_minutes") is not None:
+            emotion_trigger["response_delay_minutes"] = cfg.get("emotion_response_delay_minutes")
+        if emotion_trigger:
+            triggers["emotion_trigger"] = emotion_trigger
+        cfg["triggers"] = triggers
+
+        platform = cfg.get("platform")
+        if not isinstance(platform, dict):
+            platform = {}
+        if "type" not in platform and cfg.get("platform_type"):
+            platform["type"] = cfg.get("platform_type")
+        if "webhook_url" not in platform and cfg.get("webhook_url") is not None:
+            platform["webhook_url"] = cfg.get("webhook_url")
+        cfg["platform"] = platform
+
+        return cfg
 
     def save(self):
         """保存配置到文件"""
@@ -112,7 +185,7 @@ class ProactiveConfig:
     @property
     def is_active(self) -> bool:
         """Bot 是否处于活跃模式（会主动发消息）"""
-        return self.enabled
+        return self.enabled and self.mode == "active"
 
     @property
     def check_interval(self) -> int:
