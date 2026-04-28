@@ -6,10 +6,6 @@ bots:
     name: 测试酱
     enabled: true
 
-  - id: test_life
-    name: 时光君
-    enabled: true
-
   - id: suqing
     name: 苏晴
     enabled: true
