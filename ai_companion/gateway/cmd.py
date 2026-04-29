@@ -11,7 +11,6 @@ import logging
 import logging.handlers
 import os
 import signal
-import subprocess
 import sys
 import time
 import uuid
@@ -32,12 +31,11 @@ from ai_companion.gateway.platforms.feishu import FeishuAdapter
 from ai_companion.gateway.router import PlatformRouter
 from ai_companion.gateway.control import GATEWAY_PID_FILE, GATEWAY_LOG_FILE, save_gateway_pid, remove_gateway_pid
 from ai_companion.gateway.admin_services import (
+    ConfigAdminService,
     admin_host,
     admin_port,
     allowed_cors_origins,
-    is_masked_secret,
     list_sessions as admin_list_sessions,
-    public_model_config,
     working_messages,
 )
 from ai_companion.gateway.path_resolver import (
@@ -45,119 +43,66 @@ from ai_companion.gateway.path_resolver import (
     get_data_dir as resolve_data_dir,
     get_memory_db_path as resolve_memory_db_path,
 )
+from ai_companion.ui_server import (
+    UIStartResult,
+    ensure_ui_server,
+    release_ui_server,
+    should_start_ui,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# Frontend dev server process
-_ui_process = None
+# Frontend dev server ownership for this gateway process
+_ui_server_result: UIStartResult | None = None
 
 
 def _start_ui_server() -> bool:
-    """Start the frontend dev server as a subprocess."""
-    global _ui_process
-    if _ui_process is not None:
+    """Ensure the shared frontend dev server is running."""
+    global _ui_server_result
+    if _ui_server_result is not None and _ui_server_result.ok:
         return True
 
-    # Find UI directory - look relative to this file's location
-    ui_dir = Path(__file__).parent.parent.parent / "ai-companion-ui"
-    if not ui_dir.exists():
-        ui_dir = Path.cwd() / "ai-companion-ui"
-    if not ui_dir.exists():
-        print("[WARN] ai-companion-ui 目录未找到，跳过启动 UI")
+    _ui_server_result = ensure_ui_server(owner_name="gateway")
+    if not _ui_server_result.ok:
+        print(f"[WARN] UI 服务器未启动: {_ui_server_result.message}")
         return False
 
-    # Check if npm is available (use shutil.which for reliable cross-platform detection)
-    import shutil
-    npm_path = shutil.which("npm")
-    if not npm_path:
-        print("[WARN] npm 未安装，无法启动 UI 服务器")
-        return False
-
-    # Check if node_modules exists, try to install if not
-    node_modules = ui_dir / "node_modules"
-    if not node_modules.exists():
-        print("[INFO] 正在安装前端依赖（首次运行需等待）...")
-        try:
-            result = subprocess.run(
-                [npm_path, "install"],
-                cwd=str(ui_dir),
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-            if result.returncode != 0:
-                print(f"[ERROR] npm install 失败，请手动执行: cd {ui_dir} && npm install")
-                print(f"       错误: {result.stderr[:200]}")
-                return False
-            print("[OK] 前端依赖安装完成")
-        except subprocess.TimeoutExpired:
-            print("[ERROR] npm install 超时，请手动执行: cd %s && npm install" % ui_dir)
-            return False
-        except Exception as e:
-            print(f"[ERROR] npm install 失败: {e}")
-            print(f"       请手动执行: cd {ui_dir} && npm install")
-            return False
-
-    print("[OK] 正在启动 UI 服务器...")
-    try:
-        # Open gateway log file for UI server output
-        GATEWAY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        log_file = open(GATEWAY_LOG_FILE, "a", encoding="utf-8")
-        _ui_process = subprocess.Popen(
-            [npm_path, "run", "dev"],
-            cwd=str(ui_dir),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-        )
-        # Give it a moment to fail immediately (e.g. port in use)
-        import time
-        time.sleep(3)
-        if _ui_process.poll() is not None:
-            # Process already exited - capture output from log file tail
-            log_file.close()
-            try:
-                with open(GATEWAY_LOG_FILE, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                # Find recent UI-related log entries
-                ui_lines = [l for l in lines[-50:] if "vite" in l.lower() or "ui" in l.lower() or "1421" in l]
-                output = "".join(ui_lines[-10:]) if ui_lines else ""
-            except Exception:
-                output = ""
-            print(f"[ERROR] UI 服务器启动后立即退出")
-            print(f"       请手动启动排查: cd {ui_dir} && npm run dev")
-            if output:
-                print(f"       最近日志: {output[:300]}")
-            _ui_process = None
-            return False
-        print(f"[OK] UI 服务器已启动 (PID: {_ui_process.pid})")
-        print(f"     访问地址: http://localhost:1421")
-        return True
-    except Exception as e:
-        print(f"[ERROR] 启动 UI 服务器失败: {e}")
-        _ui_process = None
-        return False
+    if _ui_server_result.started:
+        print(f"[OK] UI 服务器已启动 (PID: {_ui_server_result.pid})")
+    elif _ui_server_result.reused:
+        print("[OK] UI 服务器已在运行，复用现有实例")
+    else:
+        print("[OK] UI 服务器已可用")
+    print(f"     访问地址: {_ui_server_result.url}")
+    return True
 
 
 def _stop_ui_server():
-    """Stop the frontend dev server."""
-    global _ui_process
-    if _ui_process is None:
-        return
-    try:
-        _ui_process.terminate()
-        _ui_process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        _ui_process.kill()
-    except Exception:
-        pass
-    _ui_process = None
-    print("[OK] UI 服务器已停止")
+    """Release this process' ownership of the shared frontend dev server."""
+    global _ui_server_result
+    release_ui_server(_ui_server_result)
+    _ui_server_result = None
 
 
 # Admin API HTTP server
 _admin_app = None
 _admin_runner = None
+
+
+def _admin_api_is_available(host: str, port: int) -> bool:
+    """Return True when an existing admin API is already serving this port."""
+    import urllib.error
+    import urllib.request
+
+    probe_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    url = f"http://{probe_host}:{port}/api/v1/admin/bots"
+    try:
+        with urllib.request.urlopen(url, timeout=0.5) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        return response.status == 200 and isinstance(payload, dict) and "bots" in payload
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        return False
 
 
 def _get_data_dir() -> Path:
@@ -185,7 +130,18 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         from aiohttp import web
     except ImportError:
         print("[WARN] aiohttp 未安装，无法启动管理 API")
-        return
+        return False
+
+    host = admin_host(config.config)
+    port = admin_port(config.config)
+    if _admin_runner is not None:
+        print(f"[OK] 管理 API 已在运行，复用现有实例 (http://{host}:{port})")
+        print()
+        return False
+    if _admin_api_is_available(host, port):
+        print(f"[OK] 管理 API 已在运行，复用现有实例 (http://{host}:{port})")
+        print()
+        return False
 
     async def handle_bots(request):
         """GET /api/v1/admin/bots"""
@@ -650,62 +606,11 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     async def handle_config(request):
         """GET /api/v1/admin/config/:bot_id"""
         bot_id = request.match_info["bot_id"]
-        # 优先从 BotManager 获取
-        bot = bot_manager.get_bot(bot_id)
-        # 如果 BotManager 中没有，尝试从目录发现
-        if not bot:
-            discovered = _discover_bots()
-            found = next((b for b in discovered if b["id"] == bot_id), None)
-            if not found:
-                return web.json_response({"error": "Bot not found"}, status=404)
-            bot_name = found["name"]
-        else:
-            bot_name = bot.name
-        model_cfg = config.get_model_config()
-        memory_cfg = config.models.get("memory", {}) if hasattr(config, "models") else {}
-
-        # 从运行中的 bot 获取 proactive 配置
-        proactive_cfg = {
-            "enabled": False,
-            "idle_threshold_hours": 24,
-            "min_interval_hours": 3,
-            "max_daily": 5,
-            "emotion_keywords": [],
-        }
-        if bot and hasattr(bot, "proactive_config"):
-            pc = bot.proactive_config
-            proactive_cfg = {
-                "enabled": pc.enabled,
-                "idle_threshold_hours": pc.idle_threshold_hours,
-                "min_interval_hours": pc.min_interval_hours,
-                "max_daily": pc.max_daily,
-                "emotion_keywords": pc.emotion_keywords,
-            }
-
-        return web.json_response({
-            "bot_id": bot_id,
-            "name": bot_name,
-            "model": public_model_config(model_cfg),
-            "memory": {
-                "hard_limit_chars": memory_cfg.get("hard_limit_chars", 100000),
-                "soft_limit_chars": memory_cfg.get("soft_limit_chars", 80000),
-                "max_working_turns": memory_cfg.get("max_working_turns", 20),
-                "embedding": memory_cfg.get("embedding", "none"),
-                "embedding_model": memory_cfg.get("embedding_model", ""),
-            },
-            "proactive": proactive_cfg,
-            "platforms": [
-                {"name": "cli", "enabled": True, "config": {}},
-                {"name": "feishu", "enabled": True, "config": {}},
-                {"name": "webhook", "enabled": False, "config": {}},
-            ],
-            "session_reset": {
-                "mode": "daily",
-                "at_hour": 0,
-                "idle_minutes": 30,
-                "notify": True,
-            },
-        })
+        service = ConfigAdminService(config, bot_manager)
+        result = service.get_bot_config(bot_id)
+        if not result:
+            return web.json_response({"error": "Bot not found"}, status=404)
+        return web.json_response(result)
 
     async def handle_config_update(request):
         """PUT /api/v1/admin/config/:bot_id"""
@@ -715,74 +620,22 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         except Exception:
             return web.json_response({"error": "Invalid JSON"}, status=400)
 
-        bot = bot_manager.get_bot(bot_id)
-
-        # 1. 保存模型配置到 models.yaml（合并更新，保留未修改的字段）
-        if "model" in body:
-            model_data = body["model"]
-            models_cfg_path = Path.home() / ".ai-companion" / "config" / "models.yaml"
-            try:
-                models_data = {}
-                if models_cfg_path.exists():
-                    with open(models_cfg_path, encoding="utf-8") as f:
-                        models_data = yaml.safe_load(f) or {}
-                provider = model_data.get("provider", "minimax")
-                # 合并 provider 配置（保留未修改的字段）
-                if provider not in models_data:
-                    models_data[provider] = {}
-                existing_provider = models_data.get(provider, {})
-                incoming_api_key = model_data.get("api_key")
-                if is_masked_secret(incoming_api_key):
-                    incoming_api_key = existing_provider.get("api_key", "")
-                models_data[provider] = {
-                    "api_key": incoming_api_key if incoming_api_key is not None else existing_provider.get("api_key", ""),
-                    "base_url": model_data.get("base_url", existing_provider.get("base_url", "")),
-                    "model": model_data.get("model", existing_provider.get("model", "")),
-                }
-                # 全局默认参数
-                if "model" not in models_data:
-                    models_data["model"] = {}
-                existing_global = models_data.get("model", {})
-                models_data["model"] = {
-                    "provider": provider,
-                    "temperature": model_data.get("temperature", existing_global.get("temperature", 0.7)),
-                    "max_tokens": model_data.get("max_tokens", existing_global.get("max_tokens", 2000)),
-                }
-                models_cfg_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(models_cfg_path, "w", encoding="utf-8") as f:
-                    yaml.safe_dump(models_data, f, allow_unicode=True, default_flow_style=False)
-            except Exception as e:
-                return web.json_response({"error": f"Failed to save model config: {e}"}, status=500)
-
-        # 2. 保存 proactive 配置并热更新
-        if "proactive" in body and bot and hasattr(bot, "proactive_config"):
-            proactive_data = body["proactive"]
-            pc = bot.proactive_config
-            try:
-                if "enabled" in proactive_data:
-                    pc._config["enabled"] = proactive_data["enabled"]
-                if "idle_threshold_hours" in proactive_data:
-                    pc._config.setdefault("scheduler", {})["idle_threshold_hours"] = proactive_data["idle_threshold_hours"]
-                if "min_interval_hours" in proactive_data:
-                    pc._config.setdefault("scheduler", {})["min_interval_hours"] = proactive_data["min_interval_hours"]
-                if "max_daily" in proactive_data:
-                    pc._config.setdefault("scheduler", {})["max_daily"] = proactive_data["max_daily"]
-                if "emotion_keywords" in proactive_data:
-                    pc._config.setdefault("triggers", {}).setdefault("emotion_trigger", {})["keywords"] = proactive_data["emotion_keywords"]
-                pc.save()
-
-                # 重启调度器以应用新配置
-                if bot.proactive_scheduler:
-                    await bot.proactive_scheduler.stop()
-                    bot.proactive_scheduler = None
-                    from ai_companion.proactive.scheduler import ProactiveScheduler
-                    bot.proactive_scheduler = ProactiveScheduler(bot.proactive_engine)
-                    bot.proactive_scheduler.set_dependencies(bot.model, bot.memory)
-                    await bot.proactive_scheduler.start()
-            except Exception as e:
-                return web.json_response({"error": f"Failed to save proactive config: {e}"}, status=500)
-
-        return web.json_response({"ok": True})
+        try:
+            service = ConfigAdminService(config, bot_manager)
+            result = service.update_bot_config(bot_id, body)
+            bot = bot_manager.get_bot(bot_id)
+            if bot and "proactive" in body and bot.proactive_scheduler:
+                await bot.proactive_scheduler.stop()
+                bot.proactive_scheduler = None
+                from ai_companion.proactive.scheduler import ProactiveScheduler
+                bot.proactive_scheduler = ProactiveScheduler(bot.proactive_engine)
+                bot.proactive_scheduler.set_dependencies(bot.model, bot.memory)
+                await bot.proactive_scheduler.start()
+            return web.json_response(result)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except Exception as e:
+            return web.json_response({"error": f"Failed to save config: {e}"}, status=500)
 
     async def handle_config_test(request):
         """POST /api/v1/admin/config/:bot_id/test"""
@@ -857,12 +710,20 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
     _admin_runner = web.AppRunner(_admin_app)
     await _admin_runner.setup()
-    host = admin_host(config.config)
-    port = admin_port(config.config)
     site = web.TCPSite(_admin_runner, host, port)
-    await site.start()
+    try:
+        await site.start()
+    except OSError:
+        await _admin_runner.cleanup()
+        _admin_runner = None
+        if _admin_api_is_available(host, port):
+            print(f"[OK] 管理 API 已在运行，复用现有实例 (http://{host}:{port})")
+            print()
+            return False
+        raise
     print(f"[OK] 管理 API 已启动 (http://{host}:{port})")
     print()
+    return True
 
 
 async def _stop_admin_api():
@@ -953,15 +814,21 @@ async def run_gateway(daemon: bool = True):
     # 保存 PID
     save_gateway_pid(os.getpid())
     adapter = None
+    ui_available = False
+    stop_requested = False
 
     def cleanup():
         remove_gateway_pid()
         _stop_ui_server()
         # Admin API is stopped via KeyboardInterrupt handler below
 
+    def request_shutdown(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
     # 注册清理函数
-    signal.signal(signal.SIGTERM, lambda s, f: cleanup())
-    signal.signal(signal.SIGINT, lambda s, f: cleanup())
+    signal.signal(signal.SIGTERM, request_shutdown)
+    signal.signal(signal.SIGINT, request_shutdown)
 
     print("=" * 50)
     print("AI Companion Gateway")
@@ -970,12 +837,6 @@ async def run_gateway(daemon: bool = True):
 
     if daemon:
         print("[OK] 守护进程模式，关闭终端后网关将继续运行")
-        print()
-
-    # 检查是否启动 UI。默认只启动 Admin API；开发环境可显式打开 Vite。
-    start_ui = os.environ.get("START_UI", os.environ.get("AI_COMPANION_START_UI", "false")).lower() in ("true", "1", "yes")
-    if start_ui:
-        _start_ui_server()
         print()
 
     # 加载配置
@@ -1110,9 +971,15 @@ async def run_gateway(daemon: bool = True):
     else:
         print("[WARN] 飞书未配置，跳过网关连接")
         print("       管理 API 已启动，可访问 http://localhost:8642")
+
+    # 默认随网关启动 UI；可用 START_UI=false 或 AI_COMPANION_START_UI=false 关闭。
+    if should_start_ui(default=True):
+        ui_available = _start_ui_server()
+        print()
+
     print()
     print("=" * 50)
-    if _ui_process:
+    if ui_available:
         print("网关 + UI 已启动")
         print(f"  管理后台: http://localhost:1421")
         print("  按 Ctrl+C 退出")
@@ -1123,7 +990,7 @@ async def run_gateway(daemon: bool = True):
 
     try:
         # 保持运行
-        while True:
+        while not stop_requested:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
         print()

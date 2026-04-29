@@ -3,13 +3,112 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
 from pathlib import Path
+from typing import Any
 
-from .path_resolver import discover_bots, get_memory_db_path
+import yaml
+
+from .path_resolver import discover_bots, get_memory_db_path, project_bots_dir, user_bots_dir
 
 
 MASKED_SECRET = "********"
+
+
+WEB_CONFIG_SCHEMA = {
+    "sections": [
+        {
+            "id": "model",
+            "title": "模型配置",
+            "scope": "global",
+            "description": "控制所有 Bot 默认使用的模型 provider、模型名和采样参数。",
+            "restart": "保存后新请求生效；运行中 Gateway 不需要重启。",
+            "fields": {
+                "provider": "选择 MiniMax、OpenAI、Claude、Ollama 或自定义兼容接口。",
+                "api_key": "敏感字段。留空或保留掩码表示继续使用旧值。",
+                "base_url": "Provider API 基础地址；Ollama 通常是 http://localhost:11434/v1。",
+                "model": "具体模型名称，例如 gpt-4o、qwen2.5-14b。",
+                "temperature": "回复随机性，推荐 0.6-1.0。",
+                "max_tokens": "单次回复上限，过高会增加成本。",
+            },
+        },
+        {
+            "id": "memory",
+            "title": "记忆与上下文",
+            "scope": "global",
+            "description": "控制工作记忆窗口、压缩阈值和情景记忆向量召回。",
+            "restart": "保存后新建 Bot 实例或重启 Gateway 完全生效；部分运行中实例会在下一轮读取新阈值。",
+            "fields": {
+                "soft_limit_chars": "超过后可能后台压缩，推荐 3000-80000。",
+                "hard_limit_chars": "超过后同步压缩，必须大于 soft limit。",
+                "max_working_turns": "保留最近多少轮原文，越大上下文越长。",
+                "embedding": "none 为纯 SQLite 检索；local 会启用 sentence-transformers。",
+                "embedding_model": "本地向量模型名，默认 all-MiniLM-L6-v2。",
+            },
+        },
+        {
+            "id": "proactive",
+            "title": "主动唤醒",
+            "scope": "bot",
+            "description": "控制 Bot 主动联系用户的频率、时段、情绪触发和投递平台。",
+            "restart": "保存后会尝试热加载并重启调度器。",
+            "fields": {
+                "mode": "active 会主动联系；silent 只保留状态不主动发。",
+                "idle_threshold_hours": "用户空闲多久后考虑主动联系。",
+                "max_daily": "每日主动消息上限。",
+                "preferred_contact_times": "允许主动联系的时间段，格式 HH:MM-HH:MM。",
+            },
+        },
+        {
+            "id": "life",
+            "title": "人生轨迹",
+            "scope": "bot",
+            "description": "控制 Bot 自己的时间流速、日常事件、人生大事概率和事件去重策略。",
+            "restart": "保存后会尝试热加载 LifeConfig；调度器下一轮使用新值。",
+            "fields": {
+                "time_ratio": "1 表示现实同步；24 表示现实 1 小时等于 Bot 1 天；1440 表示现实 1 分钟等于 Bot 1 天。",
+                "daily_interval_seconds": "Bot 日常事件基础间隔，推荐 86400。",
+                "major_interval_seconds": "人生大事基础检查间隔，推荐 604800。",
+                "unexpected_event_probability": "低概率意外事件概率，过高会让人生轨迹失真。",
+            },
+        },
+        {
+            "id": "platforms",
+            "title": "平台集成",
+            "scope": "global",
+            "description": "配置 CLI、飞书、Webhook 等入口和主动消息投递。",
+            "restart": "飞书连接模式、路由和凭据通常需要重启 Gateway。",
+            "fields": {
+                "feishu.app_id": "飞书开放平台应用 ID。",
+                "feishu.app_secret": "敏感字段。留空或保留掩码表示继续使用旧值。",
+                "feishu.group_policy": "open 最开放；生产环境推荐 allowlist 或 admin_only。",
+                "feishu.routing": "dedicated 固定 Bot；chat_routed 根据群聊映射 Bot。",
+            },
+        },
+        {
+            "id": "persona",
+            "title": "Bot 人格",
+            "scope": "bot",
+            "description": "编辑基础档案、性格、说话风格、价值观和关键经历。",
+            "restart": "对话前会重新读取 persona，保存后下一轮对话生效。",
+            "fields": {
+                "profile": "姓名、职业、初始年龄、性格标签等基础档案。",
+                "speaking_style": "语气、口头禅和情绪表达方式。",
+                "values": "原则、底线和软边界。",
+                "backstory": "背景故事和关键经历。",
+            },
+        },
+    ],
+    "sensitive_fields": ["model.api_key", "platforms.feishu.extra.app_secret"],
+}
+
+LIFE_TIME_PRESETS = [
+    {"id": "realtime", "label": "现实同步 1:1", "time_ratio": 1, "description": "现实 1 天 = Bot 1 天"},
+    {"id": "hourly", "label": "轻度加速 24x", "time_ratio": 24, "description": "现实 1 小时 = Bot 1 天"},
+    {"id": "minute", "label": "观察测试 1440x", "time_ratio": 1440, "description": "现实 1 分钟 = Bot 1 天"},
+    {"id": "stress", "label": "极速压测 86400x", "time_ratio": 86400, "description": "现实 1 秒 = Bot 1 天"},
+]
 
 
 def mask_secret(value: str | None) -> str:
@@ -37,6 +136,499 @@ def public_model_config(model_cfg: dict) -> dict:
         "temperature": model_cfg.get("temperature", 0.7),
         "max_tokens": model_cfg.get("max_tokens", 2000),
     }
+
+
+def _deep_merge(base: dict, updates: dict) -> dict:
+    result = dict(base or {})
+    for key, value in (updates or {}).items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _load_yaml(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+def _write_yaml(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def _load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_json(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _as_int(value: Any, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
+
+
+def _as_float(value: Any, default: float, minimum: float | None = None, maximum: float | None = None) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
+
+
+def _as_list(value: Any) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [value]
+
+
+def _is_masked_or_empty(value: Any) -> bool:
+    return value in (None, "") or is_masked_secret(str(value))
+
+
+class ConfigAdminService:
+    """Read/write Web UI configuration without changing on-disk formats."""
+
+    def __init__(self, config, bot_manager=None):
+        self.config = config
+        self.bot_manager = bot_manager
+        self.config_dir = Path(config.config_dir)
+        self.models_path = self.config_dir / "models.yaml"
+        self.main_config_path = self.config_dir / "config.yaml"
+
+    def get_bot_config(self, bot_id: str) -> dict | None:
+        bot = self.bot_manager.get_bot(bot_id) if self.bot_manager else None
+        persona_dir = self._persona_dir(bot_id, bot)
+        if not persona_dir.exists():
+            return None
+
+        profile = _load_json(persona_dir / "profile.json")
+        bot_name = getattr(bot, "name", None) or profile.get("name") or bot_id
+        models_data = _load_yaml(self.models_path) or getattr(self.config, "models", {})
+        main_config = _load_yaml(self.main_config_path) or getattr(self.config, "config", {})
+        model_cfg = self.config.get_model_config()
+        proactive_raw = self._load_proactive(persona_dir)
+        life_raw = self._load_life(persona_dir)
+
+        return {
+            "bot_id": bot_id,
+            "name": bot_name,
+            "schema": WEB_CONFIG_SCHEMA,
+            "model": public_model_config(model_cfg),
+            "memory": self._public_memory(models_data.get("memory", {})),
+            "proactive": self._public_proactive(proactive_raw),
+            "life": self._public_life(life_raw),
+            "platforms": self._public_platforms(main_config.get("platforms", {})),
+            "session_reset": self._public_session_reset(main_config.get("session_reset", {})),
+            "persona_summary": self._public_persona(persona_dir),
+            "diagnostics": self._diagnostics(bot),
+        }
+
+    def update_bot_config(self, bot_id: str, body: dict) -> dict:
+        bot = self.bot_manager.get_bot(bot_id) if self.bot_manager else None
+        persona_dir = self._persona_dir(bot_id, bot)
+        persona_dir.mkdir(parents=True, exist_ok=True)
+        changed: list[str] = []
+        warnings: list[str] = []
+
+        if "model" in body:
+            warnings.extend(self._save_model(body["model"]))
+            changed.append(str(self.models_path))
+
+        if "memory" in body:
+            self._save_memory(body["memory"])
+            changed.append(str(self.models_path))
+            warnings.append("记忆配置对新会话立即生效，运行中的 Bot 可能需要重启 Gateway 才完全应用。")
+
+        if "proactive" in body:
+            proactive_path = persona_dir / "proactive.json"
+            self._save_proactive(proactive_path, body["proactive"])
+            changed.append(str(proactive_path))
+            self._reload_bot_runtime(bot)
+
+        if "life" in body:
+            life_path = persona_dir / "life.json"
+            warnings.extend(self._save_life(life_path, body["life"]))
+            changed.append(str(life_path))
+            self._reload_bot_runtime(bot)
+
+        if "platforms" in body or "feishu" in body or "webhook" in body or "session_reset" in body:
+            self._save_main_config(body)
+            changed.append(str(self.main_config_path))
+            if "platforms" in body or "feishu" in body:
+                warnings.append("平台连接与飞书路由通常需要重启 Gateway 才会重新建立连接。")
+
+        if "persona" in body:
+            changed.extend(self._save_persona(persona_dir, body["persona"]))
+            self._reload_bot_runtime(bot)
+
+        if self.config is not None:
+            self.config._models = None
+            self.config._config = None
+
+        return {
+            "ok": True,
+            "changed_files": sorted(set(changed)),
+            "warnings": warnings,
+            "config": self.get_bot_config(bot_id),
+        }
+
+    def _persona_dir(self, bot_id: str, bot=None) -> Path:
+        if bot is not None and getattr(bot, "persona_loader", None):
+            return Path(bot.persona_loader.dir)
+        user_dir = user_bots_dir() / bot_id / "persona"
+        if user_dir.exists():
+            return user_dir
+        return project_bots_dir() / bot_id / "persona"
+
+    def _load_proactive(self, persona_dir: Path) -> dict:
+        from ai_companion.proactive.config import ProactiveConfig
+
+        raw = _load_json(persona_dir / "proactive.json")
+        return _deep_merge(ProactiveConfig.DEFAULT_CONFIG, raw)
+
+    def _load_life(self, persona_dir: Path) -> dict:
+        from ai_companion.proactive.life_config import DEFAULT_CONFIG
+
+        raw = _load_json(persona_dir / "life.json")
+        return _deep_merge(DEFAULT_CONFIG, raw)
+
+    def _public_memory(self, memory: dict) -> dict:
+        return {
+            "hard_limit_chars": _as_int(memory.get("hard_limit_chars"), 100000, 1000),
+            "soft_limit_chars": _as_int(memory.get("soft_limit_chars"), 80000, 500),
+            "max_working_turns": _as_int(memory.get("max_working_turns"), 20, 1, 200),
+            "max_summaries": _as_int(memory.get("max_summaries"), 5, 1, 50),
+            "semantic_char_limit": _as_int(memory.get("semantic_char_limit"), 4400, 500),
+            "embedding": memory.get("embedding", "none"),
+            "embedding_model": memory.get("embedding_model", "all-MiniLM-L6-v2"),
+        }
+
+    def _public_proactive(self, cfg: dict) -> dict:
+        scheduler = cfg.get("scheduler", {})
+        triggers = cfg.get("triggers", {})
+        emotion = triggers.get("emotion_trigger", {})
+        idle = triggers.get("idle_reminder", {})
+        platform = cfg.get("platform", {})
+        return {
+            "enabled": bool(cfg.get("enabled", True)),
+            "mode": cfg.get("mode", "active"),
+            "check_interval_seconds": _as_int(scheduler.get("check_interval_seconds"), 600, 10),
+            "idle_threshold_hours": _as_int(scheduler.get("idle_threshold_hours"), 24, 1),
+            "min_interval_hours": _as_float(scheduler.get("min_interval_hours"), 4, 0.1),
+            "max_daily": _as_int(scheduler.get("max_daily"), 5, 0, 100),
+            "max_idle_days": _as_int(scheduler.get("max_idle_days"), 7, 1),
+            "idle_reminder_enabled": bool(idle.get("enabled", True)),
+            "idle_reminder_hours": _as_int(idle.get("idle_hours"), scheduler.get("idle_threshold_hours", 24), 1),
+            "emotion_trigger_enabled": bool(emotion.get("enabled", True)),
+            "emotion_keywords": emotion.get("keywords", []),
+            "emotion_response_delay_minutes": _as_int(emotion.get("response_delay_minutes"), 5, 0),
+            "preferred_contact_times": cfg.get("preferred_contact_times", ["09:00-23:00"]),
+            "timezone": cfg.get("timezone", "Asia/Shanghai"),
+            "random_trigger_prob": _as_float(cfg.get("random_trigger_prob"), 0.05, 0, 1),
+            "random_trigger_min_ratio": _as_float(cfg.get("random_trigger_min_ratio"), 0.5, 0, 1),
+            "platform_type": platform.get("type", "cli"),
+            "webhook_url": platform.get("webhook_url") or "",
+            "home_channel": cfg.get("home_channel") or platform.get("home_channel") or platform.get("chat_id") or "",
+        }
+
+    def _public_life(self, cfg: dict) -> dict:
+        event_policy = cfg.get("event_policy", {})
+        season = cfg.get("season", {})
+        time_ratio = _as_int(cfg.get("time_ratio"), 1, 1)
+        preset = next((p["id"] for p in LIFE_TIME_PRESETS if p["time_ratio"] == time_ratio), "custom")
+        return {
+            "preset": preset,
+            "presets": LIFE_TIME_PRESETS,
+            "daily_interval_seconds": _as_int(cfg.get("daily_interval_seconds"), 86400, 1),
+            "major_interval_seconds": _as_int(cfg.get("major_interval_seconds"), 604800, 1),
+            "time_ratio": time_ratio,
+            "time_ratio_warning_threshold": _as_int(cfg.get("time_ratio_warning_threshold"), 500, 1),
+            "daily_event_min_gap_days": _as_int(cfg.get("daily_event_min_gap_days"), 2, 1),
+            "major_event_fixed_probability": _as_float(cfg.get("major_event_fixed_probability"), 0.05, 0, 1),
+            "max_events": _as_int(cfg.get("max_events"), 100, 1, 100),
+            "max_context_bits": _as_int(cfg.get("max_context_bits"), 2000, 100),
+            "birth_date": cfg.get("birth_date") or "",
+            "season": {
+                "hemisphere": season.get("hemisphere", "north"),
+                "birthday_month": _as_int(season.get("birthday_month"), 1, 1, 12),
+            },
+            "event_policy": {
+                "scenario_cooldown_days": _as_int(event_policy.get("scenario_cooldown_days"), 14, 0),
+                "major_scenario_cooldown_days": _as_int(event_policy.get("major_scenario_cooldown_days"), 180, 0),
+                "unexpected_event_probability": _as_float(event_policy.get("unexpected_event_probability"), 0.01, 0, 1),
+                "unexpected_event_cooldown_days": _as_int(event_policy.get("unexpected_event_cooldown_days"), 365, 0),
+                "llm_daily_candidate_limit": _as_int(event_policy.get("llm_daily_candidate_limit"), 12, 3, 20),
+            },
+            "milestones": cfg.get("milestones", []),
+            "holidays": cfg.get("holidays", []),
+        }
+
+    def _public_platforms(self, platforms: dict) -> list[dict]:
+        result = []
+        for name in ("cli", "feishu", "webhook"):
+            cfg = platforms.get(name, {}) if isinstance(platforms.get(name), dict) else {}
+            public_cfg = dict(cfg)
+            if name == "feishu":
+                public_cfg = dict(cfg)
+                extra = dict(public_cfg.get("extra", {}) or {})
+                if "app_secret" in extra:
+                    extra["app_secret"] = mask_secret(extra.get("app_secret"))
+                public_cfg["extra"] = extra
+            result.append({
+                "name": name,
+                "enabled": bool(cfg.get("enabled", name == "cli")),
+                "config": public_cfg,
+            })
+        return result
+
+    def _public_session_reset(self, session_reset: dict) -> dict:
+        return {
+            "mode": session_reset.get("mode", "daily"),
+            "at_hour": _as_int(session_reset.get("at_hour"), 0, 0, 23),
+            "idle_minutes": _as_int(session_reset.get("idle_minutes"), 30, 1),
+            "notify": bool(session_reset.get("notify", True)),
+        }
+
+    def _public_persona(self, persona_dir: Path) -> dict:
+        profile = _load_json(persona_dir / "profile.json")
+        backstory = _load_json(persona_dir / "backstory.json")
+        values = _load_json(persona_dir / "values.json")
+        speaking_style = _load_json(persona_dir / "speaking_style.json")
+        return {
+            "profile": {
+                "name": profile.get("name", ""),
+                "age": profile.get("age", ""),
+                "birth_date": profile.get("birth_date", ""),
+                "occupation": profile.get("occupation", ""),
+                "gender": profile.get("gender", ""),
+                "personality_tags": profile.get("personality_tags", []),
+                "relationship_to_user": profile.get("relationship_to_user", ""),
+                "interests": profile.get("interests", []),
+                "appearance": profile.get("appearance", ""),
+                "summary": profile.get("summary", ""),
+            },
+            "backstory": {
+                "summary": backstory.get("summary", ""),
+                "key_moments": backstory.get("key_moments", []),
+                "meeting_user": backstory.get("meeting_user", ""),
+                "now": backstory.get("now", ""),
+            },
+            "values": {
+                "non_negotiable": values.get("non_negotiable", []),
+                "soft_boundaries": values.get("soft_boundaries", []),
+            },
+            "speaking_style": {
+                "tone": speaking_style.get("tone", ""),
+                "catchphrases": speaking_style.get("口头禅", []),
+                "greeting_style": speaking_style.get("greeting_style", ""),
+                "farewell_style": speaking_style.get("farewell_style", ""),
+            },
+        }
+
+    def _diagnostics(self, bot) -> dict:
+        life_status = {}
+        if bot is not None and getattr(bot, "life_engine", None):
+            try:
+                life_status = bot.life_engine.get_status()
+            except Exception:
+                life_status = {}
+        return {
+            "requires_restart": [],
+            "life_status": life_status,
+        }
+
+    def _save_model(self, model_data: dict) -> list[str]:
+        warnings = []
+        models_data = _load_yaml(self.models_path)
+        provider = model_data.get("provider", models_data.get("model", {}).get("provider", "minimax"))
+        existing_provider = dict(models_data.get(provider, {}) if isinstance(models_data.get(provider), dict) else {})
+        incoming_api_key = model_data.get("api_key")
+        if _is_masked_or_empty(incoming_api_key):
+            incoming_api_key = existing_provider.get("api_key", "")
+        models_data[provider] = {
+            "api_key": incoming_api_key,
+            "base_url": model_data.get("base_url", existing_provider.get("base_url", "")),
+            "model": model_data.get("model", existing_provider.get("model", "")),
+        }
+        existing_global = dict(models_data.get("model", {}) if isinstance(models_data.get("model"), dict) else {})
+        existing_global.update({
+            "provider": provider,
+            "temperature": _as_float(model_data.get("temperature"), existing_global.get("temperature", 0.7), 0, 2),
+            "max_tokens": _as_int(model_data.get("max_tokens"), existing_global.get("max_tokens", 2000), 1),
+        })
+        models_data["model"] = existing_global
+        _write_yaml(self.models_path, models_data)
+        if provider in {"minimax", "openai", "claude"} and not incoming_api_key:
+            warnings.append(f"{provider} 需要 API Key，当前保存后可能无法启动模型。")
+        return warnings
+
+    def _save_memory(self, memory_data: dict):
+        models_data = _load_yaml(self.models_path)
+        existing = dict(models_data.get("memory", {}) if isinstance(models_data.get("memory"), dict) else {})
+        existing.update({
+            "hard_limit_chars": _as_int(memory_data.get("hard_limit_chars"), existing.get("hard_limit_chars", 100000), 1000),
+            "soft_limit_chars": _as_int(memory_data.get("soft_limit_chars"), existing.get("soft_limit_chars", 80000), 500),
+            "max_working_turns": _as_int(memory_data.get("max_working_turns"), existing.get("max_working_turns", 20), 1, 200),
+            "max_summaries": _as_int(memory_data.get("max_summaries"), existing.get("max_summaries", 5), 1, 50),
+            "semantic_char_limit": _as_int(memory_data.get("semantic_char_limit"), existing.get("semantic_char_limit", 4400), 500),
+            "embedding": memory_data.get("embedding", existing.get("embedding", "none")),
+            "embedding_model": memory_data.get("embedding_model", existing.get("embedding_model", "all-MiniLM-L6-v2")),
+        })
+        if existing["soft_limit_chars"] >= existing["hard_limit_chars"]:
+            existing["soft_limit_chars"] = max(500, existing["hard_limit_chars"] - 1000)
+        models_data["memory"] = existing
+        _write_yaml(self.models_path, models_data)
+
+    def _save_proactive(self, path: Path, proactive_data: dict):
+        from ai_companion.proactive.config import ProactiveConfig
+
+        existing = _deep_merge(ProactiveConfig.DEFAULT_CONFIG, _load_json(path))
+        scheduler = existing.setdefault("scheduler", {})
+        triggers = existing.setdefault("triggers", {})
+        idle = triggers.setdefault("idle_reminder", {})
+        emotion = triggers.setdefault("emotion_trigger", {})
+        platform = existing.setdefault("platform", {})
+        existing["enabled"] = bool(proactive_data.get("enabled", existing.get("enabled", True)))
+        existing["mode"] = proactive_data.get("mode", existing.get("mode", "active"))
+        scheduler["check_interval_seconds"] = _as_int(proactive_data.get("check_interval_seconds"), scheduler.get("check_interval_seconds", 600), 10)
+        scheduler["idle_threshold_hours"] = _as_int(proactive_data.get("idle_threshold_hours"), scheduler.get("idle_threshold_hours", 24), 1)
+        scheduler["min_interval_hours"] = _as_float(proactive_data.get("min_interval_hours"), scheduler.get("min_interval_hours", 4), 0.1)
+        scheduler["max_daily"] = _as_int(proactive_data.get("max_daily"), scheduler.get("max_daily", 5), 0, 100)
+        scheduler["max_idle_days"] = _as_int(proactive_data.get("max_idle_days"), scheduler.get("max_idle_days", 7), 1)
+        idle["enabled"] = bool(proactive_data.get("idle_reminder_enabled", idle.get("enabled", True)))
+        idle["idle_hours"] = _as_int(proactive_data.get("idle_reminder_hours"), idle.get("idle_hours", scheduler["idle_threshold_hours"]), 1)
+        emotion["enabled"] = bool(proactive_data.get("emotion_trigger_enabled", emotion.get("enabled", True)))
+        emotion["keywords"] = _as_list(proactive_data.get("emotion_keywords", emotion.get("keywords", [])))
+        emotion["response_delay_minutes"] = _as_int(proactive_data.get("emotion_response_delay_minutes"), emotion.get("response_delay_minutes", 5), 0)
+        existing["preferred_contact_times"] = _as_list(proactive_data.get("preferred_contact_times", existing.get("preferred_contact_times", ["09:00-23:00"])))
+        existing["timezone"] = proactive_data.get("timezone", existing.get("timezone", "Asia/Shanghai"))
+        existing["random_trigger_prob"] = _as_float(proactive_data.get("random_trigger_prob"), existing.get("random_trigger_prob", 0.05), 0, 1)
+        existing["random_trigger_min_ratio"] = _as_float(proactive_data.get("random_trigger_min_ratio"), existing.get("random_trigger_min_ratio", 0.5), 0, 1)
+        platform["type"] = proactive_data.get("platform_type", platform.get("type", "cli"))
+        platform["webhook_url"] = proactive_data.get("webhook_url", platform.get("webhook_url"))
+        if proactive_data.get("home_channel"):
+            platform["home_channel"] = proactive_data.get("home_channel")
+        _write_json(path, existing)
+
+    def _save_life(self, path: Path, life_data: dict) -> list[str]:
+        from ai_companion.proactive.life_config import DEFAULT_CONFIG
+
+        warnings = []
+        existing = _deep_merge(DEFAULT_CONFIG, _load_json(path))
+        existing["daily_interval_seconds"] = _as_int(life_data.get("daily_interval_seconds"), existing.get("daily_interval_seconds", 86400), 1)
+        existing["major_interval_seconds"] = _as_int(life_data.get("major_interval_seconds"), existing.get("major_interval_seconds", 604800), 1)
+        existing["time_ratio"] = _as_int(life_data.get("time_ratio"), existing.get("time_ratio", 1), 1, 86400)
+        existing["time_ratio_warning_threshold"] = _as_int(life_data.get("time_ratio_warning_threshold"), existing.get("time_ratio_warning_threshold", 500), 1)
+        existing["daily_event_min_gap_days"] = _as_int(life_data.get("daily_event_min_gap_days"), existing.get("daily_event_min_gap_days", 2), 1)
+        existing["major_event_fixed_probability"] = _as_float(life_data.get("major_event_fixed_probability"), existing.get("major_event_fixed_probability", 0.05), 0, 1)
+        existing["max_events"] = _as_int(life_data.get("max_events"), existing.get("max_events", 100), 1, 100)
+        existing["max_context_bits"] = _as_int(life_data.get("max_context_bits"), existing.get("max_context_bits", 2000), 100)
+        existing["birth_date"] = life_data.get("birth_date") or existing.get("birth_date")
+        if isinstance(life_data.get("season"), dict):
+            existing["season"] = _deep_merge(existing.get("season", {}), life_data["season"])
+        if isinstance(life_data.get("event_policy"), dict):
+            policy = _deep_merge(existing.get("event_policy", {}), life_data["event_policy"])
+            policy["unexpected_event_probability"] = _as_float(policy.get("unexpected_event_probability"), 0.01, 0, 1)
+            policy["llm_daily_candidate_limit"] = _as_int(policy.get("llm_daily_candidate_limit"), 12, 3, 20)
+            existing["event_policy"] = policy
+        if isinstance(life_data.get("milestones"), list):
+            existing["milestones"] = life_data["milestones"]
+        if isinstance(life_data.get("holidays"), list):
+            existing["holidays"] = life_data["holidays"]
+        if existing["time_ratio"] > existing.get("time_ratio_warning_threshold", 500):
+            warnings.append("当前时间倍率较高，可能让事件过快生成，建议仅用于观察测试。")
+        _write_json(path, existing)
+        return warnings
+
+    def _save_main_config(self, body: dict):
+        config_data = _load_yaml(self.main_config_path)
+        platforms = config_data.setdefault("platforms", {})
+        for platform in body.get("platforms", []) or []:
+            name = platform.get("name")
+            if not name:
+                continue
+            current = dict(platforms.get(name, {}) if isinstance(platforms.get(name), dict) else {})
+            current["enabled"] = bool(platform.get("enabled", current.get("enabled", name == "cli")))
+            if isinstance(platform.get("config"), dict):
+                current = _deep_merge(current, platform["config"])
+            platforms[name] = current
+
+        feishu = body.get("feishu")
+        if isinstance(feishu, dict):
+            current = dict(platforms.get("feishu", {}) if isinstance(platforms.get("feishu"), dict) else {})
+            current["enabled"] = bool(feishu.get("enabled", current.get("enabled", False)))
+            extra = dict(current.get("extra", {}) if isinstance(current.get("extra"), dict) else {})
+            incoming_extra = feishu.get("extra", {}) if isinstance(feishu.get("extra"), dict) else {}
+            for key, value in incoming_extra.items():
+                if key == "app_secret" and _is_masked_or_empty(value):
+                    continue
+                extra[key] = value
+            current["extra"] = extra
+            if isinstance(feishu.get("routing"), dict):
+                current["routing"] = _deep_merge(current.get("routing", {}), feishu["routing"])
+            platforms["feishu"] = current
+
+        if isinstance(body.get("session_reset"), dict):
+            config_data["session_reset"] = self._public_session_reset(body["session_reset"])
+        _write_yaml(self.main_config_path, config_data)
+
+    def _save_persona(self, persona_dir: Path, persona_data: dict) -> list[str]:
+        changed = []
+        file_map = {
+            "profile": "profile.json",
+            "backstory": "backstory.json",
+            "values": "values.json",
+            "speaking_style": "speaking_style.json",
+        }
+        for section, filename in file_map.items():
+            if not isinstance(persona_data.get(section), dict):
+                continue
+            path = persona_dir / filename
+            existing = _load_json(path)
+            updates = dict(persona_data[section])
+            if section == "speaking_style" and "catchphrases" in updates:
+                updates["口头禅"] = updates.pop("catchphrases")
+            merged = _deep_merge(existing, updates)
+            _write_json(path, merged)
+            changed.append(str(path))
+        return changed
+
+    def _reload_bot_runtime(self, bot):
+        if not bot:
+            return
+        try:
+            bot._refresh_runtime_settings()
+        except Exception:
+            pass
 
 
 def admin_host(config: dict) -> str:

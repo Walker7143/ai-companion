@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { ToastContainer } from './components/ui';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Dashboard } from './pages/Dashboard';
 import { Session } from './pages/Session';
 import { Logs } from './pages/Logs';
@@ -11,13 +12,15 @@ function App() {
   return (
     <BrowserRouter>
       <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/session" element={<Session />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/memory" element={<Memory />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/session" element={<Session />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="/memory" element={<Memory />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </ErrorBoundary>
       </Layout>
       <ToastContainer />
     </BrowserRouter>

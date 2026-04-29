@@ -281,15 +281,14 @@ ai-companion gateway stop     # 停止
 ai-companion gateway logs     # 查看日志
 ```
 
-**管理后台**: Gateway 默认只启动本地 Admin API（http://127.0.0.1:8642）。开发时可另启 Web UI：
+**管理后台**: 启动本地 CLI 或 Gateway 时会自动拉起本地 Admin API（http://127.0.0.1:8642）和 Web UI（http://localhost:1421）。如果 CLI 和 Gateway 同时启动，会复用同一个 UI 进程，不会重复启动。
 
 ```bash
-cd ai-companion-ui
-npm install
-npm run dev
+ai-companion start
+ai-companion gateway start
 ```
 
-如需让 Gateway 同时拉起 Vite dev server，可显式设置 `START_UI=true`。
+如需禁用自动 UI，可设置 `START_UI=false` 或 `AI_COMPANION_START_UI=false`。
 
 ### 内置命令
 

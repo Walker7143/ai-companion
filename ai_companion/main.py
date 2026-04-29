@@ -10,6 +10,7 @@ from .model.factory import ModelFactory
 from .bot.manager import BotManager
 from .bot.instance import BotInstance
 from .cli.adapter import CLIAdapter
+from .ui_server import ensure_ui_server, release_ui_server, should_start_ui
 
 
 def get_data_dir() -> Path:
@@ -97,15 +98,40 @@ async def main(bot_filter: str = None):
         print("请先创建 Bot 或运行: ai-companion setup")
         sys.exit(1)
 
+    start_ui_enabled = should_start_ui(default=True)
+    admin_api_owned = False
+    if start_ui_enabled:
+        try:
+            from .gateway.cmd import _start_admin_api
+            admin_api_owned = bool(await _start_admin_api(bot_manager, config))
+        except Exception as e:
+            print(f"[WARN] 管理 API 未启动: {e}")
+
+    ui_result = None
+    if start_ui_enabled:
+        ui_result = ensure_ui_server(owner_name="cli")
+        if ui_result.ok:
+            if ui_result.started:
+                print(f"[OK] UI 服务器已启动 (PID: {ui_result.pid})")
+            elif ui_result.reused:
+                print("[OK] UI 服务器已在运行，复用现有实例")
+            print(f"     管理后台: {ui_result.url}")
+        else:
+            print(f"[WARN] UI 服务器未启动: {ui_result.message}")
+
     # 启动 CLI
     print("")
-    cli = CLIAdapter(bot_manager)
-    await cli.start()
-
-    # 清理资源
-    for bot in bot_manager.bots.values():
-        await bot.close()
-    await model.close()
+    try:
+        cli = CLIAdapter(bot_manager)
+        await cli.start()
+    finally:
+        release_ui_server(ui_result)
+        if admin_api_owned:
+            from .gateway.cmd import _stop_admin_api
+            await _stop_admin_api()
+        for bot in bot_manager.bots.values():
+            await bot.close()
+        await model.close()
 
 
 def show_status():

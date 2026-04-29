@@ -1,7 +1,7 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
-import { useThemeStore } from '../../stores';
+import { useBotStore, useThemeStore } from '../../stores';
 
 interface LayoutProps {
   children: ReactNode;
@@ -11,10 +11,15 @@ export function Layout({ children }: LayoutProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { theme } = useThemeStore();
+  const { fetchBots } = useBotStore();
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    fetchBots();
+  }, [fetchBots]);
 
   // Handle responsive sidebar
   useEffect(() => {

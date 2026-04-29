@@ -20,7 +20,8 @@
 - `memory/`：三层记忆引擎（working / episodic / semantic）
 - `persona/`：人格加载与系统提示词构建，拒绝策略
 - `proactive/`：主动唤醒 + 人生轨迹（scheduler/engine/state/config）
-- `gateway/cmd.py`：Gateway 进程管理 + 管理 API（端口 8642）+ 可选 UI 子进程
+- `gateway/cmd.py`：Gateway 进程管理 + 管理 API（端口 8642）+ 共享 UI 子进程
+- `ui_server.py`：CLI/Gateway 共用的 UI 启动去重逻辑（端口 1421）
 - `skill/`：技能分发与注册
 
 ### 2.2 前端目录（`ai-companion-ui/`）
@@ -53,7 +54,7 @@
 2. 启动 Gateway 进程，记录 PID
 3. 初始化模型与 BotManager
 4. 启动管理 API（8642）
-5. 可选启动前端 dev server（由 `START_UI` 控制）
+5. CLI/Gateway 默认启动或复用前端 dev server（`START_UI=false` 可关闭）
 6. 可选接入飞书消息路由
 
 ### 3.3 BotInstance 内部依赖顺序

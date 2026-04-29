@@ -141,11 +141,27 @@ export interface LogStreamEvent {
 export interface BotConfig {
   bot_id: string;
   name: string;
+  schema?: WebConfigSchema;
   model: ModelConfig;
   memory: MemoryConfig;
   proactive: ProactiveConfig;
+  life: LifeConfig;
   platforms: PlatformConfig[];
   session_reset: SessionResetConfig;
+  persona_summary: PersonaSummaryConfig;
+  diagnostics?: ConfigDiagnostics;
+}
+
+export interface WebConfigSchema {
+  sections: Array<{
+    id: string;
+    title: string;
+    scope: string;
+    description: string;
+    restart: string;
+    fields: Record<string, string>;
+  }>;
+  sensitive_fields: string[];
 }
 
 export interface ModelConfig {
@@ -161,22 +177,70 @@ export interface MemoryConfig {
   hard_limit_chars: number;
   soft_limit_chars: number;
   max_working_turns: number;
+  max_summaries: number;
+  semantic_char_limit: number;
   embedding: string;
   embedding_model: string;
 }
 
 export interface ProactiveConfig {
   enabled: boolean;
+  mode: string;
+  check_interval_seconds: number;
   idle_threshold_hours: number;
   min_interval_hours: number;
   max_daily: number;
+  max_idle_days: number;
+  idle_reminder_enabled: boolean;
+  idle_reminder_hours: number;
+  emotion_trigger_enabled: boolean;
   emotion_keywords: string[];
+  emotion_response_delay_minutes: number;
+  preferred_contact_times: string[];
+  timezone: string;
+  random_trigger_prob: number;
+  random_trigger_min_ratio: number;
+  platform_type: string;
+  webhook_url: string;
+  home_channel: string;
+}
+
+export interface LifeConfig {
+  preset: string;
+  presets: Array<{
+    id: string;
+    label: string;
+    time_ratio: number;
+    description: string;
+  }>;
+  daily_interval_seconds: number;
+  major_interval_seconds: number;
+  time_ratio: number;
+  time_ratio_warning_threshold: number;
+  daily_event_min_gap_days: number;
+  major_event_fixed_probability: number;
+  max_events: number;
+  max_context_bits: number;
+  birth_date: string;
+  season: {
+    hemisphere: string;
+    birthday_month: number;
+  };
+  event_policy: {
+    scenario_cooldown_days: number;
+    major_scenario_cooldown_days: number;
+    unexpected_event_probability: number;
+    unexpected_event_cooldown_days: number;
+    llm_daily_candidate_limit: number;
+  };
+  milestones: Array<Record<string, unknown>>;
+  holidays: Array<Record<string, unknown>>;
 }
 
 export interface PlatformConfig {
   name: string;
   enabled: boolean;
-  config: Record<string, string>;
+  config: Record<string, unknown>;
 }
 
 export interface SessionResetConfig {
@@ -184,6 +248,42 @@ export interface SessionResetConfig {
   at_hour: number;
   idle_minutes: number;
   notify: boolean;
+}
+
+export interface PersonaSummaryConfig {
+  profile: {
+    name: string;
+    age: number | string;
+    birth_date: string;
+    occupation: string;
+    gender: string;
+    personality_tags: string[];
+    relationship_to_user: string;
+    interests: string[];
+    appearance: string;
+    summary: string;
+  };
+  backstory: {
+    summary: string;
+    key_moments: string[];
+    meeting_user: string;
+    now: string;
+  };
+  values: {
+    non_negotiable: string[];
+    soft_boundaries: Array<Record<string, unknown>>;
+  };
+  speaking_style: {
+    tone: string;
+    catchphrases: string[];
+    greeting_style: string;
+    farewell_style: string;
+  };
+}
+
+export interface ConfigDiagnostics {
+  requires_restart: string[];
+  life_status: Record<string, unknown>;
 }
 
 export interface BotInfo {

@@ -220,6 +220,7 @@ class SystemTestSuite:
         self._run_case("T33", "LLM summarizer compression uses outer adapter", self.case_memory_summarizer_closure)
         self._run_case("T34", "Persona runtime profile overlays template files", self.case_persona_runtime_profile_overlay)
         self._run_case("T35", "Dependency and UI contract cleanup", self.case_dependency_and_ui_contract_cleanup)
+        self._run_case("T36", "Web config center reads and persists full config", self.case_web_config_center_roundtrip)
 
         return self._finalize()
 
@@ -1757,7 +1758,7 @@ class SystemTestSuite:
         setup_py = (self.root / "setup.py").read_text(encoding="utf-8")
         requirements = (self.root / "requirements.txt").read_text(encoding="utf-8").strip()
         api_text = (self.root / "ai-companion-ui" / "src" / "api" / "index.ts").read_text(encoding="utf-8")
-        gateway_text = (self.root / "ai_companion" / "gateway" / "cmd.py").read_text(encoding="utf-8")
+        ui_server_text = (self.root / "ai_companion" / "ui_server.py").read_text(encoding="utf-8")
 
         passed = (
             "[project]" in pyproject
@@ -1768,7 +1769,9 @@ class SystemTestSuite:
             and "bot_id=" in api_text
             and "Promise.resolve(true)" not in api_text
             and "Promise.resolve('')" not in api_text
-            and 'os.environ.get("START_UI", os.environ.get("AI_COMPANION_START_UI", "false"))' in gateway_text
+            and "def ensure_ui_server" in ui_server_text
+            and "--strictPort" in ui_server_text
+            and 'os.environ.get("START_UI")' in ui_server_text
         )
         detail = f"pyproject={'[project]' in pyproject} requirements={requirements}"
         log = json.dumps(
@@ -1777,6 +1780,170 @@ class SystemTestSuite:
                 "requirements": requirements,
                 "ui_uses_bot_filter": "bot_id=" in api_text,
                 "ui_has_fake_success": "Promise.resolve(true)" in api_text or "Promise.resolve('')" in api_text,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
+
+    def case_web_config_center_roundtrip(self) -> tuple[bool, str, str]:
+        from types import SimpleNamespace
+
+        import yaml
+
+        from ai_companion.config.loader import Config
+        from ai_companion.gateway.admin_services import ConfigAdminService
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config"
+            persona_dir = root / "data" / "bots" / "webbot" / "persona"
+            config_dir.mkdir(parents=True)
+            persona_dir.mkdir(parents=True)
+
+            (config_dir / "models.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "model": {"provider": "openai", "temperature": 0.7, "max_tokens": 2000},
+                        "openai": {"api_key": "keep-openai-key", "base_url": "https://api.openai.com/v1", "model": "old-model"},
+                        "memory": {"embedding": "none", "soft_limit_chars": 3000},
+                    },
+                    allow_unicode=True,
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (config_dir / "config.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "platforms": {
+                            "feishu": {
+                                "enabled": True,
+                                "extra": {"app_id": "old-app", "app_secret": "keep-secret", "connection_mode": "websocket"},
+                                "routing": {"mode": "dedicated", "bot_id": "webbot"},
+                            }
+                        }
+                    },
+                    allow_unicode=True,
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (persona_dir / "profile.json").write_text(
+                json.dumps({"name": "旧名", "age": 20, "occupation": "学生", "relationship_to_user": "朋友", "personality_tags": ["温柔"]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (persona_dir / "backstory.json").write_text(json.dumps({"key_moments": ["初识"]}, ensure_ascii=False), encoding="utf-8")
+            (persona_dir / "values.json").write_text(json.dumps({"non_negotiable": ["真诚"]}, ensure_ascii=False), encoding="utf-8")
+            (persona_dir / "speaking_style.json").write_text(json.dumps({"tone": "自然"}, ensure_ascii=False), encoding="utf-8")
+            (persona_dir / "proactive.json").write_text(json.dumps({"enabled": True, "scheduler": {"idle_threshold_hours": 24}}, ensure_ascii=False), encoding="utf-8")
+            (persona_dir / "life.json").write_text(json.dumps({"time_ratio": 1, "daily_interval_seconds": 86400}, ensure_ascii=False), encoding="utf-8")
+
+            config = Config(config_dir=config_dir)
+            refresh = {"count": 0}
+
+            def refresh_runtime():
+                refresh["count"] += 1
+
+            bot = SimpleNamespace(
+                id="webbot",
+                name="旧名",
+                persona_loader=SimpleNamespace(dir=persona_dir),
+                _refresh_runtime_settings=refresh_runtime,
+            )
+            manager = SimpleNamespace(get_bot=lambda bot_id: bot if bot_id == "webbot" else None)
+            service = ConfigAdminService(config, manager)
+            before = service.get_bot_config("webbot")
+            result = service.update_bot_config(
+                "webbot",
+                {
+                    "model": {
+                        "provider": "openai",
+                        "api_key": before["model"]["api_key"],
+                        "base_url": "https://api.openai.com/v1",
+                        "model": "gpt-4o",
+                        "temperature": 0.9,
+                        "max_tokens": 4096,
+                    },
+                    "memory": {
+                        "hard_limit_chars": 90000,
+                        "soft_limit_chars": 5000,
+                        "max_working_turns": 12,
+                        "max_summaries": 4,
+                        "semantic_char_limit": 3200,
+                        "embedding": "local",
+                        "embedding_model": "all-MiniLM-L6-v2",
+                    },
+                    "proactive": {
+                        "enabled": True,
+                        "mode": "active",
+                        "check_interval_seconds": 300,
+                        "idle_threshold_hours": 8,
+                        "min_interval_hours": 2,
+                        "max_daily": 3,
+                        "emotion_keywords": ["累"],
+                        "preferred_contact_times": ["09:00-22:00"],
+                        "platform_type": "feishu",
+                    },
+                    "life": {
+                        "time_ratio": 24,
+                        "daily_interval_seconds": 86400,
+                        "major_interval_seconds": 604800,
+                        "event_policy": {"unexpected_event_probability": 0.02},
+                    },
+                    "platforms": [{"name": "feishu", "enabled": True, "config": {}}],
+                    "feishu": {
+                        "enabled": True,
+                        "extra": {"app_id": "new-app", "app_secret": before["platforms"][1]["config"]["extra"]["app_secret"], "group_policy": "allowlist"},
+                        "routing": {"mode": "chat_routed", "default_bot": "webbot"},
+                    },
+                    "session_reset": {"mode": "idle", "at_hour": 3, "idle_minutes": 45, "notify": False},
+                    "persona": {
+                        "profile": {"name": "新名", "personality_tags": ["温柔", "可靠"]},
+                        "backstory": {"key_moments": ["初识", "一起看展"]},
+                        "values": {"non_negotiable": ["真诚", "尊重"]},
+                        "speaking_style": {"tone": "温柔", "catchphrases": ["嗯"]},
+                    },
+                },
+            )
+
+            models = yaml.safe_load((config_dir / "models.yaml").read_text(encoding="utf-8"))
+            main_cfg = yaml.safe_load((config_dir / "config.yaml").read_text(encoding="utf-8"))
+            proactive = json.loads((persona_dir / "proactive.json").read_text(encoding="utf-8"))
+            life = json.loads((persona_dir / "life.json").read_text(encoding="utf-8"))
+            profile = json.loads((persona_dir / "profile.json").read_text(encoding="utf-8"))
+            style = json.loads((persona_dir / "speaking_style.json").read_text(encoding="utf-8"))
+
+        passed = (
+            before["schema"]["sections"]
+            and before["model"]["api_key"] != "keep-openai-key"
+            and result["ok"] is True
+            and models["openai"]["api_key"] == "keep-openai-key"
+            and models["openai"]["model"] == "gpt-4o"
+            and models["memory"]["embedding"] == "local"
+            and proactive["scheduler"]["idle_threshold_hours"] == 8
+            and proactive["platform"]["type"] == "feishu"
+            and life["time_ratio"] == 24
+            and life["event_policy"]["unexpected_event_probability"] == 0.02
+            and main_cfg["platforms"]["feishu"]["extra"]["app_secret"] == "keep-secret"
+            and main_cfg["platforms"]["feishu"]["extra"]["app_id"] == "new-app"
+            and main_cfg["session_reset"]["mode"] == "idle"
+            and profile["name"] == "新名"
+            and style["口头禅"] == ["嗯"]
+            and refresh["count"] >= 2
+        )
+        detail = f"model={models['openai']['model']} memory={models['memory']['embedding']} refresh={refresh['count']}"
+        log = json.dumps(
+            {
+                "before": before,
+                "result_changed_files": result.get("changed_files"),
+                "models": models,
+                "main_cfg": main_cfg,
+                "proactive": proactive,
+                "life": life,
+                "profile": profile,
+                "style": style,
+                "refresh": refresh,
             },
             ensure_ascii=False,
             indent=2,

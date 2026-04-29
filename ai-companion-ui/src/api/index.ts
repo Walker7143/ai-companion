@@ -125,8 +125,8 @@ export const configApi = {
   getConfig: (botId: string): Promise<BotConfig> =>
     fetchApi<BotConfig>(`/admin/config/${botId}`),
 
-  updateConfig: (botId: string, config: Partial<BotConfig>): Promise<void> =>
-    fetchApi<void>(`/admin/config/${botId}`, {
+  updateConfig: (botId: string, config: Partial<BotConfig> & Record<string, unknown>): Promise<{ok: boolean; warnings?: string[]; changed_files?: string[]; config?: BotConfig}> =>
+    fetchApi<{ok: boolean; warnings?: string[]; changed_files?: string[]; config?: BotConfig}>(`/admin/config/${botId}`, {
       method: 'PUT',
       body: JSON.stringify(config),
     }),
