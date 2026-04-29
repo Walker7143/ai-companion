@@ -51,10 +51,13 @@ class WorkingMemoryStore:
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT,
+                    user_id TEXT DEFAULT 'default_user',
+                    platform TEXT,
                     role TEXT,
                     content TEXT,
                     compressed INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    metadata_json TEXT
                 )
             """)
             await db.execute("""
@@ -71,6 +74,12 @@ class WorkingMemoryStore:
             msg_cols = [row[1] async for row in msg_cursor]
             if "session_id" not in msg_cols:
                 await db.execute("ALTER TABLE messages ADD COLUMN session_id TEXT")
+            if "user_id" not in msg_cols:
+                await db.execute("ALTER TABLE messages ADD COLUMN user_id TEXT DEFAULT 'default_user'")
+            if "platform" not in msg_cols:
+                await db.execute("ALTER TABLE messages ADD COLUMN platform TEXT")
+            if "metadata_json" not in msg_cols:
+                await db.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT")
             sum_cursor = await db.execute("PRAGMA table_info(summaries)")
             sum_cols = [row[1] async for row in sum_cursor]
             if "session_id" not in sum_cols:
@@ -90,16 +99,24 @@ class WorkingMemoryStore:
             self._compression_counts[self.current_session] = 0
         return self.current_session
 
-    async def append(self, user_input: str, bot_output: str, session_id: Optional[str] = None):
+    async def append(
+        self,
+        user_input: str,
+        bot_output: str,
+        session_id: Optional[str] = None,
+        user_id: str = "default_user",
+        platform: Optional[str] = None,
+        metadata_json: Optional[str] = None,
+    ):
         sid = session_id or self.get_or_create_session()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
-                (sid, "user", user_input)
+                "INSERT INTO messages (session_id, user_id, platform, role, content, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
+                (sid, user_id, platform, "user", user_input, metadata_json)
             )
             await db.execute(
-                "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
-                (sid, "assistant", bot_output)
+                "INSERT INTO messages (session_id, user_id, platform, role, content, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
+                (sid, user_id, platform, "assistant", bot_output, metadata_json)
             )
             await db.commit()
 

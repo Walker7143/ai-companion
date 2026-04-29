@@ -8,7 +8,7 @@
 |------|------|
 | **多模型支持** | MiniMax / OpenAI / Claude / Ollama / 自定义 API |
 | **独立人格** | 每个 Bot 有独特的性格、背景故事和说话风格（傲娇/活泼/温柔/高冷...） |
-| **三层记忆** | 工作记忆 + 情景记忆 + 语义记忆，像真人一样记住你们的故事 |
+| **智能记忆体系** | 工作记忆 + 用户模型 + 关系状态 + 情景记忆 + 用户理解文件，按意图召回而不是机械堆上下文 |
 | **本地向量嵌入** | 支持 sentence-transformers 本地向量语义召回，中文友好 |
 | **人生轨迹** | 每个 Bot 有独立时间线，会生成日常小事、人生大事、生日和低概率意外事件 |
 | **主动唤醒** | 会主动找你聊天、提醒事情、偶尔撒娇，基于 LLM 推理判断时机，并可带入 Bot 当前时间线和近期生活事件 |
@@ -66,11 +66,18 @@ ai_companion/
 │   ├── instance.py   # BotInstance - 核心运行时
 │   └── manager.py    # BotManager - 多 Bot 管理
 ├── memory/           # 记忆系统
-│   ├── engine.py     # MemoryEngine - 三层记忆协调
+│   ├── engine.py     # MemoryEngine - 记忆写入、召回、维护协调
+│   ├── extractor.py  # MemoryExtractor - 从对话抽取候选记忆
+│   ├── governor.py   # MemoryGovernor - 判断候选是否值得长期写入
+│   ├── retriever.py  # MemoryRetriever - 按当前意图制定召回计划
+│   ├── prompt_builder.py  # MemoryPromptBuilder - 构建记忆上下文
+│   ├── maintenance.py     # MemoryMaintenance - 过期、归档、投影刷新
 │   └── stores/
-│       ├── working.py    # 工作记忆 - SQLite + jieba 分词
-│       ├── episodic.py   # 情景记忆 - SQLite + Chroma 向量
-│       └── semantic.py   # 语义记忆 - 关键事实提取
+│       ├── working.py    # 工作记忆 / 原始消息流水
+│       ├── episodic.py   # 情景记忆 - 重要共同经历
+│       ├── semantic.py   # 用户模型 - 结构化用户事实
+│       ├── relationship.py       # 关系状态 - 好感、亲密、紧张、关键时刻
+│       └── user_understanding.py # 用户可编辑理解文件
 ├── persona/          # 人格系统
 │   ├── loader.py     # PersonaLoader - 人格加载
 │   ├── engine.py     # PersonaEngine - System Prompt 构建
@@ -117,21 +124,77 @@ ai-companion-ui/      # 管理后台 Web UI
 
 ---
 
-## 三层记忆系统
+## 智能记忆系统
 
-### 工作记忆 (Working Memory)
+AI Companion 的记忆系统不是简单“多存一点”，而是先判断什么值得记，再按当前对话意图选择相关记忆。核心流程是：
 
-- **存储**: SQLite
-- **搜索**: jieba 中文分词 + LIKE 匹配
-- **用途**: 当前会话的原始消息记录
-- **特点**: 高精度关键词匹配，适合精确回忆
+```text
+当前对话
+  → Working/Raw Log 保存原文
+  → Extractor 抽取候选记忆
+  → Governor 判断写入/跳过/归档
+  → User Model / Episodic / Relationship 分层存储
+  → Retriever 按意图召回
+  → PromptBuilder 生成记忆上下文
+```
 
-### 情景记忆 (Episodic Memory)
+### 记忆分层
 
-- **存储**: SQLite + Chroma 向量数据库
-- **搜索**: sentence-transformers 本地向量嵌入
-- **用途**: 重要情景片段，跨会话语义召回
-- **特点**: 语义相近但非精确的内容也能召回
+| 层 | 存储 | 说明 |
+|----|------|------|
+| Working / Raw Log | `working.db` | 当前会话原文、压缩摘要、debug 底账 |
+| User Model | `semantic.db` | 结构化用户事实，包含分类、置信度、来源、证据、过期时间 |
+| Relationship State | `relationship.db` | Bot 与用户的关系标签、好感度、亲密度、紧张度、关键关系时刻 |
+| Episodic Memory | `episodic.db` + 可选 Chroma | 重要共同经历、冲突/和解、承诺、人生事件，不记录普通寒暄 |
+| User Understanding | `user_understanding.json` | 用户可编辑的“Bot 对我的理解”，分 `manual` 和 `auto` 两区 |
+
+### 用户理解文件
+
+每个 Bot 都有一份可直接编辑的用户理解文件：
+
+```text
+~/.ai-companion/data/bots/{bot_id}/memory/user_understanding.json
+```
+
+它用于初始化和纠正 Bot 对用户的了解：
+
+- `manual`：用户手动填写，永远优先，自动记忆不会覆盖。
+- `auto`：系统从日常对话中抽取的高置信度理解，会自动刷新。
+- Prompt 优先使用 `manual`，再使用相关的 `auto`。
+
+示例：
+
+```json
+{
+  "version": 2,
+  "manual": {
+    "summary": "用户希望被温柔但不敷衍地对待。",
+    "facts": {"称呼": "阿迟"},
+    "communication_style": ["先共情，再给建议"],
+    "boundaries": ["不要调侃体重"]
+  },
+  "auto": {
+    "facts": {"城市": "上海"},
+    "current_context": ["最近在准备作品集"],
+    "open_threads": ["用户想继续聊作品集"]
+  }
+}
+```
+
+### 动态召回
+
+系统会先判断当前意图，再选择不同记忆：
+
+| 意图 | 优先召回 |
+|------|----------|
+| 情绪支持 | 沟通偏好、边界、近期压力源、关系状态 |
+| 回忆旧事 | 情景记忆优先，必要时跨会话 |
+| 计划推进 | open_threads、目标、最近上下文 |
+| 关系修复 | 关系状态、冲突/和解片段、边界 |
+| 任务请求 | 少量必要偏好，避免无关情感记忆干扰 |
+| 主动唤醒 | open_threads、关系状态、近期用户状态、Bot 人生轨迹 |
+
+### 本地向量召回
 
 ```yaml
 # 启用本地向量嵌入
@@ -139,11 +202,6 @@ memory:
   embedding: "local"              # "local" | "none"
   embedding_model: "all-MiniLM-L6-v2"
 ```
-
-### 语义记忆 (Semantic Memory)
-
-- **存储**: SQLite
-- **用途**: 提取和存储关键事实（用户的喜好、习惯、重要纪念日...）
 
 ---
 
@@ -304,8 +362,8 @@ ai-companion gateway start
 | 命令 | 说明 |
 |------|------|
 | `/new` | 开始新会话 |
-| `/memory` | 查看记忆状态 |
-| `/forget <key>` | 删除某条记忆 |
+| `/memory` | 查看工作记忆、情景记忆、用户事实、关系状态和用户理解文件路径 |
+| `/forget <key>` | 删除某条自动用户事实，并同步移除用户理解文件里的 `auto` 投影 |
 | `quit` | 退出 |
 
 ---
@@ -345,7 +403,7 @@ cp -r data/bots/_template data/bots/mybot
 python tests/system_test_suite.py
 ```
 
-测试报告会写入 `.artifacts/system-test-rebuilt-*/`，当前套件覆盖 30 项核心行为。
+测试报告会写入 `.artifacts/system-test-rebuilt-*/`，当前套件覆盖 40+ 项核心行为。
 
 ---
 
@@ -432,7 +490,7 @@ A: 检查 `data/bots/{bot_id}/persona/proactive.json` 中 `enabled`、`mode`、`
 A: 确认 `models.yaml` 中 `memory.embedding: "local"`（sentence-transformers 已默认安装）
 
 **Q: 如何重置记忆？**
-A: `rm -rf ~/.ai-companion/data/bots/{bot_id}/memory/*.db`
+A: 删除自动记忆可清理 `~/.ai-companion/data/bots/{bot_id}/memory/*.db`。`user_understanding.json` 里的 `manual` 是用户手动理解，建议不要直接删除，除非你想完全重置 Bot 对用户的初始化理解。
 
 ---
 

@@ -29,9 +29,15 @@ logger = logging.getLogger(__name__)
 import aiosqlite
 
 from .stores.episodic import EpisodicStore
+from .stores.relationship import RelationshipStore
 from .stores.semantic import SemanticStore
 from .stores.user_understanding import UserUnderstandingStore
 from .stores.working import WorkingMemoryStore
+from .extractor import MemoryExtractor
+from .governor import MemoryGovernor
+from .maintenance import MemoryMaintenance
+from .prompt_builder import MemoryPromptBuilder
+from .retriever import MemoryRetriever
 
 # 上下文压缩器（可选）
 try:
@@ -77,6 +83,8 @@ class MemoryEngine:
     def __init__(self, bot_id: str, memory_dir: Path, config: Optional[dict] = None,
                  persona_backstory_path: str = None):
         self.bot_id = bot_id
+        self.user_id = (config or {}).get("user_id", "default_user")
+        self.persona_backstory_path = persona_backstory_path
         self.memory_dir = Path(memory_dir) / bot_id / "memory"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -115,10 +123,36 @@ class MemoryEngine:
             persona_backstory_path=persona_backstory_path,
             user_understanding=self.user_understanding,
         )
+        self.relationship = RelationshipStore(
+            self.memory_dir / "relationship.db",
+            persona_backstory_path=persona_backstory_path,
+        )
+        self.extractor = MemoryExtractor()
+        self.governor = MemoryGovernor(
+            semantic_store=self.semantic,
+            episodic_store=self.episodic,
+            relationship_store=self.relationship,
+            user_understanding=self.user_understanding,
+        )
+        self.retriever = MemoryRetriever(
+            working_store=self.working,
+            episodic_store=self.episodic,
+            semantic_store=self.semantic,
+            relationship_store=self.relationship,
+            user_understanding=self.user_understanding,
+            max_working_turns=self.max_working_turns,
+        )
+        self.prompt_builder = MemoryPromptBuilder(max_chars=self.semantic_char_limit)
+        self.maintenance = MemoryMaintenance(
+            semantic_store=self.semantic,
+            episodic_store=self.episodic,
+            user_understanding=self.user_understanding,
+        )
 
         self._session_id: Optional[str] = None
         self._summarizer: Optional[object] = None
         self._compress_task: Optional[asyncio.Task] = None
+        self._maintenance_counter = 0
 
         # 上下文压缩器（默认关闭，保持向后兼容）
         context_cfg = self.config.get("context", {}).get("compressor", {})
@@ -133,6 +167,7 @@ class MemoryEngine:
         self._summarizer = summarizer
         self.semantic.set_summarizer(summarizer)
         self.episodic.set_summarizer(summarizer)
+        self.extractor.set_summarizer(summarizer)
 
     def start_session(self, session_id: str = None):
         self._session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -149,8 +184,8 @@ class MemoryEngine:
         await self.episodic.init()
         await self.user_understanding.init()
         await self.semantic.init()
-        for key, value in (await self.semantic.get_all_facts()).items():
-            await self.user_understanding.upsert_auto_fact(key, value)
+        await self.relationship.init()
+        await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id)
 
     async def load_context(self, current_input: str) -> dict:
         """
@@ -165,53 +200,24 @@ class MemoryEngine:
         sid = self._session_id or self.working.current_session
         logger.info(f"[Memory]  load_context called, sid={sid!r}, _session_id={self._session_id!r}, working.current={self.working.current_session!r}")
 
-        # 工作记忆：摘要(正序) + 原始消息(正序)
-        working = self.working.load_context(sid, max_working_turns=self.max_working_turns)
-
-        # 情景记忆：基于当前输入召回（带 session_id 过滤，当前会话优先）
-        episodic = self.episodic.recall(current_input, top_k=3, session_id=sid)
-
-        # 语义记忆：跨会话聚合（用户画像，跨所有会话）
-        facts = await self.semantic.get_all_facts()
-        logger.info(f"[Memory]  load_context 召回语义记忆: {facts}")
-
-        # 构建 system prompt 追加内容
-        suffix_parts = []
-        understanding_text = self.user_understanding.format_for_prompt()
-        if understanding_text:
-            suffix_parts.append(
-                "【你对用户的理解】\n"
-                + understanding_text
-                + "\n使用方式：把这些当作相处背景，而不是答案清单。"
-                + "回复时优先照顾用户当下这句话；只有在自然、有帮助的时候，才顺手提到相关细节。"
-                + "不要生硬地说“我记得你的资料里写着”。"
-            )
-
-        remaining_facts = {
-            k: v for k, v in facts.items()
-            if k not in self.user_understanding.known_fact_keys()
-        }
-        if remaining_facts:
-            fact_lines = [f"  - {k}: {v}" for k, v in remaining_facts.items()]
-            suffix_parts.append(
-                "【语义记忆补充】\n"
-                + "\n".join(fact_lines)
-                + "\n使用方式：这些是较零散的事实，只在和当前对话相关时使用。"
-            )
-        if episodic:
-            moment_lines = [f"  - {m['summary'][:100]}" for m in episodic]
-            suffix_parts.append(
-                "【可能相关的共同经历】\n"
-                + "\n".join(moment_lines)
-                + "\n使用方式：这些经历只在能让回应更贴近用户时引用；不要为了展示记忆而引用。"
-            )
+        retrieved = await self.retriever.retrieve(
+            current_input,
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            session_id=sid,
+        )
+        facts = await self.semantic.get_all_facts(bot_id=self.bot_id, user_id=self.user_id)
+        logger.info(f"[Memory]  load_context 召回语义记忆: {retrieved.semantic_facts}")
+        suffix = self.prompt_builder.build(retrieved)
 
         return {
-            "working_history": working,
-            "episodic_recall": episodic,
+            "working_history": retrieved.working_history,
+            "episodic_recall": retrieved.episodic_recall,
             "semantic_facts": facts,
+            "relationship_state": retrieved.relationship_state,
+            "memory_intent": retrieved.intent,
             "user_understanding": self.user_understanding.load(),
-            "system_suffix": "\n".join(suffix_parts),
+            "system_suffix": suffix,
         }
 
     async def on_message(self, user_input: str, llm_output: str):
@@ -224,7 +230,8 @@ class MemoryEngine:
         await self.working.append(
             user_input=user_input,
             bot_output=llm_output,
-            session_id=sid
+            session_id=sid,
+            user_id=self.user_id,
         )
 
         # 2. 获取最近 3 轮对话上下文（用于判断整体语气：撒娇/吵架/调侃等）
@@ -235,13 +242,19 @@ class MemoryEngine:
             ctx_parts.append(f"{label}：{msg['content']}")
         conversation_context = "\n".join(ctx_parts)
 
-        # 3. 并发抽取并更新情景和语义记忆（带 session_id 隔离）
-        task = asyncio.gather(
-            self.episodic.extract_and_store(user_input, llm_output, session_id=sid),
-            self.semantic.extract_and_store(
-                user_input, llm_output, session_id=sid,
-                conversation_context=conversation_context
-            ),
+        candidates = await self.extractor.extract(
+            user_input,
+            llm_output,
+            session_id=sid,
+            conversation_context=conversation_context,
+        )
+        task = asyncio.create_task(
+            self.governor.apply(
+                candidates,
+                bot_id=self.bot_id,
+                user_id=self.user_id,
+                session_id=sid,
+            )
         )
         def _on_task_done(t):
             if t.cancelled():
@@ -254,10 +267,12 @@ class MemoryEngine:
                     traceback.print_exception(type(e), e, e.__traceback__)
             else:
                 logger.info(f"[Memory]  抽取完成: {t.result()}")
-                self._log_attitude_write(t.result()[1])
 
         task.add_done_callback(_on_task_done)
         await task
+        self._maintenance_counter += 1
+        if self._maintenance_counter % 5 == 0:
+            await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id)
 
     def _log_attitude_write(self, semantic_result):
         """attitude_score 写入日志（semantic 返回单个 dict 或 None）"""
@@ -292,7 +307,7 @@ class MemoryEngine:
         summaries_count = len(self.working.get_summaries(sid))
         episodic_count = self._count_episodes()
         fact_count = await self.semantic.get_fact_count()
-        understanding = self.user_understanding.load()
+        relationship = await self.relationship.get_state(bot_id=self.bot_id, user_id=self.user_id)
 
         return {
             "session_id": sid,
@@ -301,14 +316,15 @@ class MemoryEngine:
             "summaries_count": summaries_count,
             "episodic_count": episodic_count,
             "fact_count": fact_count,
+            "relationship": relationship,
             "user_understanding_path": str(self.user_understanding.path),
-            "user_understanding_auto_facts": len(understanding.get("auto_facts", {})),
+            "user_understanding_auto_facts": self.user_understanding.auto_fact_count(),
             "health": health,
         }
 
     async def forget_fact(self, key: str):
         """删除指定语义记忆（供 /forget 命令使用）"""
-        await self.semantic.delete_fact(key)
+        await self.semantic.delete_fact(key, bot_id=self.bot_id, user_id=self.user_id)
         await self.user_understanding.delete_auto_fact(key)
 
     async def close(self):
@@ -317,6 +333,7 @@ class MemoryEngine:
         await self.working.close()
         await self.episodic.close()
         await self.semantic.close()
+        await self.relationship.close()
 
     # ── 内部方法 ─────────────────────────────────────────────
 

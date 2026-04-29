@@ -1,0 +1,203 @@
+"""Memory write governance.
+
+The governor is the gate between extraction and durable memory.  It prevents
+low-confidence guesses and ordinary chit-chat from polluting long-term recall.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Iterable
+
+from .extractor import MemoryCandidate
+
+
+@dataclass
+class GovernorResult:
+    written: list[MemoryCandidate] = field(default_factory=list)
+    skipped: list[tuple[MemoryCandidate, str]] = field(default_factory=list)
+    projection_refresh: bool = False
+
+
+class MemoryGovernor:
+    """Apply memory candidates to the right stores."""
+
+    MIN_FACT_CONFIDENCE = 0.6
+    MIN_PROJECTION_CONFIDENCE = 0.75
+    MIN_EPISODE_IMPORTANCE = 0.68
+    MIN_EPISODE_CONFIDENCE = 0.6
+
+    def __init__(
+        self,
+        *,
+        semantic_store,
+        episodic_store,
+        relationship_store,
+        user_understanding,
+    ):
+        self.semantic = semantic_store
+        self.episodic = episodic_store
+        self.relationship = relationship_store
+        self.user_understanding = user_understanding
+
+    async def apply(
+        self,
+        candidates: Iterable[MemoryCandidate],
+        *,
+        bot_id: str,
+        user_id: str,
+        session_id: str,
+    ) -> GovernorResult:
+        result = GovernorResult()
+        for candidate in candidates:
+            candidate = candidate.normalized()
+            if candidate.type == "user_fact":
+                await self._apply_user_fact(candidate, bot_id, user_id, session_id, result)
+            elif candidate.type == "episode":
+                await self._apply_episode(candidate, bot_id, user_id, session_id, result)
+            elif candidate.type == "relationship_event":
+                await self._apply_relationship(candidate, bot_id, user_id, result)
+            elif candidate.type == "temporary_context":
+                await self._apply_temporary_context(candidate, bot_id, user_id, session_id, result)
+            else:
+                result.skipped.append((candidate, "unknown_type"))
+
+        if result.projection_refresh:
+            await self.refresh_projection(bot_id=bot_id, user_id=user_id)
+        return result
+
+    async def refresh_projection(self, *, bot_id: str, user_id: str):
+        facts = await self.semantic.list_facts(
+            bot_id=bot_id,
+            user_id=user_id,
+            min_confidence=self.MIN_PROJECTION_CONFIDENCE,
+            include_archived=False,
+        )
+        await self.user_understanding.refresh_auto_from_facts(facts)
+
+    async def _apply_user_fact(
+        self,
+        candidate: MemoryCandidate,
+        bot_id: str,
+        user_id: str,
+        session_id: str,
+        result: GovernorResult,
+    ):
+        if candidate.confidence < self.MIN_FACT_CONFIDENCE:
+            result.skipped.append((candidate, "low_confidence"))
+            return
+
+        if self.user_understanding.has_manual_key(candidate.key, candidate.category):
+            # User-authored understanding wins. Keep the raw fact out of prompt
+            # by archiving it as conflict evidence instead of overwriting.
+            result.skipped.append((candidate, "manual_conflict"))
+            return
+
+        expires_at = None
+        if candidate.ttl_days:
+            expires_at = (datetime.now() + timedelta(days=candidate.ttl_days)).isoformat()
+
+        await self.semantic.set_fact(
+            candidate.key,
+            candidate.value,
+            session_id=session_id,
+            bot_id=bot_id,
+            user_id=user_id,
+            category=candidate.category,
+            confidence=candidate.confidence,
+            source=candidate.source,
+            evidence=candidate.evidence,
+            expires_at=expires_at,
+        )
+        result.written.append(candidate)
+        if candidate.confidence >= self.MIN_PROJECTION_CONFIDENCE:
+            result.projection_refresh = True
+
+    async def _apply_episode(
+        self,
+        candidate: MemoryCandidate,
+        bot_id: str,
+        user_id: str,
+        session_id: str,
+        result: GovernorResult,
+    ):
+        if candidate.importance < self.MIN_EPISODE_IMPORTANCE:
+            result.skipped.append((candidate, "low_importance"))
+            return
+        if candidate.confidence < self.MIN_EPISODE_CONFIDENCE:
+            result.skipped.append((candidate, "low_confidence"))
+            return
+        await self.episodic.store_episode(
+            summary=candidate.summary,
+            content=candidate.content,
+            session_id=session_id,
+            bot_id=bot_id,
+            user_id=user_id,
+            title=candidate.title,
+            importance=candidate.importance,
+            confidence=candidate.confidence,
+            topics=candidate.metadata.get("topics") or [],
+            emotion_tags=candidate.metadata.get("emotion_tags") or [],
+            source_message_ids=candidate.evidence,
+        )
+        result.written.append(candidate)
+
+    async def _apply_relationship(
+        self,
+        candidate: MemoryCandidate,
+        bot_id: str,
+        user_id: str,
+        result: GovernorResult,
+    ):
+        meta = candidate.metadata or {}
+        await self.relationship.apply_event(
+            bot_id=bot_id,
+            user_id=user_id,
+            label=meta.get("label") or candidate.value or None,
+            intimacy_delta=_float(meta.get("intimacy_delta")),
+            trust_delta=_float(meta.get("trust_delta")),
+            tension_delta=_float(meta.get("tension_delta")),
+            affection_delta=_float(meta.get("affection_delta")),
+            attitude_delta=_float(meta.get("attitude_delta")),
+            key_moment=meta.get("key_moment") or None,
+            open_thread=meta.get("open_thread") or None,
+        )
+        result.written.append(candidate)
+
+    async def _apply_temporary_context(
+        self,
+        candidate: MemoryCandidate,
+        bot_id: str,
+        user_id: str,
+        session_id: str,
+        result: GovernorResult,
+    ):
+        if candidate.confidence < self.MIN_FACT_CONFIDENCE:
+            result.skipped.append((candidate, "low_confidence"))
+            return
+        expires_at = None
+        if candidate.ttl_days:
+            expires_at = (datetime.now() + timedelta(days=candidate.ttl_days)).isoformat()
+        await self.semantic.set_fact(
+            candidate.value[:40] or candidate.key,
+            candidate.value,
+            session_id=session_id,
+            bot_id=bot_id,
+            user_id=user_id,
+            category="open_threads",
+            confidence=candidate.confidence,
+            source=candidate.source,
+            evidence=candidate.evidence,
+            expires_at=expires_at,
+        )
+        result.written.append(candidate)
+        if candidate.confidence >= self.MIN_PROJECTION_CONFIDENCE:
+            result.projection_refresh = True
+
+
+def _float(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

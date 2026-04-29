@@ -65,8 +65,10 @@ export interface EpisodicItem {
   summary: string;
   content: string;
   importance: number;
+  confidence?: number;
   created_at: string;
-  related_session: string;
+  session_id?: string;
+  related_session?: string;
 }
 
 export interface ContextDetail {
@@ -101,6 +103,9 @@ export interface Fact {
   key: string;
   value: string;
   updated_at: string;
+  category?: string;
+  confidence?: number;
+  source?: string;
 }
 
 // Log types

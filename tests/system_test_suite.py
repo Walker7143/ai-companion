@@ -222,6 +222,12 @@ class SystemTestSuite:
         self._run_case("T35", "Dependency and UI contract cleanup", self.case_dependency_and_ui_contract_cleanup)
         self._run_case("T36", "Web config center reads and persists full config", self.case_web_config_center_roundtrip)
         self._run_case("T37", "User profile memory guides natural replies", self.case_user_profile_memory_guidance)
+        self._run_case("T38", "Memory governor skips casual episodic writes", self.case_memory_governor_skips_casual_episodes)
+        self._run_case("T39", "Memory stores important episodes with metadata", self.case_memory_stores_important_episode_metadata)
+        self._run_case("T40", "User understanding manual override wins", self.case_user_understanding_manual_override)
+        self._run_case("T41", "Intent retriever trims task emotional memory", self.case_memory_retriever_intent_filtering)
+        self._run_case("T42", "Relationship state is separate from semantic facts", self.case_relationship_state_separate)
+        self._run_case("T43", "Admin memory API supports new memory schema", self.case_admin_memory_api_schema_compatibility)
 
         return self._finalize()
 
@@ -1851,6 +1857,172 @@ class SystemTestSuite:
             indent=2,
         )
         return passed, detail, log
+
+    async def case_memory_governor_skips_casual_episodes(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+        import sqlite3
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-memory-casual-") as td:
+            root = Path(td)
+            engine = MemoryEngine("casual_bot", root, config={"embedding": "none"})
+            await engine.init()
+            engine.start_session("sid")
+            await engine.on_message("你好呀", "你好，今天怎么样？")
+            db_path = root / "casual_bot" / "memory" / "episodic.db"
+            conn = sqlite3.connect(str(db_path))
+            count = conn.execute("SELECT COUNT(*) FROM episodic_memory").fetchone()[0]
+            conn.close()
+            await engine.close()
+
+        passed = count == 0
+        return passed, f"episodic_count={count}", json.dumps({"episodic_count": count}, ensure_ascii=False, indent=2)
+
+    async def case_memory_stores_important_episode_metadata(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+        import sqlite3
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-memory-episode-") as td:
+            root = Path(td)
+            engine = MemoryEngine("episode_bot", root, config={"embedding": "none"})
+            await engine.init()
+            engine.start_session("sid")
+            await engine.on_message("我明天有一个很重要的面试，真的有点焦虑。", "我陪你一起准备。")
+            db_path = root / "episode_bot" / "memory" / "episodic.db"
+            conn = sqlite3.connect(str(db_path))
+            row = conn.execute(
+                "SELECT summary, importance, confidence, user_id, archived FROM episodic_memory LIMIT 1"
+            ).fetchone()
+            conn.close()
+            await engine.close()
+
+        passed = bool(row and row[1] >= 0.68 and row[2] >= 0.6 and row[3] == "default_user" and row[4] == 0)
+        log = json.dumps({"row": row}, ensure_ascii=False, indent=2)
+        return passed, f"row={bool(row)}", log
+
+    async def case_user_understanding_manual_override(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-understanding-manual-") as td:
+            root = Path(td)
+            engine = MemoryEngine("manual_bot", root, config={"embedding": "none"})
+            await engine.init()
+            data = engine.user_understanding.load()
+            data["manual"]["facts"]["城市"] = "杭州"
+            engine.user_understanding._write(data)
+            await engine.semantic.set_fact(
+                "城市",
+                "上海",
+                bot_id="manual_bot",
+                user_id="default_user",
+                category="identity",
+                confidence=0.95,
+                source="user_explicit",
+            )
+            await engine.maintenance.run_light(bot_id="manual_bot", user_id="default_user")
+            understanding = engine.user_understanding.load()
+            context = await engine.load_context("我在哪个城市？")
+            await engine.close()
+
+        suffix = context.get("system_suffix", "")
+        passed = (
+            understanding["manual"]["facts"].get("城市") == "杭州"
+            and understanding["auto"]["facts"].get("城市") is None
+            and "杭州" in suffix
+            and "上海" not in suffix
+        )
+        log = json.dumps({"understanding": understanding, "system_suffix": suffix}, ensure_ascii=False, indent=2)
+        return passed, f"manual_city={understanding['manual']['facts'].get('城市')}", log
+
+    async def case_memory_retriever_intent_filtering(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-memory-intent-") as td:
+            root = Path(td)
+            engine = MemoryEngine("intent_bot", root, config={"embedding": "none"})
+            await engine.init()
+            await engine.semantic.set_fact(
+                "希望被怎样回应",
+                "先共情，少讲大道理",
+                bot_id="intent_bot",
+                user_id="default_user",
+                category="communication_style",
+                confidence=0.95,
+            )
+            await engine.episodic.store_episode(
+                summary="用户之前因为失眠很难过，Bot 陪用户聊到很晚。",
+                content="用户：我失眠很难过\n助手：我陪你。",
+                bot_id="intent_bot",
+                user_id="default_user",
+                session_id="old",
+                importance=0.9,
+                confidence=0.9,
+            )
+            emotional = await engine.load_context("我今天有点难过")
+            task = await engine.load_context("帮我写代码实现一个排序函数")
+            await engine.close()
+
+        passed = (
+            emotional.get("memory_intent") == "emotional_support"
+            and "可能相关的共同经历" in emotional.get("system_suffix", "")
+            and task.get("memory_intent") == "task_request"
+            and "可能相关的共同经历" not in task.get("system_suffix", "")
+        )
+        log = json.dumps(
+            {
+                "emotional_intent": emotional.get("memory_intent"),
+                "task_intent": task.get("memory_intent"),
+                "emotional_suffix": emotional.get("system_suffix"),
+                "task_suffix": task.get("system_suffix"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, f"emotional={emotional.get('memory_intent')} task={task.get('memory_intent')}", log
+
+    async def case_relationship_state_separate(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-relationship-") as td:
+            root = Path(td)
+            engine = MemoryEngine("rel_bot", root, config={"embedding": "none"})
+            await engine.init()
+            await engine.relationship.apply_event(
+                bot_id="rel_bot",
+                user_id="default_user",
+                label="好朋友",
+                attitude_delta=3,
+                key_moment="用户认真安慰了 Bot",
+            )
+            await engine.semantic.set_fact(
+                "喜欢的音乐",
+                "爵士",
+                bot_id="rel_bot",
+                user_id="default_user",
+                category="preferences",
+                confidence=0.9,
+            )
+            await engine.forget_fact("喜欢的音乐")
+            facts = await engine.semantic.get_all_facts(bot_id="rel_bot", user_id="default_user")
+            relationship = await engine.relationship.get_state(bot_id="rel_bot", user_id="default_user")
+            await engine.close()
+
+        passed = "喜欢的音乐" not in facts and relationship.get("relationship_label") == "好朋友" and relationship.get("attitude_score") == 3
+        log = json.dumps({"facts": facts, "relationship": relationship}, ensure_ascii=False, indent=2)
+        return passed, f"relationship={relationship.get('relationship_label')}", log
+
+    def case_admin_memory_api_schema_compatibility(self) -> tuple[bool, str, str]:
+        gateway_text = (self.root / "ai_companion" / "gateway" / "cmd.py").read_text(encoding="utf-8")
+        types_text = (self.root / "ai-companion-ui" / "src" / "types" / "index.ts").read_text(encoding="utf-8")
+        memory_ui = (self.root / "ai-companion-ui" / "src" / "pages" / "Memory" / "Memory.tsx").read_text(encoding="utf-8")
+        checks = {
+            "gateway_counts_v2_understanding": "_understanding_auto_count" in gateway_text,
+            "gateway_reads_relationship": "relationship_state" in gateway_text,
+            "gateway_returns_fact_metadata": '"category": r[3]' in gateway_text and '"confidence": r[4]' in gateway_text,
+            "ui_fact_metadata_types": "category?: string" in types_text and "confidence?: number" in types_text,
+            "ui_displays_metadata": "fact.category" in memory_ui and "fact.confidence" in memory_ui,
+        }
+        passed = all(checks.values())
+        return passed, f"checks={sum(checks.values())}/{len(checks)}", json.dumps(checks, ensure_ascii=False, indent=2)
 
     def case_dependency_and_ui_contract_cleanup(self) -> tuple[bool, str, str]:
         pyproject = (self.root / "pyproject.toml").read_text(encoding="utf-8")

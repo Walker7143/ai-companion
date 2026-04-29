@@ -338,8 +338,15 @@ class ProactiveEngine:
         if self.memory is None:
             return 5, "普通朋友"
         try:
-            facts = await self.memory.semantic.get_all_facts()
-            relationship = facts.get("relationship_to_user", "普通朋友")
+            if hasattr(self.memory, "relationship"):
+                state = await self.memory.relationship.get_state(
+                    bot_id=getattr(self.memory, "bot_id", ""),
+                    user_id=getattr(self.memory, "user_id", "default_user"),
+                )
+                relationship = state.get("relationship_label", "普通朋友")
+            else:
+                facts = await self.memory.semantic.get_all_facts()
+                relationship = facts.get("relationship_to_user", "普通朋友")
             mapping = {
                 "陌生网友": 1,
                 "普通朋友": 4,
@@ -394,7 +401,10 @@ class ProactiveEngine:
                     lines.append("\n对用户的理解：")
                     lines.append(understanding_text)
 
-                facts = await self.memory.semantic.get_all_facts()
+                facts = await self.memory.semantic.get_all_facts(
+                    bot_id=getattr(self.memory, "bot_id", ""),
+                    user_id=getattr(self.memory, "user_id", "default_user"),
+                )
                 known_keys = set()
                 if hasattr(self.memory, "user_understanding"):
                     known_keys = self.memory.user_understanding.known_fact_keys()
@@ -415,7 +425,10 @@ class ProactiveEngine:
         try:
             import asyncio
             # 尝试从 profile.json 读取
-            profile_path = Path(self.memory.persona_backstory_path).parent / "profile.json"
+            backstory_path = getattr(self.memory, "persona_backstory_path", None)
+            if not backstory_path:
+                return self.personality_type or "默认"
+            profile_path = Path(backstory_path).parent / "profile.json"
             if profile_path.exists():
                 with open(profile_path, encoding="utf-8") as f:
                     profile = json.load(f)

@@ -417,8 +417,10 @@ class BotInstance:
         # 1. 拒绝检查（如果启用）
         relationship_state = None
         if self.memory:
-            semantic_facts = await self.memory.semantic.get_all_facts()
-            relationship_state = {"attitude_score": int(semantic_facts.get("attitude_score", 0))}
+            relationship_state = await self.memory.relationship.get_state(
+                bot_id=self.id,
+                user_id=getattr(self.memory, "user_id", "default_user"),
+            )
 
         refusal_response = await self.refusal_engine.check(
             user_request=user_input,

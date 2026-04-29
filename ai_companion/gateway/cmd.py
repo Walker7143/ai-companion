@@ -149,13 +149,50 @@ def _delete_user_understanding_auto_fact(bot_id: str, key: str):
         return
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        auto_facts = data.get("auto_facts")
-        if isinstance(auto_facts, dict) and key in auto_facts:
+        changed = False
+        auto = data.get("auto") if isinstance(data.get("auto"), dict) else {}
+        auto_facts = auto.get("facts") if isinstance(auto.get("facts"), dict) else {}
+        if key in auto_facts:
             del auto_facts[key]
+            changed = True
+        legacy_auto_facts = data.get("auto_facts")
+        if isinstance(legacy_auto_facts, dict) and key in legacy_auto_facts:
+            del legacy_auto_facts[key]
+            changed = True
+        if changed:
+            auto["last_refresh_at"] = datetime.now().isoformat()
+            data["auto"] = auto
             data["updated_at"] = datetime.now().isoformat()
             _write_user_understanding(path, data)
     except Exception:
         pass
+
+
+def _understanding_auto_count(data: dict) -> int:
+    if not isinstance(data, dict):
+        return 0
+    auto = data.get("auto") if isinstance(data.get("auto"), dict) else {}
+    facts = auto.get("facts") if isinstance(auto.get("facts"), dict) else {}
+    if facts:
+        return len(facts)
+    legacy = data.get("auto_facts")
+    return len(legacy) if isinstance(legacy, dict) else 0
+
+
+def _clear_user_understanding_auto(data: dict) -> tuple[dict, int]:
+    if not isinstance(data, dict):
+        return data, 0
+    count = _understanding_auto_count(data)
+    if isinstance(data.get("auto"), dict):
+        auto = data["auto"]
+        auto["facts"] = {}
+        for key in ("preferences", "communication_style", "boundaries", "important_people", "current_context", "open_threads"):
+            auto[key] = []
+        auto["summary"] = ""
+        auto["last_refresh_at"] = datetime.now().isoformat()
+    data["auto_facts"] = {}
+    data["updated_at"] = datetime.now().isoformat()
+    return data, count
 
 
 async def _start_admin_api(bot_manager: BotManager, config: Config):
@@ -304,7 +341,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "semantic_count": _table_count(semantic_path, "user_facts"),
                 "semantic_size_kb": 0,
                 "user_understanding_path": understanding_path,
-                "user_understanding_auto_facts": len(understanding.get("auto_facts", {})) if isinstance(understanding, dict) else 0,
+                "user_understanding_auto_facts": _understanding_auto_count(understanding),
                 "embedding_enabled": False,
             },
         })
@@ -513,7 +550,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             "semantic_count": _table_count(semantic_path, "user_facts"),
             "semantic_size_kb": 0,
             "user_understanding_path": understanding_path,
-            "user_understanding_auto_facts": len(understanding.get("auto_facts", {})) if isinstance(understanding, dict) else 0,
+            "user_understanding_auto_facts": _understanding_auto_count(understanding),
             "embedding_enabled": False,
         })
 
@@ -532,15 +569,28 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         try:
             import sqlite3
             conn = sqlite3.connect(str(db_path))
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(episodic_memory)").fetchall()]
+            where_clause = "WHERE COALESCE(archived, 0) = 0" if "archived" in cols else ""
+            select_cols = [
+                "id",
+                "session_id",
+                "summary",
+                "content",
+                "importance",
+                "created_at",
+                "confidence" if "confidence" in cols else "0.7 AS confidence",
+            ]
             rows = conn.execute("""
-                SELECT id, session_id, summary, content, importance, created_at
+                SELECT {cols}
                 FROM episodic_memory
+                {where_clause}
                 ORDER BY id DESC
                 LIMIT 50
-            """).fetchall()
+            """.format(cols=", ".join(select_cols), where_clause=where_clause)).fetchall()
             conn.close()
             result = [{"id": str(r[0]), "session_id": r[1], "summary": r[2],
-                       "content": r[3], "importance": r[4], "created_at": r[5]} for r in rows]
+                       "content": r[3], "importance": r[4], "created_at": r[5],
+                       "confidence": r[6], "related_session": r[1]} for r in rows]
             return web.json_response(result)
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
@@ -549,6 +599,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         """GET /api/v1/admin/memory/:bot_id/semantic"""
         bot_id = request.match_info["bot_id"]
         db_path = _get_memory_db_path(bot_id, "semantic.db")
+        relationship_path = _get_memory_db_path(bot_id, "relationship.db")
         user_understanding, user_understanding_path = _load_user_understanding(bot_id)
         if not db_path:
             return web.json_response({
@@ -561,22 +612,63 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         try:
             import sqlite3
             conn = sqlite3.connect(str(db_path))
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(user_facts)").fetchall()]
+            select_cols = [
+                "key",
+                "value",
+                "updated_at",
+                "category" if "category" in cols else "'general' AS category",
+                "confidence" if "confidence" in cols else "0.7 AS confidence",
+                "source" if "source" in cols else "'legacy' AS source",
+            ]
+            where_clause = "WHERE COALESCE(archived, 0) = 0" if "archived" in cols else ""
             rows = conn.execute("""
-                SELECT key, value, updated_at FROM user_facts ORDER BY updated_at DESC
-            """).fetchall()
+                SELECT {cols} FROM user_facts
+                {where_clause}
+                ORDER BY updated_at DESC
+            """.format(cols=", ".join(select_cols), where_clause=where_clause)).fetchall()
             conn.close()
-            facts = [{"key": r[0], "value": r[1], "updated_at": r[2]} for r in rows]
-            # 尝试获取 attitude_score
+            facts = [
+                {
+                    "key": r[0],
+                    "value": r[1],
+                    "updated_at": r[2],
+                    "category": r[3],
+                    "confidence": r[4],
+                    "source": r[5],
+                }
+                for r in rows
+            ]
             attitude_score = 0.0
             relationship_level = "陌生"
-            for f in facts:
-                if f["key"] == "attitude_score":
-                    try:
-                        attitude_score = float(f["value"])
-                    except Exception:
-                        pass
-                elif f["key"] == "relationship_level":
-                    relationship_level = f["value"]
+            if relationship_path and relationship_path.exists():
+                try:
+                    rel_conn = sqlite3.connect(str(relationship_path))
+                    rel_row = rel_conn.execute(
+                        """
+                        SELECT relationship_label, attitude_score
+                        FROM relationship_state
+                        WHERE bot_id = ? OR bot_id = ''
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                        """,
+                        (bot_id,),
+                    ).fetchone()
+                    rel_conn.close()
+                    if rel_row:
+                        relationship_level = rel_row[0] or relationship_level
+                        attitude_score = float(rel_row[1] or 0)
+                except Exception:
+                    pass
+            else:
+                for f in facts:
+                    if f["key"] == "attitude_score":
+                        try:
+                            attitude_score = float(f["value"])
+                        except Exception:
+                            pass
+                    elif f["key"] in {"relationship_level", "relationship_to_user"}:
+                        relationship_level = f["value"]
             return web.json_response({
                 "facts": facts,
                 "attitude_score": attitude_score,
@@ -632,6 +724,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             "working_summaries": 0,
             "episodic": 0,
             "semantic": 0,
+            "relationship": 0,
         }
 
         def _delete_rows(path: Path | None, sql: str, key: str):
@@ -650,19 +743,20 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         working_db = _get_memory_db_path(bot_id, "working.db")
         episodic_db = _get_memory_db_path(bot_id, "episodic.db")
         semantic_db = _get_memory_db_path(bot_id, "semantic.db")
+        relationship_db = _get_memory_db_path(bot_id, "relationship.db")
         understanding_path = _get_memory_file_path(bot_id, "user_understanding.json")
 
         _delete_rows(working_db, "DELETE FROM messages", "working_messages")
         _delete_rows(working_db, "DELETE FROM summaries", "working_summaries")
         _delete_rows(episodic_db, "DELETE FROM episodic_memory", "episodic")
         _delete_rows(semantic_db, "DELETE FROM user_facts", "semantic")
+        _delete_rows(relationship_db, "DELETE FROM relationship_state", "relationship")
         if understanding_path and understanding_path.exists():
             try:
                 data = json.loads(understanding_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    deleted["user_understanding_auto_facts"] = len(data.get("auto_facts", {}))
-                    data["auto_facts"] = {}
-                    data["updated_at"] = datetime.now().isoformat()
+                    data, count = _clear_user_understanding_auto(data)
+                    deleted["user_understanding_auto_facts"] = count
                     _write_user_understanding(understanding_path, data)
             except Exception:
                 pass

@@ -9,6 +9,7 @@
 """
 
 import aiosqlite
+import json
 import re
 import sqlite3
 from datetime import datetime
@@ -55,11 +56,23 @@ class EpisodicStore:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS episodic_memory (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bot_id TEXT DEFAULT '',
+                    user_id TEXT DEFAULT 'default_user',
                     session_id TEXT,
+                    title TEXT,
                     summary TEXT,
                     content TEXT,
                     tokens TEXT,
                     importance REAL DEFAULT 0.6,
+                    confidence REAL DEFAULT 0.7,
+                    participants_json TEXT,
+                    topics_json TEXT,
+                    emotion_tags_json TEXT,
+                    source_message_ids_json TEXT,
+                    last_recalled_at TEXT,
+                    recall_count INTEGER DEFAULT 0,
+                    decay_score REAL DEFAULT 1.0,
+                    archived INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -70,8 +83,25 @@ class EpisodicStore:
                 await db.execute("ALTER TABLE episodic_memory ADD COLUMN session_id TEXT")
             if "tokens" not in cols:
                 await db.execute("ALTER TABLE episodic_memory ADD COLUMN tokens TEXT")
+            for name, ddl in [
+                ("bot_id", "ALTER TABLE episodic_memory ADD COLUMN bot_id TEXT DEFAULT ''"),
+                ("user_id", "ALTER TABLE episodic_memory ADD COLUMN user_id TEXT DEFAULT 'default_user'"),
+                ("title", "ALTER TABLE episodic_memory ADD COLUMN title TEXT"),
+                ("confidence", "ALTER TABLE episodic_memory ADD COLUMN confidence REAL DEFAULT 0.7"),
+                ("participants_json", "ALTER TABLE episodic_memory ADD COLUMN participants_json TEXT"),
+                ("topics_json", "ALTER TABLE episodic_memory ADD COLUMN topics_json TEXT"),
+                ("emotion_tags_json", "ALTER TABLE episodic_memory ADD COLUMN emotion_tags_json TEXT"),
+                ("source_message_ids_json", "ALTER TABLE episodic_memory ADD COLUMN source_message_ids_json TEXT"),
+                ("last_recalled_at", "ALTER TABLE episodic_memory ADD COLUMN last_recalled_at TEXT"),
+                ("recall_count", "ALTER TABLE episodic_memory ADD COLUMN recall_count INTEGER DEFAULT 0"),
+                ("decay_score", "ALTER TABLE episodic_memory ADD COLUMN decay_score REAL DEFAULT 1.0"),
+                ("archived", "ALTER TABLE episodic_memory ADD COLUMN archived INTEGER DEFAULT 0"),
+            ]:
+                if name not in cols:
+                    await db.execute(ddl)
             await db.execute("CREATE INDEX IF NOT EXISTS idx_episodic_session ON episodic_memory(session_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_episodic_importance ON episodic_memory(importance DESC)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_episodic_user ON episodic_memory(bot_id, user_id, archived)")
             await db.commit()
 
         self._chroma = None
@@ -107,12 +137,21 @@ class EpisodicStore:
         return " ".join(jieba.cut(text))
 
     def _should_extract(self, user_input: str, bot_output: str) -> bool:
-        """每次都抽取，recall 负责过滤相关性"""
-        return True
+        """Only keep exchanges that look like durable shared experiences."""
+        text = f"{user_input}\n{bot_output}"
+        if len(user_input.strip()) < 8:
+            return False
+        keywords = [
+            "吵架", "和好", "道歉", "承诺", "约定", "表白", "分手", "第一次",
+            "搬家", "考试", "面试", "失眠", "崩溃", "重要", "难过", "焦虑",
+        ]
+        return any(keyword in text for keyword in keywords)
 
     async def extract_and_store(self, user_input: str, bot_output: str,
                                  session_id: Optional[str] = None):
         """抽取情景摘要（LLM提炼或简单截断），写入SQLite和Chroma"""
+        if not self._should_extract(user_input, bot_output):
+            return None
         sid = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # LLM 提炼摘要（有 summarizer 时）
@@ -124,11 +163,60 @@ class EpisodicStore:
         content = f"用户：{user_input}\n助手：{bot_output}"
         tokens = self._tokenize(summary) + " " + self._tokenize(content)
 
+        await self.store_episode(
+            summary=summary,
+            content=content,
+            session_id=sid,
+            importance=self._importance_for(user_input, bot_output),
+            confidence=0.65,
+        )
+        return summary
+
+    async def store_episode(
+        self,
+        *,
+        summary: str,
+        content: str,
+        session_id: Optional[str] = None,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        title: str = "",
+        importance: float = 0.6,
+        confidence: float = 0.7,
+        topics: Optional[list[str]] = None,
+        emotion_tags: Optional[list[str]] = None,
+        source_message_ids: Optional[list[str]] = None,
+    ):
+        """Store an approved episodic memory."""
+        sid = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+        content = content or summary
+        tokens = self._tokenize(summary) + " " + self._tokenize(content)
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
-                INSERT INTO episodic_memory (session_id, summary, content, tokens, importance)
-                VALUES (?, ?, ?, ?, ?)
-            """, (sid, summary, content, tokens, 0.6))
+                INSERT INTO episodic_memory (
+                    bot_id, user_id, session_id, title, summary, content, tokens,
+                    importance, confidence, topics_json, emotion_tags_json,
+                    source_message_ids_json, decay_score, archived, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                bot_id,
+                user_id,
+                sid,
+                title,
+                summary,
+                content,
+                tokens,
+                float(importance),
+                float(confidence),
+                json.dumps(topics or [], ensure_ascii=False),
+                json.dumps(emotion_tags or [], ensure_ascii=False),
+                json.dumps(source_message_ids or [], ensure_ascii=False),
+                1.0,
+                0,
+                datetime.now().isoformat(),
+            ))
             await db.commit()
 
         # Chroma 写入（仅在 embedding_mode="local" 时）
@@ -140,7 +228,7 @@ class EpisodicStore:
                     ids=[str(datetime.now().timestamp())],
                     embeddings=[embedding],
                     documents=[f"{summary}\n\n原始：{content}"],
-                    metadatas=[{"summary": summary, "session_id": sid}]
+                    metadatas=[{"summary": summary, "session_id": sid, "bot_id": bot_id, "user_id": user_id}]
                 )
             except Exception:
                 pass
@@ -174,6 +262,16 @@ class EpisodicStore:
         """无外部依赖的简单抽取策略"""
         return user_input[:40].strip()
 
+    def _importance_for(self, user_input: str, bot_output: str) -> float:
+        text = f"{user_input}\n{bot_output}"
+        high = ["表白", "分手", "和好", "吵架", "承诺", "第一次"]
+        medium = ["考试", "面试", "搬家", "失眠", "崩溃", "焦虑", "难过"]
+        if any(k in text for k in high):
+            return 0.85
+        if any(k in text for k in medium):
+            return 0.72
+        return 0.6
+
     def _get_embedding(self, text: str) -> list[float]:
         encoder = self._get_encoder()
         if encoder is not None:
@@ -187,7 +285,10 @@ class EpisodicStore:
         return vals[:384]
 
     def recall(self, query: str, top_k: int = 3,
-               session_id: Optional[str] = None) -> list[dict]:
+               session_id: Optional[str] = None,
+               bot_id: Optional[str] = None,
+               user_id: str = "default_user",
+               include_archived: bool = False) -> list[dict]:
         """
         语义召回：Chroma → jieba tokens → summary/content LIKE 降级。
         session_id 不为空时只召回该会话的记忆。
@@ -200,15 +301,18 @@ class EpisodicStore:
                 return results
 
         # 2. jieba tokens LIKE 搜索（中文关键词）
-        results = self._tokens_recall(query, top_k, session_id)
+        results = self._tokens_recall(query, top_k, session_id, bot_id, user_id, include_archived)
         if results:
             return results
 
         # 3. summary/content 直接 LIKE 降级兜底
-        return self._fallback_recall(query, top_k, session_id)
+        return self._fallback_recall(query, top_k, session_id, bot_id, user_id, include_archived)
 
     def _tokens_recall(self, query: str, top_k: int,
-                       session_id: Optional[str] = None) -> list[dict]:
+                       session_id: Optional[str] = None,
+                       bot_id: Optional[str] = None,
+                       user_id: str = "default_user",
+                       include_archived: bool = False) -> list[dict]:
         """
         jieba 分词 tokens 列 LIKE 搜索：
         1. query 用 jieba 分词
@@ -228,28 +332,44 @@ class EpisodicStore:
             like_clauses = " OR ".join(["tokens LIKE ?" for _ in q_tokens])
             params = [f"%{t}%" for t in q_tokens]
 
+            filters = []
+            filter_params: list[object] = []
             if session_id:
+                filters.append("session_id = ?")
+                filter_params.append(session_id)
+            if bot_id is not None:
+                filters.append("(bot_id = ? OR bot_id IS NULL OR bot_id = '')")
+                filter_params.append(bot_id)
+                filters.append("(user_id = ? OR user_id IS NULL)")
+                filter_params.append(user_id)
+            if not include_archived:
+                filters.append("(archived IS NULL OR archived = 0)")
+            filter_sql = " AND ".join(filters)
+            where_suffix = f" AND {filter_sql}" if filter_sql else ""
+
+            if session_id or bot_id is not None or not include_archived:
                 sql = f"""
-                    SELECT summary, content, session_id,
+                    SELECT id, summary, content, session_id, importance, confidence,
                            ({' + '.join(['(CASE WHEN tokens LIKE ? THEN 1 ELSE 0 END)' for _ in q_tokens])}) AS match_count
                     FROM episodic_memory
-                    WHERE ({like_clauses}) AND session_id = ?
-                    ORDER BY match_count DESC, created_at DESC
+                    WHERE ({like_clauses}){where_suffix}
+                    ORDER BY match_count DESC, importance DESC, confidence DESC, decay_score DESC, created_at DESC
                     LIMIT ?
                 """
-                cursor = conn.execute(sql, params * 2 + [session_id, top_k])
+                cursor = conn.execute(sql, params * 2 + filter_params + [top_k])
             else:
                 sql = f"""
-                    SELECT summary, content, session_id,
+                    SELECT id, summary, content, session_id, importance, confidence,
                            ({' + '.join(['(CASE WHEN tokens LIKE ? THEN 1 ELSE 0 END)' for _ in q_tokens])}) AS match_count
                     FROM episodic_memory
                     WHERE {like_clauses}
-                    ORDER BY match_count DESC, created_at DESC
+                    ORDER BY match_count DESC, importance DESC, confidence DESC, decay_score DESC, created_at DESC
                     LIMIT ?
                 """
                 cursor = conn.execute(sql, params * 2 + [top_k])
 
             rows = cursor.fetchall()
+            self._mark_recalled(conn, [r["id"] for r in rows])
             conn.close()
             return [dict(r) for r in rows] if rows else []
         except Exception:
@@ -280,7 +400,10 @@ class EpisodicStore:
             return []
 
     def _fallback_recall(self, query: str, top_k: int,
-                         session_id: Optional[str] = None) -> list[dict]:
+                         session_id: Optional[str] = None,
+                         bot_id: Optional[str] = None,
+                         user_id: str = "default_user",
+                         include_archived: bool = False) -> list[dict]:
         """summary/content 直接 LIKE 兜底"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -294,26 +417,67 @@ class EpisodicStore:
         )
         params = [f"%{w}%" for w in words for _ in range(2)]
 
+        filters = []
+        filter_params: list[object] = []
         if session_id:
+            filters.append("session_id = ?")
+            filter_params.append(session_id)
+        if bot_id is not None:
+            filters.append("(bot_id = ? OR bot_id IS NULL OR bot_id = '')")
+            filter_params.append(bot_id)
+            filters.append("(user_id = ? OR user_id IS NULL)")
+            filter_params.append(user_id)
+        if not include_archived:
+            filters.append("(archived IS NULL OR archived = 0)")
+        filter_sql = " AND ".join(filters)
+        where_suffix = f" AND {filter_sql}" if filter_sql else ""
+
+        if filters:
             cursor = conn.execute(f"""
-                SELECT summary, content, session_id
+                SELECT id, summary, content, session_id, importance, confidence
                 FROM episodic_memory
-                WHERE ({like_clauses}) AND session_id = ?
-                ORDER BY created_at DESC
+                WHERE ({like_clauses}){where_suffix}
+                ORDER BY importance DESC, confidence DESC, decay_score DESC, created_at DESC
                 LIMIT ?
-            """, params + [session_id, top_k])
+            """, params + filter_params + [top_k])
         else:
             cursor = conn.execute(f"""
-                SELECT summary, content, session_id
+                SELECT id, summary, content, session_id, importance, confidence
                 FROM episodic_memory
                 WHERE {like_clauses}
-                ORDER BY created_at DESC
+                ORDER BY importance DESC, confidence DESC, decay_score DESC, created_at DESC
                 LIMIT ?
             """, params + [top_k])
 
         rows = cursor.fetchall()
+        self._mark_recalled(conn, [r["id"] for r in rows])
         conn.close()
         return [dict(r) for r in rows] if rows else []
+
+    def _mark_recalled(self, conn: sqlite3.Connection, ids: list[int]):
+        if not ids:
+            return
+        now = datetime.now().isoformat()
+        conn.executemany(
+            "UPDATE episodic_memory SET recall_count = COALESCE(recall_count, 0) + 1, last_recalled_at = ? WHERE id = ?",
+            [(now, memory_id) for memory_id in ids],
+        )
+        conn.commit()
+
+    async def archive_low_value(self, *, bot_id: str, user_id: str = "default_user"):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE episodic_memory
+                SET archived = 1
+                WHERE (bot_id = ? OR bot_id IS NULL OR bot_id = '')
+                  AND (user_id = ? OR user_id IS NULL)
+                  AND COALESCE(importance, 0) < 0.35
+                  AND COALESCE(recall_count, 0) = 0
+                """,
+                (bot_id, user_id),
+            )
+            await db.commit()
 
     def list_recent(self, limit: int = 20) -> list[dict]:
         """返回最近的情景记忆片段"""

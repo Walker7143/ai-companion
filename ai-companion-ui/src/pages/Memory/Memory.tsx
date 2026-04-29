@@ -275,6 +275,11 @@ export function Memory() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {getImportanceStars(item.importance)}
+                        {typeof item.confidence === 'number' && (
+                          <Badge variant="info" style={{ fontSize: '10px' }}>
+                            置信度 {(item.confidence * 100).toFixed(0)}%
+                          </Badge>
+                        )}
                         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                           {new Date(item.created_at).toLocaleDateString('zh-CN')}
                         </span>
@@ -351,6 +356,13 @@ export function Memory() {
                     >
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
                         {fact.key}
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                        {fact.category && <Badge variant="info">{fact.category}</Badge>}
+                        {typeof fact.confidence === 'number' && (
+                          <Badge>{(fact.confidence * 100).toFixed(0)}%</Badge>
+                        )}
+                        {fact.source && <Badge>{fact.source}</Badge>}
                       </div>
                       <div style={{ fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>
                         {fact.value}

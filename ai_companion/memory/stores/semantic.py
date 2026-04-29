@@ -135,22 +135,118 @@ class SemanticStore:
 
     async def init(self):
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("""
+            await db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS user_facts (
-                    key TEXT,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bot_id TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL DEFAULT 'default_user',
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'general',
+                    confidence REAL NOT NULL DEFAULT 0.7,
+                    source TEXT NOT NULL DEFAULT 'auto',
+                    evidence_json TEXT,
                     session_id TEXT,
-                    value TEXT,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (key, session_id)
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_seen_at TEXT,
+                    last_confirmed_at TEXT,
+                    expires_at TEXT,
+                    manual_override INTEGER DEFAULT 0,
+                    archived INTEGER DEFAULT 0,
+                    UNIQUE(bot_id, user_id, key)
                 )
-            """)
-            # 迁移旧数据库：若无 session_id 列则添加
+                """
+            )
             cursor = await db.execute("PRAGMA table_info(user_facts)")
             columns = [row[1] async for row in cursor]
-            if "session_id" not in columns:
-                await db.execute("ALTER TABLE user_facts ADD COLUMN session_id TEXT")
+            if "id" not in columns or "bot_id" not in columns:
+                await self._migrate_user_facts_table(db, columns)
+                cursor = await db.execute("PRAGMA table_info(user_facts)")
+                columns = [row[1] async for row in cursor]
+            for name, ddl in [
+                ("bot_id", "ALTER TABLE user_facts ADD COLUMN bot_id TEXT NOT NULL DEFAULT ''"),
+                ("user_id", "ALTER TABLE user_facts ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default_user'"),
+                ("category", "ALTER TABLE user_facts ADD COLUMN category TEXT NOT NULL DEFAULT 'general'"),
+                ("confidence", "ALTER TABLE user_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 0.7"),
+                ("source", "ALTER TABLE user_facts ADD COLUMN source TEXT NOT NULL DEFAULT 'auto'"),
+                ("evidence_json", "ALTER TABLE user_facts ADD COLUMN evidence_json TEXT"),
+                ("created_at", "ALTER TABLE user_facts ADD COLUMN created_at TEXT"),
+                ("last_seen_at", "ALTER TABLE user_facts ADD COLUMN last_seen_at TEXT"),
+                ("last_confirmed_at", "ALTER TABLE user_facts ADD COLUMN last_confirmed_at TEXT"),
+                ("expires_at", "ALTER TABLE user_facts ADD COLUMN expires_at TEXT"),
+                ("manual_override", "ALTER TABLE user_facts ADD COLUMN manual_override INTEGER DEFAULT 0"),
+                ("archived", "ALTER TABLE user_facts ADD COLUMN archived INTEGER DEFAULT 0"),
+            ]:
+                if name not in columns:
+                    await db.execute(ddl)
+            await db.execute("UPDATE user_facts SET created_at = COALESCE(created_at, updated_at, ?)", (datetime.now().isoformat(),))
             await db.execute("CREATE INDEX IF NOT EXISTS idx_facts_session ON user_facts(session_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_facts_user_category ON user_facts(bot_id, user_id, category, archived)")
             await db.commit()
+
+    async def _migrate_user_facts_table(self, db, columns: list[str]):
+        old_table = "user_facts_legacy"
+        await db.execute(f"ALTER TABLE user_facts RENAME TO {old_table}")
+        await db.execute(
+            """
+            CREATE TABLE user_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id TEXT NOT NULL DEFAULT '',
+                user_id TEXT NOT NULL DEFAULT 'default_user',
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'general',
+                confidence REAL NOT NULL DEFAULT 0.7,
+                source TEXT NOT NULL DEFAULT 'auto',
+                evidence_json TEXT,
+                session_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                last_confirmed_at TEXT,
+                expires_at TEXT,
+                manual_override INTEGER DEFAULT 0,
+                archived INTEGER DEFAULT 0,
+                UNIQUE(bot_id, user_id, key)
+            )
+            """
+        )
+        select_cols = ", ".join([c for c in ["key", "value", "session_id", "updated_at"] if c in columns])
+        if select_cols:
+            cursor = await db.execute(f"SELECT {select_cols} FROM {old_table} ORDER BY updated_at ASC")
+            rows = await cursor.fetchall()
+            col_index = {name: idx for idx, name in enumerate(select_cols.split(", "))}
+            for row in rows:
+                key = row[col_index.get("key")]
+                value = row[col_index.get("value")]
+                session_id = row[col_index["session_id"]] if "session_id" in col_index else None
+                updated_at = row[col_index["updated_at"]] if "updated_at" in col_index else datetime.now().isoformat()
+                if not key or value is None:
+                    continue
+                await db.execute(
+                    """
+                    INSERT OR REPLACE INTO user_facts (
+                        bot_id, user_id, key, value, category, confidence, source,
+                        session_id, created_at, updated_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "",
+                        "default_user",
+                        str(key),
+                        str(value),
+                        self._infer_category(str(key), str(value)),
+                        0.7,
+                        "legacy",
+                        session_id,
+                        updated_at,
+                        updated_at,
+                        updated_at,
+                    ),
+                )
+        await db.execute(f"DROP TABLE {old_table}")
 
     def _trim_value(self, value: str) -> str:
         """超长 value 截断，超出 max_chars 直接丢弃（占位）"""
@@ -159,8 +255,21 @@ class SemanticStore:
             return value[:self.max_chars - 3] + "..."
         return value
 
-    async def set_fact(self, key: str, value: str,
-                       session_id: Optional[str] = None):
+    async def set_fact(
+        self,
+        key: str,
+        value: str,
+        session_id: Optional[str] = None,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        category: str = "general",
+        confidence: float = 0.7,
+        source: str = "auto",
+        evidence: Optional[list[str]] = None,
+        expires_at: Optional[str] = None,
+        manual_override: bool = False,
+    ):
         """
         写入/更新单个事实（自动截断超长 value）。
 
@@ -168,38 +277,99 @@ class SemanticStore:
         对于 attitude_score 等跨会话共享的事实，写入时应确保先删除旧记录。
         """
         value = self._trim_value(value)
+        now = datetime.now().isoformat()
+        category = category or self._infer_category(key, value)
         async with aiosqlite.connect(self.db_path) as db:
-            # SQLite 中 NULL 不等于 NULL，INSERT OR REPLACE 会创建多条 NULL 记录
-            # 因此对于 session_id=None 的写入，先删除旧记录再插入
-            if session_id is None:
-                await db.execute(
-                    "DELETE FROM user_facts WHERE key = ? AND session_id IS NULL",
-                    (key,)
-                )
+            existing = await db.execute(
+                """
+                SELECT manual_override FROM user_facts
+                WHERE bot_id = ? AND user_id = ? AND key = ?
+                """,
+                (bot_id, user_id, key),
+            )
+            row = await existing.fetchone()
+            if row and row[0] and not manual_override:
+                return
             await db.execute("""
-                INSERT OR REPLACE INTO user_facts (key, value, updated_at, session_id)
-                VALUES (?, ?, ?, ?)
-            """, (key, value, datetime.now().isoformat(), session_id))
+                INSERT INTO user_facts (
+                    bot_id, user_id, key, value, category, confidence, source,
+                    evidence_json, session_id, created_at, updated_at, last_seen_at,
+                    expires_at, manual_override, archived
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT(bot_id, user_id, key) DO UPDATE SET
+                    value = excluded.value,
+                    category = excluded.category,
+                    confidence = excluded.confidence,
+                    source = excluded.source,
+                    evidence_json = excluded.evidence_json,
+                    session_id = excluded.session_id,
+                    updated_at = excluded.updated_at,
+                    last_seen_at = excluded.last_seen_at,
+                    expires_at = excluded.expires_at,
+                    manual_override = CASE
+                        WHEN user_facts.manual_override = 1 THEN 1
+                        ELSE excluded.manual_override
+                    END,
+                    archived = 0
+            """, (
+                bot_id,
+                user_id,
+                key,
+                value,
+                category,
+                float(confidence),
+                source,
+                json.dumps(evidence or [], ensure_ascii=False),
+                session_id,
+                now,
+                now,
+                now,
+                expires_at,
+                1 if manual_override else 0,
+            ))
             await db.commit()
         if self._user_understanding:
-            await self._user_understanding.upsert_auto_fact(key, value)
+            await self._user_understanding.upsert_auto_item(key=key, value=value, category=category)
 
-    async def get_fact(self, key: str, session_id: Optional[str] = None) -> Optional[str]:
+    async def get_fact(
+        self,
+        key: str,
+        session_id: Optional[str] = None,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+    ) -> Optional[str]:
         """读取单个事实"""
         async with aiosqlite.connect(self.db_path) as db:
             if session_id:
                 cursor = await db.execute(
-                    "SELECT value FROM user_facts WHERE key = ? AND session_id = ?",
-                    (key, session_id)
+                    """
+                    SELECT value FROM user_facts
+                    WHERE key = ? AND session_id = ? AND (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?
+                      AND COALESCE(archived, 0) = 0
+                    """,
+                    (key, session_id, bot_id, user_id)
                 )
             else:
                 cursor = await db.execute(
-                    "SELECT value FROM user_facts WHERE key = ?", (key,)
+                    """
+                    SELECT value FROM user_facts
+                    WHERE key = ? AND (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?
+                      AND COALESCE(archived, 0) = 0
+                    """,
+                    (key, bot_id, user_id)
                 )
             row = await cursor.fetchone()
             return row[0] if row else None
 
-    async def get_all_facts(self, session_id: Optional[str] = None) -> dict[str, str]:
+    async def get_all_facts(
+        self,
+        session_id: Optional[str] = None,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+    ) -> dict[str, str]:
         """
         读取全部或指定会话的事实。
         不传 session_id 时读全部（跨会话聚合）。
@@ -207,12 +377,22 @@ class SemanticStore:
         async with aiosqlite.connect(self.db_path) as db:
             if session_id:
                 cursor = await db.execute(
-                    "SELECT key, value FROM user_facts WHERE session_id = ? ORDER BY updated_at DESC",
-                    (session_id,)
+                    """
+                    SELECT key, value FROM user_facts
+                    WHERE session_id = ? AND (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?
+                      AND COALESCE(archived, 0) = 0
+                    ORDER BY updated_at DESC
+                    """,
+                    (session_id, bot_id, user_id)
                 )
             else:
                 cursor = await db.execute(
-                    "SELECT key, value FROM user_facts ORDER BY updated_at DESC"
+                    """
+                    SELECT key, value FROM user_facts
+                    WHERE (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ? AND COALESCE(archived, 0) = 0
+                    ORDER BY updated_at DESC
+                    """,
+                    (bot_id, user_id)
                 )
             rows = await cursor.fetchall()
             result = {}
@@ -224,19 +404,98 @@ class SemanticStore:
             logger.info(f"[Semantic]  get_all_facts(session_id={session_id!r}): {result}")
             return result
 
-    async def delete_fact(self, key: str, session_id: Optional[str] = None):
+    async def list_facts(
+        self,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        categories: Optional[set[str]] = None,
+        min_confidence: float = 0.0,
+        include_archived: bool = False,
+        limit: Optional[int] = None,
+    ) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            clauses = ["(bot_id = ? OR bot_id = '' OR bot_id IS NULL)", "user_id = ?", "confidence >= ?"]
+            params: list[object] = [bot_id, user_id, min_confidence]
+            if categories:
+                placeholders = ", ".join("?" for _ in categories)
+                clauses.append(f"category IN ({placeholders})")
+                params.extend(sorted(categories))
+            if not include_archived:
+                clauses.append("COALESCE(archived, 0) = 0")
+            clauses.append("(expires_at IS NULL OR expires_at > ?)")
+            params.append(datetime.now().isoformat())
+            sql = f"""
+                SELECT id, key, value, category, confidence, source, evidence_json,
+                       session_id, created_at, updated_at, last_seen_at, expires_at,
+                       manual_override, archived
+                FROM user_facts
+                WHERE {' AND '.join(clauses)}
+                ORDER BY manual_override DESC, confidence DESC, updated_at DESC
+            """
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(limit)
+            cursor = await db.execute(sql, params)
+            rows = await cursor.fetchall()
+        result = []
+        for row in rows:
+            result.append({
+                "id": row[0],
+                "key": row[1],
+                "value": row[2],
+                "category": row[3],
+                "confidence": row[4],
+                "source": row[5],
+                "evidence": _json_list(row[6]),
+                "session_id": row[7],
+                "created_at": row[8],
+                "updated_at": row[9],
+                "last_seen_at": row[10],
+                "expires_at": row[11],
+                "manual_override": bool(row[12]),
+                "archived": bool(row[13]),
+            })
+        return result
+
+    async def delete_fact(
+        self,
+        key: str,
+        session_id: Optional[str] = None,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+    ):
         """删除指定事实（不传 session_id 时删除所有匹配 key 的事实）"""
         async with aiosqlite.connect(self.db_path) as db:
             if session_id:
                 await db.execute(
-                    "DELETE FROM user_facts WHERE key = ? AND session_id = ?",
-                    (key, session_id)
+                    "DELETE FROM user_facts WHERE key = ? AND session_id = ? AND (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?",
+                    (key, session_id, bot_id, user_id)
                 )
             else:
-                await db.execute("DELETE FROM user_facts WHERE key = ?", (key,))
+                await db.execute(
+                    "DELETE FROM user_facts WHERE key = ? AND (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?",
+                    (key, bot_id, user_id)
+                )
             await db.commit()
         if self._user_understanding:
             await self._user_understanding.delete_auto_fact(key)
+
+    async def archive_expired(self, *, now: str, bot_id: str = "", user_id: str = "default_user"):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE user_facts
+                SET archived = 1
+                WHERE (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?
+                  AND expires_at IS NOT NULL
+                  AND expires_at <= ?
+                  AND COALESCE(manual_override, 0) = 0
+                """,
+                (bot_id, user_id, now),
+            )
+            await db.commit()
 
     async def extract_and_store(self, user_input: str, bot_output: str,
                                session_id: Optional[str] = None,
@@ -413,12 +672,30 @@ class SemanticStore:
         async with aiosqlite.connect(self.db_path) as db:
             if session_id:
                 cursor = await db.execute(
-                    "SELECT COUNT(*) FROM user_facts WHERE session_id = ?", (session_id,)
+                    "SELECT COUNT(*) FROM user_facts WHERE session_id = ? AND COALESCE(archived, 0) = 0", (session_id,)
                 )
             else:
-                cursor = await db.execute("SELECT COUNT(*) FROM user_facts")
+                cursor = await db.execute("SELECT COUNT(*) FROM user_facts WHERE COALESCE(archived, 0) = 0")
             row = await cursor.fetchone()
             return row[0] if row else 0
+
+    def _infer_category(self, key: str, value: str) -> str:
+        text = f"{key} {value}"
+        if any(word in text for word in ["不要", "别", "边界", "雷区", "不想聊"]):
+            return "boundaries"
+        if any(word in text for word in ["先共情", "少讲道理", "说教", "怎么回应"]):
+            return "communication_style"
+        if any(word in text for word in ["压力", "失眠", "焦虑", "最近", "面试", "考试", "作品集"]):
+            return "life_context"
+        if any(word in text for word in ["计划", "目标", "继续", "明天"]):
+            return "goals"
+        if any(word in text for word in ["名字", "称呼", "城市", "职业", "我叫", "叫我"]):
+            return "identity"
+        if any(word in text for word in ["喜欢", "偏好", "爱吃", "爱听"]):
+            return "preferences"
+        if any(word in text for word in ["讨厌", "不喜欢"]):
+            return "dislikes"
+        return "general"
 
     # ── 态度分增量处理 ─────────────────────────────────────────
 
@@ -521,3 +798,15 @@ class SemanticStore:
 
     async def close(self):
         pass
+
+
+def _json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        data = json.loads(value)
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(item) for item in data if str(item).strip()]

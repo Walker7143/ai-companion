@@ -119,6 +119,9 @@ class CLIAdapter:
                     self.console.print(f"  已压缩次数: {status['compression_count']}")
                     self.console.print(f"  情景记忆条数: {status['episodic_count']}")
                     self.console.print(f"  语义记忆事实数: {status['fact_count']}")
+                    relationship = status.get("relationship") or {}
+                    if relationship:
+                        self.console.print(f"  关系状态: {relationship.get('relationship_label', '朋友')}")
                     if status.get("user_understanding_path"):
                         self.console.print(f"  用户理解文件: {status['user_understanding_path']}")
                         self.console.print(f"  自动补充事实数: {status.get('user_understanding_auto_facts', 0)}")
