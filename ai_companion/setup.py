@@ -83,6 +83,16 @@ def _persona_template_roots(project_dir: Path, data_dir: Path | None = None) -> 
     return roots
 
 
+def _gender_label(gender: str) -> str:
+    gender_map = {
+        "male": "男",
+        "female": "女",
+        "男": "男",
+        "女": "女",
+    }
+    return gender_map.get(str(gender or "").strip().lower(), str(gender or "").strip())
+
+
 def _discover_builtin_bot_templates(project_dir: Path) -> list[dict]:
     bots = []
     seen_ids = set()
@@ -102,6 +112,7 @@ def _discover_builtin_bot_templates(project_dir: Path) -> list[dict]:
             bots.append({
                 "id": bot_id,
                 "name": profile.get("name") or bot_id,
+                "gender": _gender_label(profile.get("gender", "")),
                 "description": profile.get("occupation") or profile.get("summary") or "",
             })
     return bots
@@ -550,9 +561,10 @@ async def run_setup():
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("ID", style="cyan")
         table.add_column("名称", style="green")
+        table.add_column("性别")
         table.add_column("简介")
         for bot in builtin_bots:
-            table.add_row(bot["id"], bot["name"], bot.get("description", ""))
+            table.add_row(bot["id"], bot["name"], bot.get("gender", ""), bot.get("description", ""))
         console.print(table)
         console.print("[dim]输入上方 ID 会复制对应人格模板；也可以输入新的 ID 创建自定义 Bot。[/dim]")
     else:
