@@ -21,10 +21,17 @@
 
 ## 快速开始
 
-### 环境要求
+### 执行命令前需要准备
 
-- Python 3.11+
-- 至少一个模型 API Key (MiniMax / OpenAI / Claude / Ollama)
+运行下面的安装命令前，请先确认电脑里有这些环境：
+
+- **Python 3.11+**：后端和命令行工具需要。
+- **Git**：安装脚本会拉取项目代码。
+- **网络连接**：需要下载 Python 依赖、前端依赖和项目代码。
+- **一个模型来源**：MiniMax / OpenAI / Claude / Ollama / 自定义 API 任意一种即可。云端模型需要准备 API Key；Ollama 需要本机已启动 Ollama 服务。
+- **Node.js + npm（推荐）**：用于启动管理后台 Web UI。如果只想用纯 CLI，可以暂时不装；需要 Web UI 时再安装。
+
+依赖包不需要用户手动逐个安装，安装脚本和 `ai-companion setup` 会尽量自动处理。
 
 ### 安装
 
