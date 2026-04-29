@@ -73,6 +73,40 @@ def _write_json_file(path: Path, data: dict):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _persona_template_roots(project_dir: Path, data_dir: Path | None = None) -> list[Path]:
+    roots = [
+        project_dir / "ai_companion" / "data" / "bots",
+        project_dir / "data" / "bots",
+    ]
+    if data_dir is not None:
+        roots.append(data_dir / "data" / "bots")
+    return roots
+
+
+def _discover_builtin_bot_templates(project_dir: Path) -> list[dict]:
+    bots = []
+    seen_ids = set()
+    for root in _persona_template_roots(project_dir):
+        if not root.exists():
+            continue
+        for bot_dir in sorted(root.iterdir(), key=lambda p: p.name):
+            bot_id = bot_dir.name
+            persona_dir = bot_dir / "persona"
+            profile_path = persona_dir / "profile.json"
+            if bot_id.startswith("_") or bot_id in seen_ids or not profile_path.exists():
+                continue
+            profile = _load_structured_file(profile_path)
+            if not isinstance(profile, dict):
+                profile = {}
+            seen_ids.add(bot_id)
+            bots.append({
+                "id": bot_id,
+                "name": profile.get("name") or bot_id,
+                "description": profile.get("occupation") or profile.get("summary") or "",
+            })
+    return bots
+
+
 def _deep_merge(base: dict, updates: dict) -> dict:
     result = dict(base or {})
     for key, value in (updates or {}).items():
@@ -121,12 +155,11 @@ def _copy_persona_template(
     bot_name: str = "",
     overwrite: bool = False,
 ) -> bool:
-    src_candidates = [
-        project_dir / "ai_companion" / "data" / "bots" / bot_id / "persona",
-        data_dir / "data" / "bots" / bot_id / "persona",
-        project_dir / "ai_companion" / "data" / "bots" / "_template" / "persona",
-        data_dir / "data" / "bots" / "_template" / "persona",
-    ]
+    src_candidates = []
+    for root in _persona_template_roots(project_dir, data_dir):
+        src_candidates.append(root / bot_id / "persona")
+    for root in _persona_template_roots(project_dir, data_dir):
+        src_candidates.append(root / "_template" / "persona")
     src_persona = next((path for path in src_candidates if path.exists()), None)
     dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
     copied_template = False
@@ -511,7 +544,19 @@ async def run_setup():
     console.print("[bold]步骤 2/7:[/bold] 创建 Bot")
     console.print("-" * 40)
 
-    console.print("当前仓库已移除内置人格模板，请创建自定义 Bot。")
+    builtin_bots = _discover_builtin_bot_templates(project_dir)
+    if builtin_bots:
+        console.print("可用内置 Bot 模板：")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("ID", style="cyan")
+        table.add_column("名称", style="green")
+        table.add_column("简介")
+        for bot in builtin_bots:
+            table.add_row(bot["id"], bot["name"], bot.get("description", ""))
+        console.print(table)
+        console.print("[dim]输入上方 ID 会复制对应人格模板；也可以输入新的 ID 创建自定义 Bot。[/dim]")
+    else:
+        console.print("[dim]未发现内置 Bot 模板，可以创建自定义 Bot。[/dim]")
 
     bots_config = _load_yaml_file(bots_config_path)
     existing_bots = [b for b in bots_config.get("bots", []) if isinstance(b, dict) and b.get("id")]
@@ -533,7 +578,7 @@ async def run_setup():
             if not add_more:
                 break
 
-            bot_id = Prompt.ask("请输入 Bot ID (英文唯一标识)").strip()
+            bot_id = Prompt.ask("请输入 Bot ID (内置模板 ID 或英文唯一标识)").strip()
             if not bot_id:
                 console.print("[yellow]⚠ Bot ID 不能为空，已跳过[/yellow]")
                 continue
