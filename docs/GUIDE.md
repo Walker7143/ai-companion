@@ -1148,11 +1148,11 @@ data/bots/{bot_id}/memory/user_understanding.json
 
 这是用户可直接编辑的“Bot 对我的理解”，用于初始化和纠正 Bot。
 
-格式为 v2：
+格式为 v3：
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "manual": {
     "summary": "用户希望被温柔但不敷衍地对待。",
     "facts": {
@@ -1167,14 +1167,31 @@ data/bots/{bot_id}/memory/user_understanding.json
     "boundaries": [
       "不要调侃体重"
     ],
+    "relationship_expectations": [
+      "希望 Bot 像熟悉的人一样有分寸地陪伴"
+    ],
     "important_people": [],
     "current_context": [],
-    "open_threads": []
+    "open_threads": [],
+    "notes": []
   },
   "auto": {
+    "profile_summary": "用户近期压力偏高，情绪低落时更需要先被接住。",
     "facts": {
       "城市": "上海"
     },
+    "emotional_patterns": [
+      "压力大时容易焦虑，但愿意继续推进事情"
+    ],
+    "stressors": [
+      "最近在准备作品集"
+    ],
+    "comfort_strategies": [
+      "先陪一会儿，再给具体建议"
+    ],
+    "attachment_and_distance": [],
+    "values_and_principles": [],
+    "goals_and_projects": [],
     "current_context": [
       "最近在准备作品集"
     ],
@@ -1182,6 +1199,22 @@ data/bots/{bot_id}/memory/user_understanding.json
       "用户想继续聊作品集"
     ],
     "last_refresh_at": "2026-04-29T23:30:00"
+  },
+  "relationship_memory": {
+    "how_user_treats_bot": [],
+    "what_user_seems_to_need_from_bot": [
+      "稳定陪伴，而不是机械建议"
+    ],
+    "things_that_brought_them_closer": [
+      "用户开始主动分享脆弱时刻"
+    ],
+    "things_that_created_tension": [],
+    "repair_preferences": []
+  },
+  "meta": {
+    "confidence_notes": [],
+    "contradictions": [],
+    "last_reflection_at": "2026-04-29T23:30:00"
   }
 }
 ```
@@ -1189,7 +1222,9 @@ data/bots/{bot_id}/memory/user_understanding.json
 规则：
 
 - `manual` 由用户编辑，自动系统永远不覆盖。
-- `auto` 由日常对话中的高置信度事实刷新。
+- `auto` 由日常对话中的高置信度事实、关系状态和 Bot 的阶段性理解刷新。
+- `relationship_memory` 记录相处过程中形成的关系理解，例如用户如何对待 Bot、需要 Bot 扮演什么位置、哪些互动让关系更近或更紧张。
+- `meta` 记录低置信度说明和与手动理解冲突的自动候选。
 - 如果 `manual.facts` 已经有同名 key，`auto.facts` 不会覆盖。
 - 文件损坏时会备份为 `.broken`，并重新生成默认结构。
 - 为兼容旧版本，旧的 `summary`、`facts`、`auto_facts` 仍会被读取并迁移。

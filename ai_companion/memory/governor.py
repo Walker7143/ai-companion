@@ -74,7 +74,8 @@ class MemoryGovernor:
             min_confidence=self.MIN_PROJECTION_CONFIDENCE,
             include_archived=False,
         )
-        await self.user_understanding.refresh_auto_from_facts(facts)
+        relationship = await self.relationship.get_state(bot_id=bot_id, user_id=user_id)
+        await self.user_understanding.refresh_auto_from_sources(facts=facts, relationship=relationship)
 
     async def _apply_user_fact(
         self,

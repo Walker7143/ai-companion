@@ -147,6 +147,7 @@ class MemoryEngine:
             semantic_store=self.semantic,
             episodic_store=self.episodic,
             user_understanding=self.user_understanding,
+            relationship_store=self.relationship,
         )
 
         self._session_id: Optional[str] = None

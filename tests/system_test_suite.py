@@ -228,6 +228,7 @@ class SystemTestSuite:
         self._run_case("T41", "Intent retriever trims task emotional memory", self.case_memory_retriever_intent_filtering)
         self._run_case("T42", "Relationship state is separate from semantic facts", self.case_relationship_state_separate)
         self._run_case("T43", "Admin memory API supports new memory schema", self.case_admin_memory_api_schema_compatibility)
+        self._run_case("T44", "User understanding v3 captures deep relationship insight", self.case_user_understanding_v3_deep_projection)
 
         return self._finalize()
 
@@ -2023,6 +2024,65 @@ class SystemTestSuite:
         }
         passed = all(checks.values())
         return passed, f"checks={sum(checks.values())}/{len(checks)}", json.dumps(checks, ensure_ascii=False, indent=2)
+
+    async def case_user_understanding_v3_deep_projection(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-understanding-v3-") as td:
+            root = Path(td)
+            engine = MemoryEngine("deep_bot", root, config={"embedding": "none"})
+            await engine.init()
+            await engine.semantic.set_fact(
+                "近期压力源",
+                "最近准备作品集压力很大，晚上容易焦虑",
+                bot_id="deep_bot",
+                user_id="default_user",
+                category="life_context",
+                confidence=0.92,
+            )
+            await engine.semantic.set_fact(
+                "希望被怎样回应",
+                "情绪低落时先陪一会儿，不要立刻讲道理",
+                bot_id="deep_bot",
+                user_id="default_user",
+                category="communication_style",
+                confidence=0.96,
+            )
+            await engine.relationship.apply_event(
+                bot_id="deep_bot",
+                user_id="default_user",
+                label="好朋友",
+                trust_delta=1,
+                intimacy_delta=1,
+                key_moment="用户开始主动分享自己的脆弱时刻",
+            )
+            await engine.maintenance.run_light(bot_id="deep_bot", user_id="default_user")
+            understanding = engine.user_understanding.load()
+            context = await engine.load_context("我今天又有点焦虑")
+            await engine.close()
+
+        auto = understanding.get("auto", {})
+        relationship_memory = understanding.get("relationship_memory", {})
+        suffix = context.get("system_suffix", "")
+        passed = (
+            understanding.get("version") == 3
+            and auto.get("profile_summary")
+            and any("作品集" in item for item in auto.get("stressors", []))
+            and any("先陪" in item for item in auto.get("comfort_strategies", []))
+            and any("脆弱" in item for item in relationship_memory.get("things_that_brought_them_closer", []))
+            and "观察到的情绪模式" in suffix
+            and "有效的安慰/陪伴方式" in suffix
+            and "让关系变近的时刻" in suffix
+        )
+        log = json.dumps(
+            {
+                "understanding": understanding,
+                "system_suffix": suffix,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, f"version={understanding.get('version')} deep={'有效的安慰/陪伴方式' in suffix}", log
 
     def case_dependency_and_ui_contract_cleanup(self) -> tuple[bool, str, str]:
         pyproject = (self.root / "pyproject.toml").read_text(encoding="utf-8")

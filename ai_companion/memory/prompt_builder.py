@@ -78,18 +78,20 @@ class MemoryPromptBuilder:
             ("preferences", "用户手动设定的偏好"),
             ("communication_style", "用户手动设定的沟通方式"),
             ("boundaries", "用户手动设定的边界"),
+            ("relationship_expectations", "用户手动设定的关系期待"),
             ("important_people", "用户手动设定的重要关系"),
             ("current_context", "用户手动设定的当前状态"),
             ("open_threads", "用户手动设定的后续话题"),
+            ("notes", "用户手动补充说明"),
         ]:
             items = _clean_list(manual.get(key))
             if items:
                 lines.append(f"{title}：")
                 lines.extend([f"  - {item}" for item in items])
 
-        auto_summary = str(auto.get("summary") or "").strip()
+        auto_summary = str(auto.get("profile_summary") or auto.get("summary") or "").strip()
         if auto_summary:
-            lines.append(f"日常对话自动形成的理解：{auto_summary}")
+            lines.append(f"Bot 在相处中逐渐形成的理解：{auto_summary}")
 
         auto_facts = _clean_dict(auto.get("facts"))
         if auto_facts:
@@ -103,8 +105,30 @@ class MemoryPromptBuilder:
             ("important_people", "自动补充的重要关系"),
             ("current_context", "自动补充的当前状态"),
             ("open_threads", "自动补充的后续话题"),
+            ("emotional_patterns", "观察到的情绪模式"),
+            ("stressors", "近期压力源"),
+            ("comfort_strategies", "有效的安慰/陪伴方式"),
+            ("attachment_and_distance", "亲近与距离模式"),
+            ("values_and_principles", "价值观和原则"),
+            ("life_context", "自动补充的生活背景"),
+            ("goals_and_projects", "目标和项目"),
+            ("routines", "作息和习惯"),
+            ("recent_changes", "近期变化"),
         ]:
             items = _clean_list(auto.get(key))
+            if items:
+                lines.append(f"{title}：")
+                lines.extend([f"  - {item}" for item in items])
+
+        relationship_memory = data.get("relationship_memory") if isinstance(data.get("relationship_memory"), dict) else {}
+        for key, title in [
+            ("how_user_treats_bot", "用户如何对待 Bot"),
+            ("what_user_seems_to_need_from_bot", "用户似乎需要 Bot 提供的关系位置"),
+            ("things_that_brought_them_closer", "让关系变近的时刻"),
+            ("things_that_created_tension", "制造距离或紧张的点"),
+            ("repair_preferences", "关系修复偏好"),
+        ]:
+            items = _clean_list(relationship_memory.get(key))
             if items:
                 lines.append(f"{title}：")
                 lines.extend([f"  - {item}" for item in items])
@@ -136,8 +160,20 @@ class MemoryPromptBuilder:
                 facts = _clean_dict(section.get("facts"))
                 known_keys.update(facts.keys())
                 known_values.update(facts.values())
-                for list_key in ("preferences", "communication_style", "boundaries", "important_people", "current_context", "open_threads"):
+                for list_key in (
+                    "preferences", "communication_style", "boundaries", "important_people",
+                    "current_context", "open_threads", "emotional_patterns", "stressors",
+                    "comfort_strategies", "attachment_and_distance", "values_and_principles",
+                    "life_context", "goals_and_projects", "routines", "recent_changes",
+                ):
                     known_values.update(_clean_list(section.get(list_key)))
+            relationship_memory = understanding.get("relationship_memory") if isinstance(understanding.get("relationship_memory"), dict) else {}
+            for list_key in (
+                "how_user_treats_bot", "what_user_seems_to_need_from_bot",
+                "things_that_brought_them_closer", "things_that_created_tension",
+                "repair_preferences",
+            ):
+                known_values.update(_clean_list(relationship_memory.get(list_key)))
             known_keys.update(_clean_dict(understanding.get("facts")).keys())
             legacy_auto = _clean_dict(understanding.get("auto_facts"))
             known_keys.update(legacy_auto.keys())
