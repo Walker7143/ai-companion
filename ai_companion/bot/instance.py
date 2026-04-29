@@ -319,7 +319,11 @@ class BotInstance:
                 logger.warning(f"[BotInstance] 未配置 home_channel，无法发送主动消息")
                 return False
             result = await adapter.send(chat_id=chat_id, content=message)
-            return result.success if hasattr(result, 'success') else result
+            success = result.success if hasattr(result, 'success') else result
+            if not success:
+                error = getattr(result, "error", "unknown") if result is not None else "unknown"
+                logger.warning(f"[BotInstance] 飞书主动消息发送失败: {error}")
+            return success
         except Exception as e:
             logger.error(f"[BotInstance] 飞书发送失败: {e}")
             return False

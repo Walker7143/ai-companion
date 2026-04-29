@@ -43,7 +43,7 @@ class CLIPlatform(ProactivePlatform):
 
     async def send(self, bot_id: str, message: str) -> bool:
         """CLI 模式下打印消息到终端"""
-        output = f"\n[主动消息 {bot_id}] {message}\n"
+        output = f"\n{message}\n"
         if self._output_callback:
             try:
                 await self._output_callback(output)

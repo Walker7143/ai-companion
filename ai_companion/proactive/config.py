@@ -24,6 +24,8 @@ class ProactiveConfig:
             "max_daily": 5,
             "min_interval_hours": 4,
             "max_idle_days": 7,
+            "contact_probability": 0.3,  # 每次检查通过矜持概率
+            "force_contact": False,  # 测试用：跳过 LLM 是否联系判断
         },
         "triggers": {
             "idle_reminder": {
@@ -206,6 +208,18 @@ class ProactiveConfig:
     @property
     def max_idle_days(self) -> int:
         return self._config.get("scheduler", {}).get("max_idle_days", 7)
+
+    @property
+    def contact_probability(self) -> float:
+        raw = self._config.get("scheduler", {}).get("contact_probability", 0.3)
+        try:
+            return max(0.0, min(1.0, float(raw)))
+        except (TypeError, ValueError):
+            return 0.3
+
+    @property
+    def force_contact(self) -> bool:
+        return bool(self._config.get("scheduler", {}).get("force_contact", False))
 
     @property
     def idle_reminder_enabled(self) -> bool:

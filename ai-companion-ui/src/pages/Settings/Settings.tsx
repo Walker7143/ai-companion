@@ -124,6 +124,16 @@ function nestedConfig(platform: PlatformConfig, key: string): Record<string, unk
   return (cfg[key] && typeof cfg[key] === 'object' ? cfg[key] : {}) as Record<string, unknown>;
 }
 
+function dedicatedFeishuRouting(routing: Record<string, unknown>, botId?: string): Record<string, unknown> {
+  const next = { ...routing };
+  delete next.group_bot_map;
+  const fixedBotId = botId ?? String(next.bot_id || next.default_bot || '');
+  next.mode = 'dedicated';
+  next.bot_id = fixedBotId;
+  next.default_bot = fixedBotId;
+  return next;
+}
+
 const defaultModel: BotConfig['model'] = {
   provider: 'minimax',
   api_key: '',
@@ -345,6 +355,10 @@ export function Settings() {
     if (feishuExtra.group_policy === 'open') {
       items.push('飞书群组策略为 open，所有群成员都可能触发 Bot，生产环境建议使用 allowlist 或 admin_only。');
     }
+    const feishuRouting = nestedConfig(platformByName(draft, 'feishu'), 'routing');
+    if (feishuRouting.mode && feishuRouting.mode !== 'dedicated') {
+      items.push('飞书 App 与 Bot 必须一对一绑定，已不支持按群聊路由多个 Bot。');
+    }
     if (draft.proactive.enabled && draft.proactive.min_interval_hours < 1) {
       items.push('主动唤醒最小间隔小于 1 小时，可能造成消息过于频繁。');
     }
@@ -377,6 +391,14 @@ export function Settings() {
     });
   };
 
+  const ensureFeishuBinding = (platform: PlatformConfig, botId: string): PlatformConfig => ({
+    ...platform,
+    config: {
+      ...configObject(platform),
+      routing: dedicatedFeishuRouting(nestedConfig(platform, 'routing'), botId),
+    },
+  });
+
   const handleLifePreset = (presetId: string) => {
     if (!draft) return;
     const preset = draft.life.presets.find((item) => item.id === presetId);
@@ -407,10 +429,27 @@ export function Settings() {
 
   const handleSave = async () => {
     if (!draft) return;
+    const feishuPlatform = platformByName(draft, 'feishu');
+    const feishuExtra = nestedConfig(feishuPlatform, 'extra');
+    const feishuBindingEnabled = feishuPlatform.enabled || Boolean(feishuExtra.app_id || feishuExtra.app_secret);
+    const feishuRouting = dedicatedFeishuRouting(nestedConfig(feishuPlatform, 'routing'), draft.bot_id);
+    const boundBotId = String(feishuRouting.bot_id || '').trim();
+    if (feishuBindingEnabled && !String(feishuExtra.app_id || '').trim()) {
+      toast.error('启用飞书时必须填写飞书 App ID。');
+      return;
+    }
+    if (feishuBindingEnabled && !boundBotId) {
+      toast.error('启用或填写飞书 App 后必须绑定 Bot，请先选择固定 Bot ID。');
+      return;
+    }
     if (warnings.length > 0 && !confirm(`检测到以下风险：\n\n${warnings.join('\n')}\n\n仍然保存吗？`)) return;
     setSaving(true);
     try {
-      const feishu = configObject(platformByName(draft, 'feishu'));
+      const feishu = {
+        ...configObject(feishuPlatform),
+        enabled: feishuBindingEnabled,
+        routing: feishuRouting,
+      };
       const payload = {
         model: draft.model,
         memory: draft.memory,
@@ -585,21 +624,25 @@ export function Settings() {
                   <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{name === 'cli' ? 'CLI' : name === 'feishu' ? '飞书' : 'Webhook'}</div>
                   <FieldHint text={name === 'cli' ? '本地命令行入口。' : name === 'feishu' ? '飞书机器人接入，凭据保存到 config.yaml。' : '通用 Webhook 投递。'} />
                 </div>
-                <Toggle checked={platform.enabled} onChange={(event) => updatePlatform(name, (p) => ({ ...p, enabled: event.target.checked }))} />
+                <Toggle checked={platform.enabled} onChange={(event) => updatePlatform(name, (p) => {
+                  const next = { ...p, enabled: event.target.checked };
+                  return name === 'feishu' && event.target.checked ? ensureFeishuBinding(next, draft.bot_id) : next;
+                })} />
               </div>
             );
           })}
         </div>
 
         <div style={{ ...gridStyle, marginTop: 20 }}>
-          <Input label="飞书 App ID" value={String(feishuExtra.app_id || '')} onChange={(event) => updatePlatform('feishu', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), app_id: event.target.value } } }))} />
-          <Input label="飞书 App Secret" type="password" value={String(feishuExtra.app_secret || '')} onChange={(event) => updatePlatform('feishu', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), app_secret: event.target.value } } }))} />
+          <Input label="飞书 App ID" value={String(feishuExtra.app_id || '')} onChange={(event) => updatePlatform('feishu', (p) => ensureFeishuBinding({ ...p, enabled: true, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), app_id: event.target.value } } }, draft.bot_id))} />
+          <Input label="飞书 App Secret" type="password" value={String(feishuExtra.app_secret || '')} onChange={(event) => updatePlatform('feishu', (p) => ensureFeishuBinding({ ...p, enabled: true, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), app_secret: event.target.value } } }, draft.bot_id))} />
           <Select label="连接模式" options={[{ value: 'websocket', label: 'WebSocket' }, { value: 'webhook', label: 'Webhook' }]} value={String(feishuExtra.connection_mode || 'websocket')} onChange={(event) => updatePlatform('feishu', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), connection_mode: event.target.value } } }))} />
           <Select label="群组策略" options={[{ value: 'open', label: 'open' }, { value: 'allowlist', label: 'allowlist' }, { value: 'blacklist', label: 'blacklist' }, { value: 'admin_only', label: 'admin_only' }]} value={String(feishuExtra.group_policy || 'allowlist')} onChange={(event) => updatePlatform('feishu', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), group_policy: event.target.value } } }))} />
-          <Select label="路由模式" options={[{ value: 'dedicated', label: '固定 Bot' }, { value: 'chat_routed', label: '按群聊路由' }]} value={String(feishuRouting.mode || 'dedicated')} onChange={(event) => updatePlatform('feishu', (p) => ({ ...p, config: { ...configObject(p), routing: { ...nestedConfig(p, 'routing'), mode: event.target.value } } }))} />
-          <Input label="默认/固定 Bot ID" value={String(feishuRouting.bot_id || feishuRouting.default_bot || '')} onChange={(event) => updatePlatform('feishu', (p) => ({ ...p, config: { ...configObject(p), routing: { ...nestedConfig(p, 'routing'), bot_id: event.target.value, default_bot: event.target.value } } }))} />
+          <Select label="绑定模式" options={[{ value: 'dedicated', label: '固定 Bot（一对一）' }]} value="dedicated" onChange={() => updatePlatform('feishu', (p) => ({ ...p, config: { ...configObject(p), routing: dedicatedFeishuRouting(nestedConfig(p, 'routing')) } }))} />
+          <Input label="固定 Bot ID" value={String(feishuRouting.bot_id || feishuRouting.default_bot || '')} onChange={(event) => updatePlatform('feishu', (p) => ({ ...p, config: { ...configObject(p), routing: dedicatedFeishuRouting(nestedConfig(p, 'routing'), event.target.value) } }))} />
           <Input label="Webhook URL" value={String(webhookConfig.webhook_url || '')} onChange={(event) => updatePlatform('webhook', (p) => ({ ...p, config: { ...configObject(p), webhook_url: event.target.value } }))} />
         </div>
+        <FieldHint text="一个飞书 App 只能绑定一个 Bot，一个 Bot 也只能绑定一个飞书 App；多 Bot 接入飞书时请分别创建独立飞书 App。" />
       </SectionCard>
 
       <SectionCard id="persona" title={sectionMeta.persona?.title || 'Bot 人格'} description={sectionMeta.persona?.description} restart={sectionMeta.persona?.restart}>

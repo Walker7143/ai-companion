@@ -460,6 +460,9 @@ class ProactiveEngine:
         if silence_decision:
             return silence_decision
 
+        if self.config.force_contact:
+            return ProactiveDecision(True, "强制烟测", "high")
+
         # LLM 判断
         personality_tags = self._get_personality_type()
         rel_level = await self._get_relationship_level()
@@ -755,9 +758,12 @@ class ProactiveEngine:
         if self.state.today_proactive_count >= self.config.max_daily:
             return None
 
-        # 不连续触发：70% 概率折扣，保持矜持
-        if random.random() > 0.3:
-            logger.debug("[ProactiveEngine] 不连续触发检查，未通过矜持概率")
+        # 不连续触发：默认保留 30% 通过率，测试 Bot 可调到 1.0。
+        contact_probability = self.config.contact_probability
+        if contact_probability < 1.0 and random.random() > contact_probability:
+            logger.debug(
+                f"[ProactiveEngine] 不连续触发检查，未通过矜持概率({contact_probability})"
+            )
             return None
 
         # LLM 判断

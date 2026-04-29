@@ -83,7 +83,7 @@ WEB_CONFIG_SCHEMA = {
                 "feishu.app_id": "飞书开放平台应用 ID。",
                 "feishu.app_secret": "敏感字段。留空或保留掩码表示继续使用旧值。",
                 "feishu.group_policy": "open 最开放；生产环境推荐 allowlist 或 admin_only。",
-                "feishu.routing": "dedicated 固定 Bot；chat_routed 根据群聊映射 Bot。",
+                "feishu.routing": "固定 Bot 绑定。飞书 App 与 Bot 必须双向一对一绑定。",
             },
         },
         {
@@ -214,6 +214,131 @@ def _is_masked_or_empty(value: Any) -> bool:
     return value in (None, "") or is_masked_secret(str(value))
 
 
+def _validate_feishu_one_to_one_binding(feishu: dict):
+    if not isinstance(feishu, dict):
+        return
+
+    default_extra = feishu.get("extra", {}) if isinstance(feishu.get("extra"), dict) else {}
+    bindings = feishu.get("bot_bindings")
+    if bindings is None:
+        bindings = feishu.get("bots")
+    binding_values = bindings.values() if isinstance(bindings, dict) else []
+    has_binding_app_id = any(
+        isinstance(binding, dict)
+        and (
+            (isinstance(binding.get("extra"), dict) and binding["extra"].get("app_id"))
+            or binding.get("app_id")
+        )
+        for binding in binding_values
+    )
+    enabled = bool(feishu.get("enabled", False))
+    has_default_app_id = bool(default_extra.get("app_id"))
+    if not enabled and not has_default_app_id and not has_binding_app_id:
+        return
+    if enabled and not has_default_app_id and not has_binding_app_id:
+        raise ValueError("启用飞书时必须填写 App ID，并绑定一个 Bot。")
+
+    def _routing_bot_id(routing: Any, path: str) -> str:
+        routing = routing if isinstance(routing, dict) else {}
+        mode = routing.get("mode", "dedicated")
+        if mode != "dedicated":
+            raise ValueError(
+                f"{path}.mode={mode} 不允许保存。飞书 App 与 Bot 必须一对一绑定，"
+                "请使用 dedicated 模式。"
+            )
+        if routing.get("group_bot_map"):
+            raise ValueError(
+                f"{path}.group_bot_map 不允许保存。飞书 App 与 Bot 必须一对一绑定。"
+            )
+        return str(routing.get("bot_id") or "")
+
+    def _extra_app_id(extra: Any) -> str:
+        return str(extra.get("app_id") or "") if isinstance(extra, dict) else ""
+
+    app_id_by_bot_id: dict[str, str] = {}
+    bot_id_by_app_id: dict[str, str] = {}
+
+    def _register(app_id: str, bot_id: str, path: str):
+        if not app_id:
+            return
+        if not bot_id:
+            raise ValueError(f"飞书 App {app_id} 未绑定 Bot：请配置 {path}。")
+
+        existing_bot_id = bot_id_by_app_id.get(app_id)
+        if existing_bot_id and existing_bot_id != bot_id:
+            raise ValueError(
+                f"飞书 App {app_id} 同时绑定了多个 Bot：{existing_bot_id}, {bot_id}。"
+                "一个飞书 App 只能绑定一个 Bot。"
+            )
+
+        existing_app_id = app_id_by_bot_id.get(bot_id)
+        if existing_app_id and existing_app_id != app_id:
+            raise ValueError(
+                f"飞书 Bot {bot_id} 同时绑定了多个 App：{existing_app_id}, {app_id}。"
+                "飞书 App 与 Bot 必须双向一对一绑定。"
+            )
+
+        bot_id_by_app_id[app_id] = bot_id
+        app_id_by_bot_id[bot_id] = app_id
+
+    default_app_id = _extra_app_id(default_extra)
+    default_bot_id = _routing_bot_id(feishu.get("routing", {}), "platforms.feishu.routing")
+    if default_app_id and default_bot_id:
+        _register(default_app_id, default_bot_id, "platforms.feishu.routing.bot_id")
+
+    if isinstance(bindings, dict):
+        for bot_id, binding in bindings.items():
+            if not isinstance(binding, dict):
+                continue
+            binding_routing = binding.get("routing")
+            if isinstance(binding_routing, dict):
+                routing_bot_id = _routing_bot_id(binding_routing, f"platforms.feishu.bot_bindings.{bot_id}.routing")
+                if routing_bot_id and routing_bot_id != str(bot_id):
+                    raise ValueError(
+                        f"飞书 Bot 绑定不一致：bot_bindings.{bot_id}.routing.bot_id={routing_bot_id}，"
+                        "应与绑定键一致。"
+                    )
+            nested_extra = binding.get("extra") if isinstance(binding.get("extra"), dict) else {}
+            binding_app_id = _extra_app_id(nested_extra) or _extra_app_id(binding) or default_app_id
+            _register(binding_app_id, str(bot_id), f"platforms.feishu.bot_bindings.{bot_id}")
+
+    if default_app_id and default_app_id not in bot_id_by_app_id:
+        raise ValueError("飞书 App 未绑定 Bot：请配置 platforms.feishu.routing.bot_id 或 bot_bindings。")
+
+
+def _feishu_bindings(feishu: dict) -> dict:
+    bindings = feishu.get("bot_bindings")
+    if bindings is None:
+        bindings = feishu.get("bots")
+    return bindings if isinstance(bindings, dict) else {}
+
+
+def _feishu_routing_bot_id(feishu: dict) -> str:
+    routing = feishu.get("routing", {}) if isinstance(feishu.get("routing"), dict) else {}
+    if routing.get("mode", "dedicated") != "dedicated":
+        return ""
+    return str(routing.get("bot_id") or "")
+
+
+def _feishu_extra_for_bot(feishu: dict, bot_id: str) -> dict:
+    binding = _feishu_bindings(feishu).get(bot_id)
+    if isinstance(binding, dict):
+        nested_extra = binding.get("extra") if isinstance(binding.get("extra"), dict) else {}
+        flat_extra = {k: v for k, v in binding.items() if k in {"app_id", "app_secret", "domain", "connection_mode", "group_policy", "allowed_users", "admins", "webhook_host", "webhook_port", "encrypt_key", "verification_token"}}
+        return {**flat_extra, **nested_extra}
+
+    if _feishu_routing_bot_id(feishu) == bot_id:
+        return dict(feishu.get("extra", {}) if isinstance(feishu.get("extra"), dict) else {})
+    return {}
+
+
+def _mask_feishu_extra(extra: dict) -> dict:
+    public_extra = dict(extra or {})
+    if "app_secret" in public_extra:
+        public_extra["app_secret"] = mask_secret(public_extra.get("app_secret"))
+    return public_extra
+
+
 class ConfigAdminService:
     """Read/write Web UI configuration without changing on-disk formats."""
 
@@ -246,7 +371,7 @@ class ConfigAdminService:
             "memory": self._public_memory(models_data.get("memory", {})),
             "proactive": self._public_proactive(proactive_raw),
             "life": self._public_life(life_raw),
-            "platforms": self._public_platforms(main_config.get("platforms", {})),
+            "platforms": self._public_platforms(main_config.get("platforms", {}), bot_id),
             "session_reset": self._public_session_reset(main_config.get("session_reset", {})),
             "persona_summary": self._public_persona(persona_dir),
             "diagnostics": self._diagnostics(bot),
@@ -281,7 +406,7 @@ class ConfigAdminService:
             self._reload_bot_runtime(bot)
 
         if "platforms" in body or "feishu" in body or "webhook" in body or "session_reset" in body:
-            self._save_main_config(body)
+            self._save_main_config(bot_id, body)
             changed.append(str(self.main_config_path))
             if "platforms" in body or "feishu" in body:
                 warnings.append("平台连接与飞书路由通常需要重启 Gateway 才会重新建立连接。")
@@ -392,20 +517,28 @@ class ConfigAdminService:
             "holidays": cfg.get("holidays", []),
         }
 
-    def _public_platforms(self, platforms: dict) -> list[dict]:
+    def _public_platforms(self, platforms: dict, bot_id: str) -> list[dict]:
         result = []
         for name in ("cli", "feishu", "webhook"):
             cfg = platforms.get(name, {}) if isinstance(platforms.get(name), dict) else {}
             public_cfg = dict(cfg)
             if name == "feishu":
-                public_cfg = dict(cfg)
-                extra = dict(public_cfg.get("extra", {}) or {})
-                if "app_secret" in extra:
-                    extra["app_secret"] = mask_secret(extra.get("app_secret"))
-                public_cfg["extra"] = extra
+                extra = _feishu_extra_for_bot(cfg, bot_id)
+                public_cfg = {
+                    "extra": _mask_feishu_extra(extra),
+                    "routing": {"mode": "dedicated", "bot_id": bot_id},
+                }
+                if extra:
+                    binding = _feishu_bindings(cfg).get(bot_id)
+                    if isinstance(binding, dict):
+                        for key in ("home_channel", "chat_id", "group_id"):
+                            if key in binding:
+                                public_cfg[key] = binding[key]
+                    elif isinstance(cfg.get("home_channel"), dict):
+                        public_cfg["home_channel"] = cfg["home_channel"]
             result.append({
                 "name": name,
-                "enabled": bool(cfg.get("enabled", name == "cli")),
+                "enabled": bool(extra) if name == "feishu" else bool(cfg.get("enabled", name == "cli")),
                 "config": public_cfg,
             })
         return result
@@ -569,12 +702,16 @@ class ConfigAdminService:
         _write_json(path, existing)
         return warnings
 
-    def _save_main_config(self, body: dict):
+    def _save_main_config(self, bot_id: str, body: dict):
         config_data = _load_yaml(self.main_config_path)
         platforms = config_data.setdefault("platforms", {})
         for platform in body.get("platforms", []) or []:
             name = platform.get("name")
             if not name:
+                continue
+            if name == "feishu":
+                # Feishu is bot-scoped in the Web UI. Handle it below so one
+                # bot page cannot leak its app_id into every other bot page.
                 continue
             current = dict(platforms.get(name, {}) if isinstance(platforms.get(name), dict) else {})
             current["enabled"] = bool(platform.get("enabled", current.get("enabled", name == "cli")))
@@ -584,22 +721,65 @@ class ConfigAdminService:
 
         feishu = body.get("feishu")
         if isinstance(feishu, dict):
-            current = dict(platforms.get("feishu", {}) if isinstance(platforms.get("feishu"), dict) else {})
-            current["enabled"] = bool(feishu.get("enabled", current.get("enabled", False)))
-            extra = dict(current.get("extra", {}) if isinstance(current.get("extra"), dict) else {})
-            incoming_extra = feishu.get("extra", {}) if isinstance(feishu.get("extra"), dict) else {}
-            for key, value in incoming_extra.items():
-                if key == "app_secret" and _is_masked_or_empty(value):
-                    continue
-                extra[key] = value
-            current["extra"] = extra
-            if isinstance(feishu.get("routing"), dict):
-                current["routing"] = _deep_merge(current.get("routing", {}), feishu["routing"])
-            platforms["feishu"] = current
+            platforms["feishu"] = self._save_feishu_for_bot(
+                bot_id,
+                dict(platforms.get("feishu", {}) if isinstance(platforms.get("feishu"), dict) else {}),
+                feishu,
+            )
 
         if isinstance(body.get("session_reset"), dict):
             config_data["session_reset"] = self._public_session_reset(body["session_reset"])
+        _validate_feishu_one_to_one_binding(platforms.get("feishu", {}))
         _write_yaml(self.main_config_path, config_data)
+
+    def _save_feishu_for_bot(self, bot_id: str, current: dict, incoming: dict) -> dict:
+        incoming_extra = incoming.get("extra", {}) if isinstance(incoming.get("extra"), dict) else {}
+        enabled = bool(incoming.get("enabled", current.get("enabled", False)))
+        has_incoming_app = bool(incoming_extra.get("app_id"))
+        has_incoming_secret = "app_secret" in incoming_extra and not _is_masked_or_empty(incoming_extra.get("app_secret"))
+
+        bindings = _feishu_bindings(current)
+        current_global_bot_id = _feishu_routing_bot_id(current)
+        use_binding = bool(bindings) or (current_global_bot_id and current_global_bot_id != bot_id)
+
+        if not enabled and not has_incoming_app and not has_incoming_secret:
+            if use_binding:
+                next_bindings = dict(bindings)
+                next_bindings.pop(bot_id, None)
+                current["bot_bindings"] = next_bindings
+                if not next_bindings and not current.get("extra"):
+                    current["enabled"] = False
+            elif current_global_bot_id == bot_id:
+                current.pop("extra", None)
+                current.pop("routing", None)
+                current["enabled"] = False
+            return current
+
+        current["enabled"] = True
+        existing_extra = _feishu_extra_for_bot(current, bot_id)
+        next_extra = dict(existing_extra)
+        for key, value in incoming_extra.items():
+            if key == "app_secret" and _is_masked_or_empty(value):
+                continue
+            next_extra[key] = value
+
+        if use_binding:
+            next_bindings = dict(bindings)
+            existing_binding = next_bindings.get(bot_id, {})
+            if not isinstance(existing_binding, dict):
+                existing_binding = {}
+            next_binding = {k: v for k, v in existing_binding.items() if k not in {"extra", "routing", "app_id", "app_secret"}}
+            next_binding["extra"] = next_extra
+            if isinstance(incoming.get("home_channel"), dict):
+                next_binding["home_channel"] = incoming["home_channel"]
+            next_bindings[bot_id] = next_binding
+            current["bot_bindings"] = next_bindings
+            return current
+
+        current["extra"] = next_extra
+        current["routing"] = {"mode": "dedicated", "bot_id": bot_id}
+        current.pop("bot_bindings", None)
+        return current
 
     def _save_persona(self, persona_dir: Path, persona_data: dict) -> list[str]:
         changed = []

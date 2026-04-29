@@ -1519,8 +1519,10 @@ class SystemTestSuite:
             REALTIME_DAILY_INTERVAL_SECONDS,
             REALTIME_MAJOR_INTERVAL_SECONDS,
             _deep_merge,
+            _extract_existing_feishu_binding,
             _merge_bot_entries,
         )
+        setup_text = (self.root / "ai_companion" / "setup.py").read_text(encoding="utf-8")
 
         model_existing = {
             "model": {"provider": "minimax", "temperature": 0.7},
@@ -1567,6 +1569,15 @@ class SystemTestSuite:
             overwritten_bot_ids={"suqing"},
         )
         default_life = LifeConfig()
+        existing_feishu = {
+            "extra": {"app_id": "global-app", "app_secret": "global-secret"},
+            "routing": {"mode": "dedicated", "bot_id": "suqing"},
+            "bot_bindings": {
+                "aiyue": {"extra": {"app_id": "aiyue-app", "app_secret": "aiyue-secret"}}
+            },
+        }
+        suqing_feishu = _extract_existing_feishu_binding(existing_feishu, "suqing")
+        aiyue_feishu = _extract_existing_feishu_binding(existing_feishu, "aiyue")
 
         passed = (
             merged_model["model"]["provider"] == "openai"
@@ -1587,6 +1598,13 @@ class SystemTestSuite:
             and default_life.daily_interval_seconds == 86400
             and default_life.major_interval_seconds == 604800
             and default_life.daily_interval == 86400
+            and "绑定飞书前必须先创建 Bot" in setup_text
+            and "绑定飞书 App 时必须同时绑定 Bot" in setup_text
+            and "是否为每个 Bot 单独配置主动唤醒活跃程度" in setup_text
+            and "是否为每个 Bot 单独配置人生轨迹参数" in setup_text
+            and "是否为多个 Bot 分别配置飞书 App" in setup_text
+            and suqing_feishu["extra"]["app_id"] == "global-app"
+            and aiyue_feishu["extra"]["app_id"] == "aiyue-app"
         )
         detail = (
             f"provider={merged_model['model']['provider']} "
@@ -1603,6 +1621,16 @@ class SystemTestSuite:
                     "major_interval_seconds": default_life.major_interval_seconds,
                     "daily_interval": default_life.daily_interval,
                     "major_interval": default_life.major_interval,
+                },
+                "setup_has_required_feishu_binding": "绑定飞书 App 时必须同时绑定 Bot" in setup_text,
+                "setup_has_per_bot_prompts": {
+                    "proactive": "是否为每个 Bot 单独配置主动唤醒活跃程度" in setup_text,
+                    "life": "是否为每个 Bot 单独配置人生轨迹参数" in setup_text,
+                    "feishu": "是否为多个 Bot 分别配置飞书 App" in setup_text,
+                },
+                "feishu_binding_lookup": {
+                    "suqing": suqing_feishu,
+                    "aiyue": aiyue_feishu,
                 },
                 "life_time_presets": LIFE_TIME_PRESETS,
             },
@@ -1792,14 +1820,17 @@ class SystemTestSuite:
         import yaml
 
         from ai_companion.config.loader import Config
-        from ai_companion.gateway.admin_services import ConfigAdminService
+        from ai_companion.gateway.admin_services import ConfigAdminService, _validate_feishu_one_to_one_binding
+        from ai_companion.gateway.cmd import _build_feishu_adapter_profiles
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_dir = root / "config"
             persona_dir = root / "data" / "bots" / "webbot" / "persona"
+            other_persona_dir = root / "data" / "bots" / "otherbot" / "persona"
             config_dir.mkdir(parents=True)
             persona_dir.mkdir(parents=True)
+            other_persona_dir.mkdir(parents=True)
 
             (config_dir / "models.yaml").write_text(
                 yaml.safe_dump(
@@ -1829,15 +1860,19 @@ class SystemTestSuite:
                 ),
                 encoding="utf-8",
             )
-            (persona_dir / "profile.json").write_text(
-                json.dumps({"name": "旧名", "age": 20, "occupation": "学生", "relationship_to_user": "朋友", "personality_tags": ["温柔"]}, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            (persona_dir / "backstory.json").write_text(json.dumps({"key_moments": ["初识"]}, ensure_ascii=False), encoding="utf-8")
-            (persona_dir / "values.json").write_text(json.dumps({"non_negotiable": ["真诚"]}, ensure_ascii=False), encoding="utf-8")
-            (persona_dir / "speaking_style.json").write_text(json.dumps({"tone": "自然"}, ensure_ascii=False), encoding="utf-8")
-            (persona_dir / "proactive.json").write_text(json.dumps({"enabled": True, "scheduler": {"idle_threshold_hours": 24}}, ensure_ascii=False), encoding="utf-8")
-            (persona_dir / "life.json").write_text(json.dumps({"time_ratio": 1, "daily_interval_seconds": 86400}, ensure_ascii=False), encoding="utf-8")
+            def write_persona_files(target: Path, name: str):
+                (target / "profile.json").write_text(
+                    json.dumps({"name": name, "age": 20, "occupation": "学生", "relationship_to_user": "朋友", "personality_tags": ["温柔"]}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                (target / "backstory.json").write_text(json.dumps({"key_moments": ["初识"]}, ensure_ascii=False), encoding="utf-8")
+                (target / "values.json").write_text(json.dumps({"non_negotiable": ["真诚"]}, ensure_ascii=False), encoding="utf-8")
+                (target / "speaking_style.json").write_text(json.dumps({"tone": "自然"}, ensure_ascii=False), encoding="utf-8")
+                (target / "proactive.json").write_text(json.dumps({"enabled": True, "scheduler": {"idle_threshold_hours": 24}}, ensure_ascii=False), encoding="utf-8")
+                (target / "life.json").write_text(json.dumps({"time_ratio": 1, "daily_interval_seconds": 86400}, ensure_ascii=False), encoding="utf-8")
+
+            write_persona_files(persona_dir, "旧名")
+            write_persona_files(other_persona_dir, "另一个 Bot")
 
             config = Config(config_dir=config_dir)
             refresh = {"count": 0}
@@ -1851,9 +1886,16 @@ class SystemTestSuite:
                 persona_loader=SimpleNamespace(dir=persona_dir),
                 _refresh_runtime_settings=refresh_runtime,
             )
-            manager = SimpleNamespace(get_bot=lambda bot_id: bot if bot_id == "webbot" else None)
+            other_bot = SimpleNamespace(
+                id="otherbot",
+                name="另一个 Bot",
+                persona_loader=SimpleNamespace(dir=other_persona_dir),
+                _refresh_runtime_settings=lambda: None,
+            )
+            manager = SimpleNamespace(get_bot=lambda bot_id: {"webbot": bot, "otherbot": other_bot}.get(bot_id))
             service = ConfigAdminService(config, manager)
             before = service.get_bot_config("webbot")
+            other_before = service.get_bot_config("otherbot")
             result = service.update_bot_config(
                 "webbot",
                 {
@@ -1895,7 +1937,7 @@ class SystemTestSuite:
                     "feishu": {
                         "enabled": True,
                         "extra": {"app_id": "new-app", "app_secret": before["platforms"][1]["config"]["extra"]["app_secret"], "group_policy": "allowlist"},
-                        "routing": {"mode": "chat_routed", "default_bot": "webbot"},
+                        "routing": {"mode": "dedicated", "bot_id": "webbot"},
                     },
                     "session_reset": {"mode": "idle", "at_hour": 3, "idle_minutes": 45, "notify": False},
                     "persona": {
@@ -1906,6 +1948,54 @@ class SystemTestSuite:
                     },
                 },
             )
+            other_result = service.update_bot_config(
+                "otherbot",
+                {
+                    "platforms": [{"name": "feishu", "enabled": True, "config": {}}],
+                    "feishu": {
+                        "enabled": True,
+                        "extra": {"app_id": "other-app", "app_secret": "other-secret", "group_policy": "allowlist"},
+                        "routing": {"mode": "dedicated", "bot_id": "otherbot"},
+                    },
+                },
+            )
+            other_after = service.get_bot_config("otherbot")
+            web_after = service.get_bot_config("webbot")
+            invalid_error = ""
+            try:
+                service.update_bot_config(
+                    "otherbot",
+                    {
+                        "feishu": {
+                            "enabled": True,
+                            "extra": {"app_id": "new-app", "app_secret": "other-secret"},
+                            "routing": {"mode": "dedicated", "bot_id": "otherbot"},
+                        },
+                    },
+                )
+            except ValueError as e:
+                invalid_error = str(e)
+            missing_app_error = ""
+            try:
+                _validate_feishu_one_to_one_binding(
+                    {"enabled": True, "routing": {"mode": "dedicated", "bot_id": "webbot"}}
+                )
+            except ValueError as e:
+                missing_app_error = str(e)
+            bot_double_error = ""
+            try:
+                _build_feishu_adapter_profiles(
+                    {
+                        "enabled": True,
+                        "extra": {"app_id": "app-a", "app_secret": "secret-a"},
+                        "routing": {"mode": "dedicated", "bot_id": "webbot"},
+                        "bot_bindings": {
+                            "webbot": {"extra": {"app_id": "app-b", "app_secret": "secret-b"}}
+                        },
+                    }
+                )
+            except ValueError as e:
+                bot_double_error = str(e)
 
             models = yaml.safe_load((config_dir / "models.yaml").read_text(encoding="utf-8"))
             main_cfg = yaml.safe_load((config_dir / "config.yaml").read_text(encoding="utf-8"))
@@ -1927,6 +2017,15 @@ class SystemTestSuite:
             and life["event_policy"]["unexpected_event_probability"] == 0.02
             and main_cfg["platforms"]["feishu"]["extra"]["app_secret"] == "keep-secret"
             and main_cfg["platforms"]["feishu"]["extra"]["app_id"] == "new-app"
+            and other_before["platforms"][1]["enabled"] is False
+            and other_before["platforms"][1]["config"]["extra"].get("app_id") is None
+            and other_result["ok"] is True
+            and main_cfg["platforms"]["feishu"]["bot_bindings"]["otherbot"]["extra"]["app_id"] == "other-app"
+            and other_after["platforms"][1]["config"]["extra"]["app_id"] == "other-app"
+            and web_after["platforms"][1]["config"]["extra"]["app_id"] == "new-app"
+            and "同时绑定了多个 Bot" in invalid_error
+            and "必须填写 App ID" in missing_app_error
+            and "同时绑定了多个 App" in bot_double_error
             and main_cfg["session_reset"]["mode"] == "idle"
             and profile["name"] == "新名"
             and style["口头禅"] == ["嗯"]
@@ -1936,9 +2035,15 @@ class SystemTestSuite:
         log = json.dumps(
             {
                 "before": before,
+                "other_before": other_before,
+                "other_after": other_after,
+                "web_after": web_after,
                 "result_changed_files": result.get("changed_files"),
                 "models": models,
                 "main_cfg": main_cfg,
+                "invalid_error": invalid_error,
+                "missing_app_error": missing_app_error,
+                "bot_double_error": bot_double_error,
                 "proactive": proactive,
                 "life": life,
                 "profile": profile,

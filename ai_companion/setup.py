@@ -188,6 +188,180 @@ def _build_life_time_config(existing_life: dict | None = None) -> dict:
     }
 
 
+def _bot_persona_file(data_dir: Path, bot_id: str, filename: str) -> Path:
+    return data_dir / "data" / "bots" / bot_id / "persona" / filename
+
+
+def _prompt_proactive_config(existing_proactive: dict | None = None, bot_label: str = "") -> dict:
+    existing_proactive = existing_proactive or {}
+    if bot_label:
+        console.print(f"\n[cyan]配置 {bot_label} 的主动唤醒[/cyan]")
+
+    scheduler = existing_proactive.get("scheduler", {}) if isinstance(existing_proactive.get("scheduler"), dict) else {}
+    triggers = existing_proactive.get("triggers", {}) if isinstance(existing_proactive.get("triggers"), dict) else {}
+    emotion = triggers.get("emotion_trigger", {}) if isinstance(triggers.get("emotion_trigger"), dict) else {}
+
+    default_idle = Prompt.ask(
+        "空闲触发阈值（小时）",
+        default=str(scheduler.get("idle_threshold_hours", existing_proactive.get("idle_threshold_hours", 24))),
+    )
+    default_max_daily = Prompt.ask(
+        "每日最大主动消息数",
+        default=str(scheduler.get("max_daily", existing_proactive.get("max_daily", 5))),
+    )
+    default_min_interval = Prompt.ask(
+        "最小发送间隔（小时）",
+        default=str(scheduler.get("min_interval_hours", existing_proactive.get("min_interval_hours", 4))),
+    )
+
+    console.print("\n发送平台:")
+    console.print("  1. CLI       - 终端输出（默认）")
+    console.print("  2. 飞书     - 通过飞书机器人发送")
+    console.print("  3. Webhook   - 通过 Webhook 发送")
+
+    platform = existing_proactive.get("platform", {}) if isinstance(existing_proactive.get("platform"), dict) else {}
+    existing_platform_type = platform.get("type", existing_proactive.get("platform_type", "cli"))
+    platform_default = {"cli": "1", "feishu": "2", "webhook": "3"}.get(existing_platform_type, "1")
+    platform_choice = Prompt.ask("选择发送平台", choices=["1", "2", "3"], default=platform_default)
+    platform_type = {"1": "cli", "2": "feishu", "3": "webhook"}[platform_choice]
+    console.print(f"选择: [green]{platform_type}[/green]")
+
+    console.print("\n主动唤醒模式:")
+    console.print("  1. 启用 - Bot 会主动联系你")
+    console.print("  2. 禁用 - Bot 不会主动发送消息")
+
+    existing_mode = existing_proactive.get("mode", "active")
+    mode_choice = Prompt.ask("选择模式", choices=["1", "2"], default="1" if existing_mode == "active" else "2")
+    proactive_mode = {"1": "active", "2": "silent"}[mode_choice]
+
+    proactive_config = {
+        "enabled": True,
+        "mode": proactive_mode,
+        "scheduler": {
+            "check_interval_seconds": int(scheduler.get("check_interval_seconds", existing_proactive.get("check_interval", 600))),
+            "idle_threshold_hours": int(default_idle),
+            "min_interval_hours": float(default_min_interval),
+            "max_daily": int(default_max_daily),
+            "max_idle_days": int(scheduler.get("max_idle_days", existing_proactive.get("max_idle_days", 7))),
+        },
+        "triggers": {
+            "idle_reminder": {
+                "enabled": True,
+                "idle_hours": int(default_idle),
+            },
+            "emotion_trigger": {
+                "enabled": True,
+                "keywords": emotion.get("keywords", existing_proactive.get("emotion_keywords", ["难过", "伤心", "生气", "委屈", "累"])),
+                "response_delay_minutes": int(emotion.get("response_delay_minutes", existing_proactive.get("emotion_response_delay_minutes", 30))),
+            },
+        },
+        "platform": {
+            "type": platform_type,
+        },
+    }
+    if platform_type == "webhook":
+        existing_webhook = platform.get("webhook_url", existing_proactive.get("webhook_url", ""))
+        proactive_config["platform"]["webhook_url"] = Prompt.ask("Webhook URL", default=existing_webhook)
+
+    return proactive_config
+
+
+def _extract_existing_feishu_binding(existing_feishu: dict, bot_id: str) -> dict:
+    bindings = existing_feishu.get("bot_bindings")
+    if bindings is None:
+        bindings = existing_feishu.get("bots")
+    if isinstance(bindings, dict) and isinstance(bindings.get(bot_id), dict):
+        return bindings[bot_id]
+
+    routing = existing_feishu.get("routing", {}) if isinstance(existing_feishu.get("routing"), dict) else {}
+    if routing.get("bot_id") == bot_id:
+        return {"extra": existing_feishu.get("extra", {}) or {}}
+    return {}
+
+
+def _prompt_feishu_extra(existing_extra: dict | None = None, bot_label: str = "") -> dict:
+    existing_extra = existing_extra or {}
+    if bot_label:
+        console.print(f"\n[cyan]配置 {bot_label} 的飞书 App[/cyan]")
+
+    app_id = Prompt.ask("请输入 App ID (cli_xxxxx)", default=existing_extra.get("app_id", ""))
+    while not app_id.strip():
+        console.print("[red]飞书 App ID 不能为空。绑定飞书必须同时绑定 App 和 Bot。[/red]")
+        app_id = Prompt.ask("请输入 App ID (cli_xxxxx)", default=existing_extra.get("app_id", ""))
+
+    app_secret = Prompt.ask("请输入 App Secret", password=True, default="")
+    while not app_secret.strip() and not str(existing_extra.get("app_secret", "")).strip():
+        console.print("[red]飞书 App Secret 不能为空。[/red]")
+        app_secret = Prompt.ask("请输入 App Secret", password=True, default="")
+
+    console.print("\n连接模式:")
+    console.print("  1. WebSocket - 长连接（推荐，生产环境使用）")
+    console.print("  2. Webhook   - 需要公网回调地址")
+    connection_mode = Prompt.ask(
+        "\n请选择连接模式",
+        choices=["1", "2"],
+        default="1" if existing_extra.get("connection_mode") != "webhook" else "2",
+    )
+    connection_mode = "websocket" if connection_mode == "1" else "webhook"
+
+    webhook_host = None
+    webhook_port = None
+    if connection_mode == "webhook":
+        webhook_host = Prompt.ask("Webhook 监听地址", default=existing_extra.get("webhook_host", "0.0.0.0"))
+        webhook_port = Prompt.ask("Webhook 监听端口", default=str(existing_extra.get("webhook_port", 8765)))
+
+    console.print("\n群组策略:")
+    console.print("  1. open - 完全开放")
+    console.print("  2. allowlist - 仅白名单用户")
+    console.print("  3. blacklist - 黑名单除外")
+    console.print("  4. admin_only - 仅管理员")
+
+    existing_policy = existing_extra.get("group_policy", "allowlist")
+    policy_num = {"open": "1", "allowlist": "2", "blacklist": "3", "admin_only": "4"}.get(existing_policy, "2")
+    policy_choice = Prompt.ask("请选择策略", choices=["1", "2", "3", "4"], default=policy_num)
+    group_policy = {"1": "open", "2": "allowlist", "3": "blacklist", "4": "admin_only"}[policy_choice]
+
+    allowed_users = list(existing_extra.get("allowed_users", []))
+    if group_policy in ("allowlist", "blacklist", "admin_only"):
+        console.print("\n允许的用户 Open ID（留空结束，输入 . 保留现有）:")
+        while True:
+            user = Prompt.ask("用户 Open ID", default="")
+            if not user:
+                break
+            if user == ".":
+                break
+            allowed_users.append(user)
+
+    admins = list(existing_extra.get("admins", []))
+    if group_policy == "admin_only":
+        console.print("\n管理员 Open ID（留空结束，输入 . 保留现有）:")
+        while True:
+            admin = Prompt.ask("管理员 Open ID", default="")
+            if not admin:
+                break
+            if admin == ".":
+                break
+            admins.append(admin)
+
+    feishu_extra = dict(existing_extra)
+    feishu_extra["app_id"] = app_id.strip()
+    if app_secret:
+        feishu_extra["app_secret"] = app_secret
+    feishu_extra["domain"] = "feishu"
+    feishu_extra["connection_mode"] = connection_mode
+    feishu_extra["group_policy"] = group_policy
+
+    if webhook_host:
+        feishu_extra["webhook_host"] = webhook_host
+    if webhook_port:
+        feishu_extra["webhook_port"] = int(webhook_port)
+    if allowed_users:
+        feishu_extra["allowed_users"] = allowed_users
+    if admins:
+        feishu_extra["admins"] = admins
+    return feishu_extra
+
+
 def get_data_dir() -> Path:
     """获取 AI Companion 数据目录"""
     if sys.platform == "win32":
@@ -400,81 +574,24 @@ async def run_setup():
     proactive_default = bool(created_bots) or not bool(existing_bots)
 
     if Confirm.ask("是否配置 Bot 主动唤醒功能?", default=proactive_default):
-        sample_scheduler = sample_proactive.get("scheduler", {}) if isinstance(sample_proactive.get("scheduler"), dict) else {}
-        sample_triggers = sample_proactive.get("triggers", {}) if isinstance(sample_proactive.get("triggers"), dict) else {}
-        sample_emotion = sample_triggers.get("emotion_trigger", {}) if isinstance(sample_triggers.get("emotion_trigger"), dict) else {}
-
-        default_idle = Prompt.ask(
-            "空闲触发阈值（小时）",
-            default=str(sample_scheduler.get("idle_threshold_hours", sample_proactive.get("idle_threshold_hours", 24))),
+        per_bot_proactive = len(target_bots) > 1 and Confirm.ask(
+            "是否为每个 Bot 单独配置主动唤醒活跃程度?",
+            default=True,
         )
-        default_max_daily = Prompt.ask(
-            "每日最大主动消息数",
-            default=str(sample_scheduler.get("max_daily", sample_proactive.get("max_daily", 5))),
-        )
-        default_min_interval = Prompt.ask(
-            "最小发送间隔（小时）",
-            default=str(sample_scheduler.get("min_interval_hours", sample_proactive.get("min_interval_hours", 4))),
-        )
-
-        console.print("\n发送平台:")
-        console.print("  1. CLI       - 终端输出（默认）")
-        console.print("  2. 飞书     - 通过飞书机器人发送")
-        console.print("  3. Webhook   - 通过 Webhook 发送")
-
-        sample_platform = sample_proactive.get("platform", {}) if isinstance(sample_proactive.get("platform"), dict) else {}
-        existing_platform_type = sample_platform.get("type", sample_proactive.get("platform_type", "cli"))
-        platform_default = {"cli": "1", "feishu": "2", "webhook": "3"}.get(existing_platform_type, "1")
-        platform_choice = Prompt.ask("选择发送平台", choices=["1", "2", "3"], default=platform_default)
-        platform_map = {"1": "cli", "2": "feishu", "3": "webhook"}
-        platform_type = platform_map[platform_choice]
-        console.print(f"选择: [green]{platform_choice}[/green]")
-
-        console.print("\n主动唤醒模式:")
-        console.print("  1. 启用 - Bot 会主动联系你")
-        console.print("  2. 禁用 - Bot 不会主动发送消息")
-
-        existing_mode = sample_proactive.get("mode", "active")
-        mode_choice = Prompt.ask("选择模式", choices=["1", "2"], default="1" if existing_mode == "active" else "2")
-        mode_map = {"1": "active", "2": "silent"}
-        proactive_mode = mode_map[mode_choice]
-
-        proactive_config = {
-            "enabled": True,
-            "mode": proactive_mode,
-            "scheduler": {
-                "check_interval_seconds": int(sample_scheduler.get("check_interval_seconds", sample_proactive.get("check_interval", 600))),
-                "idle_threshold_hours": int(default_idle),
-                "min_interval_hours": float(default_min_interval),
-                "max_daily": int(default_max_daily),
-                "max_idle_days": int(sample_scheduler.get("max_idle_days", sample_proactive.get("max_idle_days", 7))),
-            },
-            "triggers": {
-                "idle_reminder": {
-                    "enabled": True,
-                    "idle_hours": int(default_idle),
-                },
-                "emotion_trigger": {
-                    "enabled": True,
-                    "keywords": sample_emotion.get("keywords", sample_proactive.get("emotion_keywords", ["难过", "伤心", "生气", "委屈", "累"])),
-                    "response_delay_minutes": int(sample_emotion.get("response_delay_minutes", sample_proactive.get("emotion_response_delay_minutes", 30))),
-                },
-            },
-            "platform": {
-                "type": platform_type,
-            },
-        }
-        if platform_type == "webhook":
-            existing_webhook = sample_platform.get("webhook_url", sample_proactive.get("webhook_url", ""))
-            proactive_config["platform"]["webhook_url"] = Prompt.ask("Webhook URL", default=existing_webhook)
-
-        # 为目标 Bot 合并更新 proactive.json，未配置字段保留旧值
-        for b in target_bots:
-            proactive_path = data_dir / "data" / "bots" / b["id"] / "persona" / "proactive.json"
-            existing = _load_structured_file(proactive_path)
-            merged = _deep_merge(existing, proactive_config)
-            _write_json_file(proactive_path, merged)
-            console.print(f"✓ [green]{b['name']}[/green] 主动唤醒已配置")
+        if per_bot_proactive:
+            for b in target_bots:
+                proactive_path = _bot_persona_file(data_dir, b["id"], "proactive.json")
+                existing = _load_structured_file(proactive_path)
+                proactive_config = _prompt_proactive_config(existing, b["name"])
+                _write_json_file(proactive_path, _deep_merge(existing, proactive_config))
+                console.print(f"✓ [green]{b['name']}[/green] 主动唤醒已配置")
+        else:
+            proactive_config = _prompt_proactive_config(sample_proactive)
+            for b in target_bots:
+                proactive_path = _bot_persona_file(data_dir, b["id"], "proactive.json")
+                existing = _load_structured_file(proactive_path)
+                _write_json_file(proactive_path, _deep_merge(existing, proactive_config))
+                console.print(f"✓ [green]{b['name']}[/green] 主动唤醒已配置")
         console.print("[dim]可在 data/bots/{bot_id}/persona/proactive.json 中进一步调整[/dim]\n")
     else:
         console.print("[dim]跳过主动唤醒配置[/dim]\n")
@@ -491,14 +608,25 @@ async def run_setup():
 
     if Confirm.ask("是否配置 Bot 人生轨迹（LifeEngine）?", default=life_default):
         console.print("[dim]默认推荐“现实同步 1:1”：现实 1 天推进 1 个 Bot 日。需要观察测试时再选择加速档。[/dim]")
-        life_config = _build_life_time_config(sample_life)
-
-        for b in target_bots:
-            life_path = data_dir / "data" / "bots" / b["id"] / "persona" / "life.json"
-            existing = _load_structured_file(life_path)
-            merged = _deep_merge(existing, life_config)
-            _write_json_file(life_path, merged)
-            console.print(f"✓ [green]{b['name']}[/green] 人生轨迹已配置")
+        per_bot_life = len(target_bots) > 1 and Confirm.ask(
+            "是否为每个 Bot 单独配置人生轨迹参数?",
+            default=True,
+        )
+        if per_bot_life:
+            for b in target_bots:
+                console.print(f"\n[cyan]配置 {b['name']} 的人生轨迹[/cyan]")
+                life_path = _bot_persona_file(data_dir, b["id"], "life.json")
+                existing = _load_structured_file(life_path)
+                life_config = _build_life_time_config(existing)
+                _write_json_file(life_path, _deep_merge(existing, life_config))
+                console.print(f"✓ [green]{b['name']}[/green] 人生轨迹已配置")
+        else:
+            life_config = _build_life_time_config(sample_life)
+            for b in target_bots:
+                life_path = _bot_persona_file(data_dir, b["id"], "life.json")
+                existing = _load_structured_file(life_path)
+                _write_json_file(life_path, _deep_merge(existing, life_config))
+                console.print(f"✓ [green]{b['name']}[/green] 人生轨迹已配置")
         console.print("[dim]可在 data/bots/{bot_id}/persona/life.json 中进一步调整[/dim]\n")
     else:
         console.print("[dim]跳过人生轨迹配置[/dim]\n")
@@ -520,63 +648,23 @@ async def run_setup():
 
     if Confirm.ask("是否配置飞书机器人?", default=bool(existing_feishu)):
         # 获取现有值作为默认值
-        existing_extra = existing_feishu.get("extra", {}) or {}
-        existing_routing = existing_feishu.get("routing", {}) or {}
+        feishu_binding_bots = [
+            {"id": b["id"], "name": _bot_label(b)}
+            for b in bots_config.get("bots", [])
+            if isinstance(b, dict) and b.get("id")
+        ]
+        if not feishu_binding_bots:
+            console.print("[red]✗ 绑定飞书前必须先创建 Bot，请重新运行 setup 并添加 Bot。[/red]\n")
+            return
 
-        app_id = Prompt.ask("请输入 App ID (cli_xxxxx)", default=existing_extra.get("app_id", ""))
-        app_secret = Prompt.ask("请输入 App Secret", password=True, default="")
+        # 路由配置：飞书强制一个 App 只绑定一个 Bot。
+        console.print("\n飞书路由:")
+        console.print("  绑定飞书 App 时必须同时绑定 Bot；多个 Bot 请分别配置不同飞书 App。")
 
-        console.print("\n连接模式:")
-        console.print("  1. WebSocket - 长连接（推荐，生产环境使用）")
-        console.print("  2. Webhook   - 需要公网回调地址")
-        connection_mode = Prompt.ask(
-            "\n请选择连接模式",
-            choices=["1", "2"],
-            default="1" if existing_extra.get("connection_mode") != "webhook" else "2"
+        per_bot_feishu = len(feishu_binding_bots) > 1 and Confirm.ask(
+            "是否为多个 Bot 分别配置飞书 App?",
+            default=True,
         )
-        connection_mode = "websocket" if connection_mode == "1" else "webhook"
-
-        if connection_mode == "webhook":
-            webhook_host = Prompt.ask("Webhook 监听地址", default=existing_extra.get("webhook_host", "0.0.0.0"))
-            webhook_port = Prompt.ask("Webhook 监听端口", default=str(existing_extra.get("webhook_port", 8765)))
-        else:
-            webhook_host = None
-            webhook_port = None
-
-        # 群组策略
-        console.print("\n群组策略:")
-        console.print("  1. open - 完全开放")
-        console.print("  2. allowlist - 仅白名单用户")
-        console.print("  3. blacklist - 黑名单除外")
-        console.print("  4. admin_only - 仅管理员")
-
-        existing_policy = existing_extra.get("group_policy", "allowlist")
-        policy_num = {"open": "1", "allowlist": "2", "blacklist": "3", "admin_only": "4"}.get(existing_policy, "2")
-        policy_choice = Prompt.ask("请选择策略", choices=["1", "2", "3", "4"], default=policy_num)
-        policy_map = {"1": "open", "2": "allowlist", "3": "blacklist", "4": "admin_only"}
-        group_policy = policy_map[policy_choice]
-
-        allowed_users = list(existing_extra.get("allowed_users", []))
-        if group_policy in ("allowlist", "blacklist", "admin_only"):
-            console.print("\n允许的用户 Open ID（留空结束，输入 . 保留现有）:")
-            while True:
-                user = Prompt.ask("用户 Open ID", default="")
-                if not user:
-                    break
-                if user == ".":
-                    break
-                allowed_users.append(user)
-
-        admins = list(existing_extra.get("admins", []))
-        if group_policy == "admin_only":
-            console.print("\n管理员 Open ID（留空结束，输入 . 保留现有）:")
-            while True:
-                admin = Prompt.ask("管理员 Open ID", default="")
-                if not admin:
-                    break
-                if admin == ".":
-                    break
-                admins.append(admin)
 
         # 确保 platforms 结构存在
         if "platforms" not in config_data:
@@ -586,79 +674,57 @@ async def run_setup():
         else:
             config_data["platforms"]["feishu"]["enabled"] = True
 
-        # 更新飞书配置（合并新旧值）
-        feishu_extra = dict(existing_extra)
-        if app_id:
-            feishu_extra["app_id"] = app_id
-        if app_secret:
-            feishu_extra["app_secret"] = app_secret
-        feishu_extra["domain"] = "feishu"
-        feishu_extra["connection_mode"] = connection_mode
-        feishu_extra["group_policy"] = group_policy
+        feishu_config = config_data["platforms"]["feishu"]
+        if per_bot_feishu:
+            feishu_config.pop("extra", None)
+            feishu_config.pop("routing", None)
+            existing_bindings = existing_feishu.get("bot_bindings")
+            if existing_bindings is None:
+                existing_bindings = existing_feishu.get("bots")
+            bot_bindings = dict(existing_bindings or {}) if isinstance(existing_bindings, dict) else {}
+            configured_count = 0
+            for b in feishu_binding_bots:
+                binding = _extract_existing_feishu_binding(existing_feishu, b["id"])
+                existing_extra = binding.get("extra", {}) if isinstance(binding.get("extra"), dict) else {}
+                bind_default = bool(existing_extra.get("app_id"))
+                if Confirm.ask(f"是否为 {b['name']} ({b['id']}) 绑定飞书 App?", default=bind_default):
+                    bot_bindings[b["id"]] = {
+                        **{k: v for k, v in binding.items() if k not in {"extra", "routing"}},
+                        "extra": _prompt_feishu_extra(existing_extra, b["name"]),
+                    }
+                    configured_count += 1
+                elif b["id"] in bot_bindings and Confirm.ask(f"是否移除 {b['name']} 现有飞书绑定?", default=False):
+                    bot_bindings.pop(b["id"], None)
 
-        if webhook_host:
-            feishu_extra["webhook_host"] = webhook_host
-        if webhook_port:
-            feishu_extra["webhook_port"] = int(webhook_port)
-
-        if allowed_users:
-            feishu_extra["allowed_users"] = allowed_users
-        if admins:
-            feishu_extra["admins"] = admins
-
-        config_data["platforms"]["feishu"]["extra"] = feishu_extra
-
-        # 路由配置
-        console.print("\n路由模式:")
-        console.print("  1. dedicated - 所有消息发给指定的一个 Bot")
-        console.print("  2. chat_routed - 根据群聊 ID 匹配不同 Bot")
-
-        existing_mode = existing_routing.get("mode", "dedicated")
-        routing_choice = Prompt.ask("请选择路由模式", choices=["1", "2"], default="1" if existing_mode == "dedicated" else "2")
-        routing_mode = "dedicated" if routing_choice == "1" else "chat_routed"
-
-        routing_config = dict(existing_routing)
-        routing_config["mode"] = routing_mode
-
-        if routing_mode == "dedicated":
+            if configured_count == 0 and not bot_bindings:
+                console.print("[yellow]未配置任何 Bot 的飞书绑定，跳过飞书配置写入。[/yellow]\n")
+                feishu_config["enabled"] = False
+            else:
+                feishu_config["enabled"] = True
+                feishu_config["bot_bindings"] = bot_bindings
+        else:
+            existing_extra = existing_feishu.get("extra", {}) or {}
+            existing_routing = existing_feishu.get("routing", {}) or {}
+            routing_config = {"mode": "dedicated"}
             existing_bot_id = existing_routing.get("bot_id", "")
-            if target_bots:
-                console.print(f"\n请选择 Bot（默认: {existing_bot_id or target_bots[0]['name']}）:")
-                for i, b in enumerate(target_bots, 1):
-                    console.print(f"  {i}. {b['name']} ({b['id']})")
-                bot_choice = Prompt.ask("选择", choices=[str(i) for i in range(1, len(target_bots) + 1)], default="1")
-                routing_config["bot_id"] = target_bots[int(bot_choice) - 1]["id"]
-        else:  # chat_routed
-            if target_bots:
-                existing_default_bot = existing_routing.get("default_bot", "")
-                console.print(f"\n请选择默认 Bot（默认: {existing_default_bot or target_bots[0]['name']}）:")
-                for i, b in enumerate(target_bots, 1):
-                    console.print(f"  {i}. {b['name']} ({b['id']})")
-                bot_choice = Prompt.ask("选择", choices=[str(i) for i in range(1, len(target_bots) + 1)], default="1")
-                routing_config["default_bot"] = target_bots[int(bot_choice) - 1]["id"]
-
-            existing_group_map = existing_routing.get("group_bot_map", {})
-            console.print("\n群聊 ID -> Bot 映射（留空结束，输入 . 保留现有）:")
-            console.print("  格式: oc_xxxxx1,bot_id")
-            group_bot_map = {}
-            for chat_id, bot_id in existing_group_map.items():
-                console.print(f"  现有: {chat_id} -> {bot_id}")
-            while True:
-                line = Prompt.ask("映射")
-                if not line:
+            default_index = 1
+            for i, b in enumerate(feishu_binding_bots, 1):
+                if b["id"] == existing_bot_id:
+                    default_index = i
                     break
-                if line == ".":
-                    group_bot_map = dict(existing_group_map)
-                    break
-                parts = line.split(",")
-                if len(parts) == 2:
-                    chat_id, bot_id = parts[0].strip(), parts[1].strip()
-                    if chat_id and bot_id:
-                        group_bot_map[chat_id] = bot_id
-            if group_bot_map:
-                routing_config["group_bot_map"] = group_bot_map
-
-        config_data["platforms"]["feishu"]["routing"] = routing_config
+            console.print(f"\n请选择这个飞书 App 绑定的 Bot（默认: {feishu_binding_bots[default_index - 1]['name']}）:")
+            for i, b in enumerate(feishu_binding_bots, 1):
+                console.print(f"  {i}. {b['name']} ({b['id']})")
+            bot_choice = Prompt.ask(
+                "选择",
+                choices=[str(i) for i in range(1, len(feishu_binding_bots) + 1)],
+                default=str(default_index),
+            )
+            routing_config["bot_id"] = feishu_binding_bots[int(bot_choice) - 1]["id"]
+            feishu_config["enabled"] = True
+            feishu_config["extra"] = _prompt_feishu_extra(existing_extra)
+            feishu_config["routing"] = routing_config
+            feishu_config.pop("bot_bindings", None)
 
         # 写回 config.yaml
         config_path.write_text(yaml.dump(config_data, allow_unicode=True, sort_keys=False), encoding="utf-8")

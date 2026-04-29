@@ -235,7 +235,7 @@ platforms:
       app_secret: "${FEISHU_APP_SECRET}"
       connection_mode: "websocket"  # websocket 或 webhook
     routing:
-      mode: "dedicated"  # dedicated 或 chat_routed
+      mode: "dedicated"  # 飞书 App 与 Bot 固定一对一绑定
       bot_id: "suqing"
 
 # 日志配置
@@ -1184,15 +1184,7 @@ routing:
   bot_id: suqing
 ```
 
-**chat_routed 模式**（群聊）：
-```yaml
-routing:
-  mode: chat_routed
-  default_bot: suqing
-  group_bot_map:
-    "oc群ID1": aiyue
-    "oc群ID2": suqing
-```
+飞书通道只支持 `dedicated`。一个飞书 App 只能绑定一个 Bot，一个 Bot 也只能绑定一个飞书 App；不要使用 `chat_routed` 或 `group_bot_map` 把同一个飞书应用路由到多个 Bot。
 
 ### 7.3 群组策略
 
@@ -1258,7 +1250,59 @@ platforms:
       bot_id: "suqing"
 ```
 
-### 7.6 飞书环境变量汇总
+### 7.6 Bot 绑定与固定会话配置
+
+飞书网关强制 **飞书 App 与 Bot 双向一对一绑定**。不要使用 `routing.mode: chat_routed` 或 `group_bot_map` 把同一个飞书应用路由到多个 Bot，也不要让同一个 Bot 绑定多个飞书 App；如果需要多个 Bot 接入飞书，请为每个 Bot 创建独立的飞书应用，并在 `bot_bindings` 里配置各自的 `app_id/app_secret`。
+
+单 Bot 使用全局飞书应用时，可以这样配置固定会话：
+
+```yaml
+platforms:
+  feishu:
+    enabled: true
+    extra:
+      app_id: "${FEISHU_APP_ID}"
+      app_secret: "${FEISHU_APP_SECRET}"
+      connection_mode: "websocket"
+      domain: "feishu"
+      group_policy: "open"
+    bot_bindings:
+      suqing:
+        home_channel:
+          chat_id: "oc_suqing_chat_id"
+          name: "苏晴"
+```
+
+多 Bot 使用飞书时，每个 Bot 必须覆盖成不同的飞书应用：
+
+```yaml
+platforms:
+  feishu:
+    enabled: true
+    bot_bindings:
+      suqing:
+        extra:
+          app_id: "cli_xxx"
+          app_secret: "${SUQING_FEISHU_APP_SECRET}"
+          connection_mode: "websocket"
+          domain: "feishu"
+        home_channel:
+          chat_id: "oc_xxx"
+          name: "苏晴"
+      aiyue:
+        extra:
+          app_id: "cli_yyy"
+          app_secret: "${AIYUE_FEISHU_APP_SECRET}"
+          connection_mode: "websocket"
+          domain: "feishu"
+        home_channel:
+          chat_id: "oc_yyy"
+          name: "阿月"
+```
+
+`home_channel.chat_id` 通常是 `oc_xxx` 这类飞书会话 ID。没有配置固定目标时，网关仍会在收到某个会话的入站消息后，把该会话作为当前运行时的主动消息目标；但重启后不会保留，建议正式使用时写入 `bot_bindings`。
+
+### 7.7 飞书环境变量汇总
 
 | 环境变量 | 说明 |
 |----------|------|

@@ -740,8 +740,24 @@ def get_data_dir() -> Path:
     return resolve_data_dir()
 
 
-def load_feishu_config() -> dict:
-    """从 ~/.ai-companion/config/config.yaml 加载飞书配置"""
+_FEISHU_EXTRA_KEYS = {
+    "app_id",
+    "app_secret",
+    "domain",
+    "connection_mode",
+    "group_policy",
+    "allowed_users",
+    "admins",
+    "webhook_host",
+    "webhook_port",
+    "webhook_path",
+    "encrypt_key",
+    "verification_token",
+}
+
+
+def load_feishu_platform_config() -> dict | None:
+    """从 ~/.ai-companion/config/config.yaml 加载飞书平台完整配置。"""
     config_path = Path.home() / ".ai-companion" / "config" / "config.yaml"
     if not config_path.exists():
         return None
@@ -751,16 +767,211 @@ def load_feishu_config() -> dict:
             config = yaml.safe_load(f) or {}
         platforms = config.get("platforms", {})
         feishu = platforms.get("feishu", {})
-        if feishu.get("enabled") and feishu.get("extra", {}).get("app_id"):
-            return feishu["extra"]
+        if feishu.get("enabled"):
+            return feishu
     except Exception as e:
         logger.error(f"加载飞书配置失败: {e}")
 
     return None
 
 
+def _normalize_feishu_extra(base: dict | None, override: dict | None = None) -> dict:
+    """合并飞书 app 凭据配置，兼容 bot binding 里的扁平字段。"""
+    extra = dict(base or {})
+    override = override or {}
+    base_app_id = extra.get("app_id")
+
+    nested_extra = override.get("extra")
+    if isinstance(nested_extra, dict):
+        extra.update(nested_extra)
+
+    for key in _FEISHU_EXTRA_KEYS:
+        if key in override and override.get(key) is not None:
+            extra[key] = override[key]
+
+    # Bot 级配置如果切到另一个 app_id，不能沿用全局 app_secret。
+    if extra.get("app_id") and extra.get("app_id") != base_app_id:
+        override_has_secret = (
+            "app_secret" in override
+            or (isinstance(nested_extra, dict) and "app_secret" in nested_extra)
+        )
+        if not override_has_secret:
+            extra.pop("app_secret", None)
+
+    return extra
+
+
+def load_feishu_config() -> dict:
+    """兼容旧调用：返回默认飞书 app 的 extra 配置。"""
+    feishu = load_feishu_platform_config()
+    if not feishu:
+        return None
+    extra = _normalize_feishu_extra(feishu.get("extra", {}))
+    return extra if extra.get("app_id") else None
+
+
+def _get_feishu_bot_bindings(feishu_platform_config: dict | None) -> dict:
+    if not feishu_platform_config:
+        return {}
+    bindings = feishu_platform_config.get("bot_bindings")
+    if bindings is None:
+        # 兼容一个更口语化的配置名，但文档推荐 bot_bindings。
+        bindings = feishu_platform_config.get("bots")
+    return bindings if isinstance(bindings, dict) else {}
+
+
+def _extract_home_channel_id(config: dict | None) -> str:
+    if not isinstance(config, dict):
+        return ""
+
+    home = config.get("home_channel")
+    if isinstance(home, dict):
+        chat_id = home.get("chat_id") or home.get("group_id")
+        if chat_id:
+            return str(chat_id)
+    elif home:
+        return str(home)
+
+    for key in ("chat_id", "group_id"):
+        value = config.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _get_feishu_binding_for_bot(feishu_platform_config: dict | None, bot_id: str) -> dict:
+    bindings = _get_feishu_bot_bindings(feishu_platform_config)
+    binding = bindings.get(bot_id, {})
+    return binding if isinstance(binding, dict) else {}
+
+
+def _extract_feishu_dedicated_bot_id(routing: dict | None) -> str:
+    """飞书网关强制一个 app 只绑定一个 Bot。"""
+    routing = routing or {}
+    mode = routing.get("mode", "dedicated")
+    if mode != "dedicated":
+        raise ValueError(
+            "飞书配置不再支持一个 App 路由多个 Bot：请不要使用 routing.mode=chat_routed，"
+            "需要多 Bot 时请为每个 Bot 配置独立的飞书 App。"
+        )
+    if routing.get("group_bot_map"):
+        raise ValueError(
+            "飞书配置不再支持 group_bot_map：一个飞书 App 只能绑定一个 Bot，"
+            "需要多 Bot 时请为每个 Bot 配置独立的飞书 App。"
+        )
+    return str(routing.get("bot_id") or "")
+
+
+def _build_feishu_adapter_profiles(feishu_platform_config: dict | None) -> list[dict]:
+    """生成需要连接的飞书 app 列表。
+
+    支持：
+    - 旧结构：platforms.feishu.extra + routing（单 app 单 Bot）
+    - 新结构：platforms.feishu.bot_bindings.<bot_id>.extra（多 app，每个 app 单 Bot）
+    """
+    if not feishu_platform_config:
+        return []
+
+    profiles_by_app_id: dict[str, dict] = {}
+    default_extra = _normalize_feishu_extra(feishu_platform_config.get("extra", {}))
+    default_app_id = default_extra.get("app_id")
+    default_bot_id = _extract_feishu_dedicated_bot_id(feishu_platform_config.get("routing", {}) or {})
+    if default_app_id:
+        profiles_by_app_id[default_app_id] = {
+            "name": "default",
+            "app_id": default_app_id,
+            "extra": default_extra,
+            "routing": {"mode": "dedicated", "bot_id": default_bot_id},
+            "bot_id": default_bot_id,
+        }
+
+    for bot_id, binding in _get_feishu_bot_bindings(feishu_platform_config).items():
+        if not isinstance(binding, dict):
+            continue
+
+        extra = _normalize_feishu_extra(default_extra, binding)
+        app_id = extra.get("app_id")
+        if not app_id:
+            continue
+
+        binding_routing = binding.get("routing")
+        if isinstance(binding_routing, dict):
+            binding_routing_bot_id = _extract_feishu_dedicated_bot_id(binding_routing)
+            if binding_routing_bot_id and binding_routing_bot_id != bot_id:
+                raise ValueError(
+                    f"飞书 Bot 绑定不一致：bot_bindings.{bot_id}.routing.bot_id="
+                    f"{binding_routing_bot_id}，应与绑定键一致。"
+                )
+
+        if app_id not in profiles_by_app_id:
+            profiles_by_app_id[app_id] = {
+                "name": f"bot:{bot_id}",
+                "app_id": app_id,
+                "extra": extra,
+                "routing": {"mode": "dedicated", "bot_id": bot_id},
+                "bot_id": bot_id,
+            }
+        else:
+            existing_bot_id = profiles_by_app_id[app_id].get("bot_id") or ""
+            if existing_bot_id and existing_bot_id != bot_id:
+                raise ValueError(
+                    f"飞书 App {app_id} 同时绑定了多个 Bot：{existing_bot_id}, {bot_id}。"
+                    "一个飞书 App 只能绑定一个 Bot；请为不同 Bot 配置不同 app_id/app_secret。"
+                )
+            profiles_by_app_id[app_id]["bot_id"] = bot_id
+            profiles_by_app_id[app_id]["routing"] = {"mode": "dedicated", "bot_id": bot_id}
+
+    for profile in profiles_by_app_id.values():
+        if not profile.get("bot_id"):
+            raise ValueError(
+                f"飞书 App {profile['app_id']} 未绑定 Bot：请配置 platforms.feishu.routing.bot_id "
+                "或 platforms.feishu.bot_bindings.<bot_id>。"
+            )
+
+    app_id_by_bot_id: dict[str, str] = {}
+    for profile in profiles_by_app_id.values():
+        bot_id = str(profile.get("bot_id") or "")
+        app_id = str(profile.get("app_id") or "")
+        existing_app_id = app_id_by_bot_id.get(bot_id)
+        if existing_app_id and existing_app_id != app_id:
+            raise ValueError(
+                f"飞书 Bot {bot_id} 同时绑定了多个 App：{existing_app_id}, {app_id}。"
+                "飞书 App 与 Bot 必须一对一绑定；请移除重复绑定。"
+            )
+        app_id_by_bot_id[bot_id] = app_id
+
+    return list(profiles_by_app_id.values())
+
+
+def _get_feishu_app_id_for_bot(feishu_platform_config: dict | None, bot_id: str) -> str:
+    if not feishu_platform_config:
+        return ""
+    default_extra = _normalize_feishu_extra(feishu_platform_config.get("extra", {}))
+    binding = _get_feishu_binding_for_bot(feishu_platform_config, bot_id)
+    if binding:
+        extra = _normalize_feishu_extra(default_extra, binding)
+        return str(extra.get("app_id") or "")
+
+    try:
+        default_bot_id = _extract_feishu_dedicated_bot_id(feishu_platform_config.get("routing", {}) or {})
+    except ValueError:
+        return ""
+    if default_bot_id == bot_id:
+        return str(default_extra.get("app_id") or "")
+    return ""
+
+
+def _get_feishu_home_channel_for_bot(feishu_platform_config: dict | None, bot_id: str) -> str:
+    binding = _get_feishu_binding_for_bot(feishu_platform_config, bot_id)
+    return _extract_home_channel_id(binding)
+
+
 def _extract_feishu_target_id_from_bot(bot) -> str:
     """从 Bot proactive 配置提取可用于主动发送的飞书目标（群聊/会话 ID）。"""
+    runtime_chat_id = getattr(bot, "_feishu_chat_id", None)
+    if runtime_chat_id:
+        return str(runtime_chat_id)
+
     try:
         cfg = bot.proactive_config.to_dict() if hasattr(bot.proactive_config, "to_dict") else {}
     except Exception:
@@ -799,12 +1010,14 @@ def _should_start_gateway_schedulers_for_bot(bot, feishu_config: dict) -> tuple[
     if platform_type != "feishu":
         return False, f"platform={platform_type}"
 
-    # 需要至少有飞书机器人配置（app_id）或 Bot 级别目标群聊/chat_id
+    # 需要有飞书机器人配置；如果没有固定目标，会在收到入站消息后按动态 chat_id 启动。
     has_feishu_robot = bool(feishu_config and feishu_config.get("app_id"))
     target_id = _extract_feishu_target_id_from_bot(bot)
     has_target = bool(target_id)
-    if not (has_feishu_robot or has_target):
-        return False, "feishu_target_missing"
+    if not has_feishu_robot:
+        return False, "feishu_app_missing"
+    if not has_target:
+        return False, "feishu_target_missing_waiting_for_inbound"
 
     return True, f"platform=feishu has_robot={has_feishu_robot} has_target={has_target}"
 
@@ -841,7 +1054,12 @@ async def run_gateway(daemon: bool = True):
 
     # 加载配置
     config = Config()
-    feishu_config = load_feishu_config()
+    feishu_platform_config = load_feishu_platform_config()
+    try:
+        feishu_profiles = _build_feishu_adapter_profiles(feishu_platform_config)
+    except ValueError as e:
+        print(f"[ERROR] 飞书配置无效: {e}")
+        sys.exit(1)
 
     model_cfg = config.get_model_config()
     provider = model_cfg.get("provider", config.default_provider)
@@ -879,24 +1097,39 @@ async def run_gateway(daemon: bool = True):
     bot_manager = BotManager()
     memory_config = config.models.get("memory", {})
     data_dir = get_data_dir()
+    feishu_adapters_by_app_id: dict[str, FeishuAdapter] = {}
+    for profile in feishu_profiles:
+        platform_config = PlatformConfig(
+            enabled=True,
+            extra=profile["extra"]
+        )
+        feishu_adapters_by_app_id[profile["app_id"]] = FeishuAdapter(platform_config)
 
     for bot_config in config.get_enabled_bots():
         bot_config = {**bot_config, "data_dir": str(data_dir)}
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
 
-        # 设置主动消息发送平台（需要飞书适配器在 init 之前设置）
-        if feishu_config:
-            # 先创建飞书适配器（用于主动消息发送）
-            platform_config = PlatformConfig(
-                enabled=True,
-                extra=feishu_config
-            )
-            feishu_adapter = FeishuAdapter(platform_config)
-            bot.set_proactive_platform(feishu_adapter=feishu_adapter)
+        # 设置主动消息发送平台（需要飞书适配器在 init 之前设置）。
+        # 必须复用后续 connect() 的同一个 adapter，否则主动发送会命中未连接实例。
+        bot_feishu_app_id = _get_feishu_app_id_for_bot(feishu_platform_config, bot.id)
+        bot_feishu_adapter = feishu_adapters_by_app_id.get(bot_feishu_app_id)
+        if bot_feishu_adapter:
+            bot.set_proactive_platform(feishu_adapter=bot_feishu_adapter)
+
+        # Bot 级持久化目标会话，来自 config.yaml 的 platforms.feishu.bot_bindings。
+        bot_home_channel = _get_feishu_home_channel_for_bot(feishu_platform_config, bot.id)
+        if bot_home_channel:
+            bot._feishu_chat_id = bot_home_channel
 
         # 网关默认先初始化，不全量拉起轮询；按规则选择性启动
         await bot.init(start_schedulers=False)
-        should_start, reason = _should_start_gateway_schedulers_for_bot(bot, feishu_config)
+        bot_feishu_config = None
+        if bot_feishu_app_id:
+            for profile in feishu_profiles:
+                if profile["app_id"] == bot_feishu_app_id:
+                    bot_feishu_config = profile["extra"]
+                    break
+        should_start, reason = _should_start_gateway_schedulers_for_bot(bot, bot_feishu_config)
         if should_start:
             await bot.ensure_schedulers_started()
             print(f"[OK] 启动轮询: {bot.name} ({bot.id}) [{reason}]")
@@ -913,61 +1146,54 @@ async def run_gateway(daemon: bool = True):
     await _start_admin_api(bot_manager, config)
 
     # 飞书未配置时，只启动管理 API
-    if feishu_config:
-        print("[OK] 飞书配置已加载")
+    connected_feishu_adapters = []
+    if feishu_profiles:
+        print(f"[OK] 飞书配置已加载 ({len(feishu_profiles)} 个应用)")
 
-        # 创建飞书适配器
-        platform_config = PlatformConfig(
-            enabled=True,
-            extra=feishu_config
-        )
+        def _make_feishu_message_handler(router: PlatformRouter):
+            async def feishu_message_handler(event):
+                """process feishu message, route to BotInstance"""
+                bot_id = router.route(event)
+                bot = bot_manager.get_bot(bot_id) if bot_id else None
 
-        adapter = FeishuAdapter(platform_config)
+                if not bot:
+                    # Fallback: 使用第一个可用的 bot
+                    bot = bot_manager.first_bot
 
-        # 加载路由配置
-        feishu_full_config = config.get_platform_config("feishu")
-        routing_config = feishu_full_config.get("routing", {})
-        router = PlatformRouter(routing_config)
-        print(f"[OK] 路由模式: {router.mode}")
+                if not bot:
+                    return "没有可用的 Bot"
 
-        # 设置消息处理器 - 将消息路由到 Bot
-        async def feishu_message_handler(event):
-            """process feishu message, route to BotInstance"""
-            # 根据路由模式获取 bot_id
-            bot_id = router.route(event)
-            bot = bot_manager.get_bot(bot_id)
+                # 记录用户所在的 chat_id，作为本轮运行时主动消息发送目标。
+                # 持久化目标建议写入 config.yaml 的 platforms.feishu.bot_bindings。
+                if event.source and hasattr(event.source, 'chat_id'):
+                    bot._feishu_chat_id = event.source.chat_id
 
-            if not bot:
-                # Fallback: 使用第一个可用的 bot
-                bot = bot_manager.first_bot
+                try:
+                    response = await bot.handle_message(event.text)
+                    return response
+                except Exception as e:
+                    logger.error(f"处理消息失败: {e}")
+                    return f"处理失败: {e}"
 
-            if not bot:
-                return "没有可用的 Bot"
+            return feishu_message_handler
 
-            # 记录用户所在的 chat_id，作为主动消息的发送目标
-            if event.source and hasattr(event.source, 'chat_id'):
-                bot._feishu_chat_id = event.source.chat_id
-
-            try:
-                response = await bot.handle_message(event.text)
-                return response
-            except Exception as e:
-                logger.error(f"处理消息失败: {e}")
-                return f"处理失败: {e}"
-
-        adapter.set_message_handler(feishu_message_handler)
-
-        # 连接飞书
         print()
         print("正在连接飞书...")
 
-        success = await adapter.connect()
-        if not success:
-            print("[ERROR] 飞书连接失败")
-            print(f"   错误: {adapter.fatal_error_message or '未知错误'}")
-            sys.exit(1)
+        for profile in feishu_profiles:
+            adapter = feishu_adapters_by_app_id[profile["app_id"]]
+            router = PlatformRouter(profile.get("routing", {}) or {})
+            adapter.set_message_handler(_make_feishu_message_handler(router))
+            print(f"[OK] 路由模式({profile['name']}): {router.mode}")
 
-        print(f"[OK] 飞书连接成功 [{feishu_config.get('connection_mode', 'websocket')}]")
+            success = await adapter.connect()
+            if not success:
+                print("[ERROR] 飞书连接失败")
+                print(f"   错误: {adapter.fatal_error_message or '未知错误'}")
+                sys.exit(1)
+
+            connected_feishu_adapters.append(adapter)
+            print(f"[OK] 飞书连接成功 [{profile['extra'].get('connection_mode', 'websocket')}]")
     else:
         print("[WARN] 飞书未配置，跳过网关连接")
         print("       管理 API 已启动，可访问 http://localhost:8642")
@@ -997,8 +1223,8 @@ async def run_gateway(daemon: bool = True):
         print("正在停止网关...")
     finally:
         _stop_ui_server()
-        if adapter is not None:
-            await adapter.disconnect()
+        for feishu_adapter in connected_feishu_adapters:
+            await feishu_adapter.disconnect()
         await _stop_admin_api()
         for bot in bot_manager.bots.values():
             try:
