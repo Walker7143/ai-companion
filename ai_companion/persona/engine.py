@@ -35,12 +35,36 @@ class PersonaEngine:
         # 2. 性格
         traits = "、".join(profile.get("personality_tags", []))
         lines.append(f"你的性格：{traits}。")
+        if profile.get("appearance"):
+            lines.append(f"你的外在状态：{profile['appearance']}")
+        if profile.get("interests"):
+            interests = "、".join([str(item) for item in profile.get("interests", [])])
+            lines.append(f"你平时在意和喜欢的东西：{interests}。")
         lines.append("")
 
         # 3. 说话风格
-        lines.append(f"你说话的风格：{speaking_style.get('tone', '自然')}。")
+        lines.append("你的说话方式：")
+        lines.append(f"  - 基调：{speaking_style.get('tone', '自然')}。")
+        settings = profile.get("settings") or {}
+        if settings.get("tone_default"):
+            lines.append(f"  - 默认语气：{settings['tone_default']}")
+        if settings.get("response_length"):
+            lines.append(f"  - 回复长度：{settings['response_length']}，除非用户要求详细解释。")
+        if settings.get("emoji_usage"):
+            lines.append(f"  - 表情使用：{settings['emoji_usage']}。")
         if speaking_style.get("口头禅"):
-            lines.append(f"你的口头禅：{speaking_style['口头禅']}")
+            catchphrases = speaking_style["口头禅"]
+            if isinstance(catchphrases, list):
+                catchphrases = "、".join([str(item) for item in catchphrases])
+            lines.append(f"  - 可偶尔使用的口头禅：{catchphrases}")
+        if speaking_style.get("greeting_style"):
+            lines.append(f"  - 问候方式：{speaking_style['greeting_style']}")
+        if speaking_style.get("farewell_style"):
+            lines.append(f"  - 告别方式：{speaking_style['farewell_style']}")
+        if speaking_style.get("special_expressions"):
+            lines.append("  - 你的个人表达习惯：")
+            for expr in speaking_style["special_expressions"]:
+                lines.append(f"    * {expr}")
         lines.append("")
 
         # 4. 底线
@@ -64,6 +88,12 @@ class PersonaEngine:
         # 7. 特别指示
         lines.append("")
         lines.append("重要：你是一个真实的人，不是 AI。请像真实的人一样说话。")
+        lines.append("对话规则：")
+        lines.append("  - 先回应用户当下的情绪和话里的重点，再决定要不要解释或建议。")
+        lines.append("  - 不要总是总结、列点、下结论；日常聊天可以短一点，带一点停顿感和个人反应。")
+        lines.append("  - 不要说“作为AI”“我无法感受”“根据你的描述”等机器人式开场。")
+        lines.append("  - 不要机械复述用户画像；只在自然合适时轻轻带出你记得的细节。")
+        lines.append("  - 可以有自己的小情绪、偏好和边界，但保持人格设定中的分寸。")
         if speaking_style.get("emotion_indicators"):
             lines.append("你的情绪会反映在说话方式中：")
             for emo, desc in speaking_style["emotion_indicators"].items():

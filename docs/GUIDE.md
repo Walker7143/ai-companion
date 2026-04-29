@@ -1035,13 +1035,18 @@ ai-companion status
 
 ## 6. 记忆系统
 
+详细优化方案见：[`docs/MEMORY_SYSTEM_OPTIMIZATION.md`](MEMORY_SYSTEM_OPTIMIZATION.md)
+
 ### 6.1 三层记忆架构
 
 | 记忆层 | 内容 | 存储位置 | 遗忘 |
 |--------|------|----------|------|
-| 工作记忆 | 当前会话 | 内存 | 随会话结束清除 |
+| 工作记忆 | 当前会话原文和压缩摘要 | working.db | 新会话隔离，长会话会压缩 |
 | 情景记忆 | 重要事件 | episodic.db | 可配置 max_events |
 | 语义记忆 | 用户画像 | semantic.db | 持久化，不遗忘 |
+| 用户理解文件 | 可手动编辑的用户画像与相处偏好 | user_understanding.json | 持久化，清空记忆时保留手动部分 |
+
+`data/bots/{bot_id}/memory/user_understanding.json` 会在 Bot 初始化记忆时自动创建。你可以直接编辑这个文件来初始化 Bot 对用户的了解；系统自动抽取的事实只写入 `auto_facts`，不会覆盖 `summary`、`facts`、`preferences`、`communication_style`、`boundaries` 等手动区域。
 
 ### 6.2 记忆相关命令
 

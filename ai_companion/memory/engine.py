@@ -5,6 +5,7 @@
 - working_memory:  SQLite会话表，当前对话上下文（摘要+原始消息）
 - episodic_memory: SQLite事件表 + Chroma向量库，重要情景片段
 - semantic_memory: SQLite事实表，用户画像和偏好
+- user_understanding: JSON文件，用户可编辑的“对用户的理解”
 
 数据流：
   handle_message(user_input)
@@ -29,6 +30,7 @@ import aiosqlite
 
 from .stores.episodic import EpisodicStore
 from .stores.semantic import SemanticStore
+from .stores.user_understanding import UserUnderstandingStore
 from .stores.working import WorkingMemoryStore
 
 # 上下文压缩器（可选）
@@ -103,10 +105,15 @@ class MemoryEngine:
             embedding_mode=embedding_mode,
             encoder_model=embedding_model,
         )
+        self.user_understanding = UserUnderstandingStore(
+            self.memory_dir / "user_understanding.json",
+            max_value_chars=self.semantic_char_limit,
+        )
         self.semantic = SemanticStore(
             self.memory_dir / "semantic.db",
             max_chars=self.semantic_char_limit,
             persona_backstory_path=persona_backstory_path,
+            user_understanding=self.user_understanding,
         )
 
         self._session_id: Optional[str] = None
@@ -140,7 +147,10 @@ class MemoryEngine:
         """初始化所有 store"""
         await self.working.init()
         await self.episodic.init()
+        await self.user_understanding.init()
         await self.semantic.init()
+        for key, value in (await self.semantic.get_all_facts()).items():
+            await self.user_understanding.upsert_auto_fact(key, value)
 
     async def load_context(self, current_input: str) -> dict:
         """
@@ -167,17 +177,40 @@ class MemoryEngine:
 
         # 构建 system prompt 追加内容
         suffix_parts = []
-        if facts:
-            facts_str = "；".join([f"{k}={v}" for k, v in facts.items()])
-            suffix_parts.append(f"你已了解用户的事实：{facts_str}")
+        understanding_text = self.user_understanding.format_for_prompt()
+        if understanding_text:
+            suffix_parts.append(
+                "【你对用户的理解】\n"
+                + understanding_text
+                + "\n使用方式：把这些当作相处背景，而不是答案清单。"
+                + "回复时优先照顾用户当下这句话；只有在自然、有帮助的时候，才顺手提到相关细节。"
+                + "不要生硬地说“我记得你的资料里写着”。"
+            )
+
+        remaining_facts = {
+            k: v for k, v in facts.items()
+            if k not in self.user_understanding.known_fact_keys()
+        }
+        if remaining_facts:
+            fact_lines = [f"  - {k}: {v}" for k, v in remaining_facts.items()]
+            suffix_parts.append(
+                "【语义记忆补充】\n"
+                + "\n".join(fact_lines)
+                + "\n使用方式：这些是较零散的事实，只在和当前对话相关时使用。"
+            )
         if episodic:
-            moments_str = " | ".join([m["summary"][:100] for m in episodic])
-            suffix_parts.append(f"相关记忆：{moments_str}")
+            moment_lines = [f"  - {m['summary'][:100]}" for m in episodic]
+            suffix_parts.append(
+                "【可能相关的共同经历】\n"
+                + "\n".join(moment_lines)
+                + "\n使用方式：这些经历只在能让回应更贴近用户时引用；不要为了展示记忆而引用。"
+            )
 
         return {
             "working_history": working,
             "episodic_recall": episodic,
             "semantic_facts": facts,
+            "user_understanding": self.user_understanding.load(),
             "system_suffix": "\n".join(suffix_parts),
         }
 
@@ -259,6 +292,7 @@ class MemoryEngine:
         summaries_count = len(self.working.get_summaries(sid))
         episodic_count = self._count_episodes()
         fact_count = await self.semantic.get_fact_count()
+        understanding = self.user_understanding.load()
 
         return {
             "session_id": sid,
@@ -267,12 +301,15 @@ class MemoryEngine:
             "summaries_count": summaries_count,
             "episodic_count": episodic_count,
             "fact_count": fact_count,
+            "user_understanding_path": str(self.user_understanding.path),
+            "user_understanding_auto_facts": len(understanding.get("auto_facts", {})),
             "health": health,
         }
 
     async def forget_fact(self, key: str):
         """删除指定语义记忆（供 /forget 命令使用）"""
         await self.semantic.delete_fact(key)
+        await self.user_understanding.delete_auto_fact(key)
 
     async def close(self):
         if self._compress_task and not self._compress_task.done():

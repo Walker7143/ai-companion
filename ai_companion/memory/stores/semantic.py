@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from .user_understanding import UserUnderstandingStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,10 +40,15 @@ class SemanticStore:
 用户：{user_input}
 助手：{bot_output}
 
-请判断这段对话是否透露了用户的新事实（如职业、爱好、年龄、姓名、城市、性格偏好等）。
-有则输出 JSON：{{"key": "事实key", "value": "事实value"}}
+请只根据用户亲口透露的内容，判断这段对话是否出现了新的用户画像信息。
+可记录的类型包括：姓名/称呼、城市、职业/学习、作息、爱好、长期偏好、讨厌的事、重要关系、当前压力源、希望被怎样回应、聊天边界。
+
+有一条就输出一行 JSON，可输出多行：
+{{"key": "事实key", "value": "事实value"}}
+{{"key": "事实key2", "value": "事实value2"}}
 无则输出：NO_FACT
-只输出 JSON 或 NO_FACT，不要解释。"""
+不要从助手回复里反推事实；不要记录短暂情绪，除非用户明确说这是近期持续状态。
+只输出 JSON 行或 NO_FACT，不要解释。"""
 
     # 抽取关系变化的 prompt（识别对话中用户与bot关系是否有进展）
     # 抽取关系的 prompt（结合最近 3 轮上下文判断整体氛围）
@@ -114,11 +121,13 @@ class SemanticStore:
 只输出 JSON 或 NO_MOMENT，不要解释。"""
 
     def __init__(self, db_path: str, max_chars: int = 4400,
-                 persona_backstory_path: str = None):
+                 persona_backstory_path: str = None,
+                 user_understanding: Optional[UserUnderstandingStore] = None):
         self.db_path = db_path
         self.max_chars = max_chars  # 单条事实的最大字符数（可配置）
         self._summarizer: Optional[object] = None
         self._persona_backstory_path = persona_backstory_path
+        self._user_understanding = user_understanding
 
     def set_summarizer(self, summarizer):
         """注入 LLM 适配器（用于事实抽取）"""
@@ -172,6 +181,8 @@ class SemanticStore:
                 VALUES (?, ?, ?, ?)
             """, (key, value, datetime.now().isoformat(), session_id))
             await db.commit()
+        if self._user_understanding:
+            await self._user_understanding.upsert_auto_fact(key, value)
 
     async def get_fact(self, key: str, session_id: Optional[str] = None) -> Optional[str]:
         """读取单个事实"""
@@ -204,7 +215,12 @@ class SemanticStore:
                     "SELECT key, value FROM user_facts ORDER BY updated_at DESC"
                 )
             rows = await cursor.fetchall()
-            result = {key: value for key, value in rows}
+            result = {}
+            for key, value in rows:
+                # Rows are newest first; keep the freshest value for duplicate keys
+                # across sessions instead of letting older rows overwrite it.
+                if key not in result:
+                    result[key] = value
             logger.info(f"[Semantic]  get_all_facts(session_id={session_id!r}): {result}")
             return result
 
@@ -219,6 +235,8 @@ class SemanticStore:
             else:
                 await db.execute("DELETE FROM user_facts WHERE key = ?", (key,))
             await db.commit()
+        if self._user_understanding:
+            await self._user_understanding.delete_auto_fact(key)
 
     async def extract_and_store(self, user_input: str, bot_output: str,
                                session_id: Optional[str] = None,
@@ -264,7 +282,7 @@ class SemanticStore:
                 return None
 
         # fact/relation/key_moment 用 JSON 解析
-        async def try_extract_json(prompt: str, label: str) -> Optional[dict]:
+        async def try_extract_json(prompt: str, label: str) -> list[dict]:
             try:
                 response = await summarizer.chat(
                     messages=[{"role": "user", "content": prompt}],
@@ -280,10 +298,10 @@ class SemanticStore:
                 logger.info(f"[Semantic] [{label}] LLM原始回复: {content[:200]!r}")
                 facts = self._parse_facts(content)
                 logger.info(f"[Semantic] [{label}] 解析结果: {facts}")
-                return facts[0] if facts else None
+                return facts
             except Exception as e:
                 logger.info(f"[Semantic] [{label}] 抽取异常: {e}")
-                return None
+                return []
 
         # 并行执行所有抽取
         fact_task = try_extract_json(self.EXTRACT_PROMPT.format(
@@ -301,8 +319,16 @@ class SemanticStore:
         results = await asyncio.gather(fact_task, rel_task, att_task, moment_task)
 
         written = []
-        for res in results:
-            if res and res.get("key") and res.get("value"):
+        for result in results:
+            if isinstance(result, list):
+                items = result
+            else:
+                items = [result]
+
+            for res in items:
+                if not res or not res.get("key") or not res.get("value"):
+                    continue
+
                 key = res["key"]
                 value = res["value"]
 

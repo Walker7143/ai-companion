@@ -120,6 +120,44 @@ def _get_memory_db_path(bot_id: str, db_name: str) -> Path | None:
     return resolve_memory_db_path(bot_id, db_name)
 
 
+def _get_memory_file_path(bot_id: str, filename: str) -> Path | None:
+    """获取 Bot 记忆文件路径。"""
+    existing = resolve_memory_db_path(bot_id, filename)
+    if existing:
+        return existing
+    return _get_data_dir() / bot_id / "memory" / filename
+
+
+def _load_user_understanding(bot_id: str) -> tuple[dict, str | None]:
+    path = _get_memory_file_path(bot_id, "user_understanding.json")
+    if not path or not path.exists():
+        return {}, str(path) if path else None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), str(path)
+    except Exception:
+        return {}, str(path)
+
+
+def _write_user_understanding(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _delete_user_understanding_auto_fact(bot_id: str, key: str):
+    path = _get_memory_file_path(bot_id, "user_understanding.json")
+    if not path or not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        auto_facts = data.get("auto_facts")
+        if isinstance(auto_facts, dict) and key in auto_facts:
+            del auto_facts[key]
+            data["updated_at"] = datetime.now().isoformat()
+            _write_user_understanding(path, data)
+    except Exception:
+        pass
+
+
 async def _start_admin_api(bot_manager: BotManager, config: Config):
     """Start the admin API HTTP server on port 8642."""
     global _admin_app, _admin_runner
@@ -198,6 +236,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         db_path = _get_memory_db_path(bot_id, "working.db")
         episodic_path = _get_memory_db_path(bot_id, "episodic.db")
         semantic_path = _get_memory_db_path(bot_id, "semantic.db")
+        understanding, understanding_path = _load_user_understanding(bot_id)
 
         def _table_count(path, table):
             if not path:
@@ -264,6 +303,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "episodic_size_kb": 0,
                 "semantic_count": _table_count(semantic_path, "user_facts"),
                 "semantic_size_kb": 0,
+                "user_understanding_path": understanding_path,
+                "user_understanding_auto_facts": len(understanding.get("auto_facts", {})) if isinstance(understanding, dict) else 0,
                 "embedding_enabled": False,
             },
         })
@@ -450,6 +491,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         db_path = _get_memory_db_path(bot_id, "working.db")
         episodic_path = _get_memory_db_path(bot_id, "episodic.db")
         semantic_path = _get_memory_db_path(bot_id, "semantic.db")
+        understanding, understanding_path = _load_user_understanding(bot_id)
 
         def _table_count(path, table):
             if not path:
@@ -470,6 +512,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             "episodic_size_kb": 0,
             "semantic_count": _table_count(semantic_path, "user_facts"),
             "semantic_size_kb": 0,
+            "user_understanding_path": understanding_path,
+            "user_understanding_auto_facts": len(understanding.get("auto_facts", {})) if isinstance(understanding, dict) else 0,
             "embedding_enabled": False,
         })
 
@@ -505,8 +549,15 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         """GET /api/v1/admin/memory/:bot_id/semantic"""
         bot_id = request.match_info["bot_id"]
         db_path = _get_memory_db_path(bot_id, "semantic.db")
+        user_understanding, user_understanding_path = _load_user_understanding(bot_id)
         if not db_path:
-            return web.json_response({"facts": [], "attitude_score": 0.0, "relationship_level": "陌生"})
+            return web.json_response({
+                "facts": [],
+                "attitude_score": 0.0,
+                "relationship_level": "陌生",
+                "user_understanding": user_understanding,
+                "user_understanding_path": user_understanding_path,
+            })
         try:
             import sqlite3
             conn = sqlite3.connect(str(db_path))
@@ -530,6 +581,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "facts": facts,
                 "attitude_score": attitude_score,
                 "relationship_level": relationship_level,
+                "user_understanding": user_understanding,
+                "user_understanding_path": user_understanding_path,
             })
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
@@ -565,6 +618,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             conn.commit()
             deleted = cur.rowcount
             conn.close()
+            if memory_type == "semantic":
+                _delete_user_understanding_auto_fact(bot_id, memory_id)
             return web.json_response({"ok": True, "deleted": deleted})
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
@@ -595,11 +650,22 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         working_db = _get_memory_db_path(bot_id, "working.db")
         episodic_db = _get_memory_db_path(bot_id, "episodic.db")
         semantic_db = _get_memory_db_path(bot_id, "semantic.db")
+        understanding_path = _get_memory_file_path(bot_id, "user_understanding.json")
 
         _delete_rows(working_db, "DELETE FROM messages", "working_messages")
         _delete_rows(working_db, "DELETE FROM summaries", "working_summaries")
         _delete_rows(episodic_db, "DELETE FROM episodic_memory", "episodic")
         _delete_rows(semantic_db, "DELETE FROM user_facts", "semantic")
+        if understanding_path and understanding_path.exists():
+            try:
+                data = json.loads(understanding_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    deleted["user_understanding_auto_facts"] = len(data.get("auto_facts", {}))
+                    data["auto_facts"] = {}
+                    data["updated_at"] = datetime.now().isoformat()
+                    _write_user_understanding(understanding_path, data)
+            except Exception:
+                pass
 
         return web.json_response({"ok": True, "deleted": deleted})
 

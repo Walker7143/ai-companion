@@ -387,9 +387,20 @@ class ProactiveEngine:
         # 用户事实
         if self.memory:
             try:
+                understanding_text = ""
+                if hasattr(self.memory, "user_understanding"):
+                    understanding_text = self.memory.user_understanding.format_for_prompt()
+                if understanding_text:
+                    lines.append("\n对用户的理解：")
+                    lines.append(understanding_text)
+
                 facts = await self.memory.semantic.get_all_facts()
+                known_keys = set()
+                if hasattr(self.memory, "user_understanding"):
+                    known_keys = self.memory.user_understanding.known_fact_keys()
+                facts = {k: v for k, v in facts.items() if k not in known_keys}
                 if facts:
-                    lines.append("\n用户的事实/偏好：")
+                    lines.append("\n用户的事实/偏好补充：")
                     for k, v in facts.items():
                         lines.append(f"  {k}：{v}")
             except Exception:

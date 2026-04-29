@@ -221,6 +221,7 @@ class SystemTestSuite:
         self._run_case("T34", "Persona runtime profile overlays template files", self.case_persona_runtime_profile_overlay)
         self._run_case("T35", "Dependency and UI contract cleanup", self.case_dependency_and_ui_contract_cleanup)
         self._run_case("T36", "Web config center reads and persists full config", self.case_web_config_center_roundtrip)
+        self._run_case("T37", "User profile memory guides natural replies", self.case_user_profile_memory_guidance)
 
         return self._finalize()
 
@@ -1775,6 +1776,76 @@ class SystemTestSuite:
                 "backstory_after": backstory_after,
                 "persona_profile": persona.profile,
                 "prompt": prompt,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
+
+    async def case_user_profile_memory_guidance(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        class MultiFactModel:
+            async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+                text = messages[-1].get("content", "") if messages else ""
+                if "用户画像信息" in text:
+                    return '\n'.join([
+                        '{"key": "城市", "value": "上海"}',
+                        '{"key": "希望被怎样回应", "value": "先共情，少讲大道理"}',
+                    ])
+                if "NO_CHANGE" in text:
+                    return "NO_CHANGE"
+                if "NO_MOMENT" in text:
+                    return "NO_MOMENT"
+                if "只输出数字" in text:
+                    return "0"
+                return "NO_FACT"
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-user-profile-") as td:
+            root = Path(td)
+            engine = MemoryEngine(
+                bot_id="profile_bot",
+                memory_dir=root,
+                config={"embedding": "none"},
+            )
+            await engine.init()
+            engine.start_session("new")
+            engine.set_summarizer(MultiFactModel())
+            understanding_path = root / "profile_bot" / "memory" / "user_understanding.json"
+            seeded = json.loads(understanding_path.read_text(encoding="utf-8"))
+            seeded["summary"] = "用户最近压力偏大，但不喜欢被催着立刻振作。"
+            seeded["communication_style"] = ["先接住情绪，再给建议。"]
+            understanding_path.write_text(json.dumps(seeded, ensure_ascii=False, indent=2), encoding="utf-8")
+            await engine.semantic.set_fact("城市", "杭州", session_id="old")
+            await engine.semantic.extract_and_store(
+                "我现在住上海，最近有点烦，跟我说话你先共情，少讲大道理。",
+                "我听见了，先不急着讲道理。",
+                session_id="new",
+            )
+
+            facts = await engine.semantic.get_all_facts()
+            context = await engine.load_context("今天有点烦")
+            understanding = engine.user_understanding.load()
+            await engine.close()
+
+        suffix = context.get("system_suffix", "")
+        passed = (
+            facts.get("城市") == "上海"
+            and facts.get("希望被怎样回应") == "先共情，少讲大道理"
+            and understanding.get("auto_facts", {}).get("城市") == "上海"
+            and "用户最近压力偏大" in suffix
+            and "先接住情绪" in suffix
+            and "【你对用户的理解】" in suffix
+            and "相处背景" in suffix
+            and "不要生硬" in suffix
+            and "【语义记忆补充】" not in suffix
+        )
+        detail = f"city={facts.get('城市')} auto={len(understanding.get('auto_facts', {}))} guidance={'相处背景' in suffix}"
+        log = json.dumps(
+            {
+                "facts": facts,
+                "user_understanding": understanding,
+                "system_suffix": suffix,
             },
             ensure_ascii=False,
             indent=2,

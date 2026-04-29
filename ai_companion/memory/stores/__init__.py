@@ -1,1 +1,1 @@
-"""Memory stores for working, episodic, and semantic memory."""
+"""Memory stores for working, episodic, semantic, and user profile memory."""

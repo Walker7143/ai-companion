@@ -14,6 +14,8 @@ export interface MemoryStats {
   episodic_size_kb: number;
   semantic_count: number;
   semantic_size_kb: number;
+  user_understanding_path?: string | null;
+  user_understanding_auto_facts?: number;
   embedding_enabled: boolean;
 }
 
@@ -91,6 +93,8 @@ export interface SemanticMemory {
   facts: Fact[];
   attitude_score: number;
   relationship_level: string;
+  user_understanding?: Record<string, unknown>;
+  user_understanding_path?: string | null;
 }
 
 export interface Fact {
