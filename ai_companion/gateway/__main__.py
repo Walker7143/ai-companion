@@ -5,6 +5,7 @@ Gateway 模块入口 - 支持 ai-companion gateway 直接执行
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def setup_logging():
     import logging.handlers
     import pathlib
 
-    log_dir = pathlib.Path.home() / ".ai-companion" / "logs"
+    log_dir = pathlib.Path(os.environ.get("AI_COMPANION_LOG_DIR", pathlib.Path.home() / ".ai-companion" / "logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
 
     # Gateway 日志

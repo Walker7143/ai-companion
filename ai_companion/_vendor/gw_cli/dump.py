@@ -208,7 +208,6 @@ def run_dump(args):
 
     __version__ = "0.11.0"
     __release_date__ = "2026.4.23"
-        __release_date__ = ""
 
     commit = _get_git_commit(project_root)
 

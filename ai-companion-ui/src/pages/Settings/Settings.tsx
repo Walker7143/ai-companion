@@ -142,9 +142,10 @@ export function Settings() {
   };
 
   const handleTestConnection = async () => {
+    if (!currentBotId) return;
     setTesting(true);
     try {
-      const result = await configApi.testConnection(provider, apiKey, baseUrl);
+      const result = await configApi.testConnection(provider, apiKey, baseUrl, currentBotId);
       if (result) {
         toast.success('API 连接测试成功');
       } else {

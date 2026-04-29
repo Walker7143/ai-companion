@@ -6,6 +6,7 @@ TTSSkill - 文字转语音技能
 
 import os
 import logging
+import importlib.util
 from pathlib import Path
 from typing import Optional
 
@@ -28,7 +29,15 @@ class TTSSkill(Skill):
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def _check_config(self) -> bool:
-        return True  # 暂时允许无配置
+        model_type = self.default_model or self.config.get("model", "edge_tts")
+        if model_type == "edge_tts":
+            return importlib.util.find_spec("edge_tts") is not None
+        if model_type == "minimax":
+            return bool(os.environ.get("MINIMAX_API_KEY") or self.config.get("minimax", {}).get("api_key"))
+        if model_type in {"azure_tts", "openai_tts"}:
+            model_cfg = self.config.get(model_type, {})
+            return bool(model_cfg.get("api_url") and model_cfg.get("api_key"))
+        return bool(self.config.get(model_type, {}).get("api_url"))
 
     async def execute(self, params: dict, context: SkillContext) -> SkillResult:
         """执行 TTS

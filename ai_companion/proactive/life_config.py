@@ -14,10 +14,12 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 MAX_DAILY_EVENTS = 100
+REALTIME_DAILY_INTERVAL_SECONDS = 86400
+REALTIME_MAJOR_INTERVAL_SECONDS = 604800
 
 DEFAULT_CONFIG = {
-    "daily_interval_seconds": 3600,      # 1h Bot 时间（秒）
-    "major_interval_seconds": 21600,    # 6h Bot 时间（秒）
+    "daily_interval_seconds": REALTIME_DAILY_INTERVAL_SECONDS,  # 现实 1 天 = Bot 1 天
+    "major_interval_seconds": REALTIME_MAJOR_INTERVAL_SECONDS,  # 默认每 7 个 Bot 日检查人生大事
     "time_ratio": 1,                    # 默认 1:1
     "time_ratio_warning_threshold": 500,
     "daily_event_min_gap_days": 2,      # 至少每 N 天产出 1 个日常事件
@@ -29,10 +31,12 @@ DEFAULT_CONFIG = {
         "unexpected_event_cooldown_days": 365,
         "llm_recent_event_limit": 20,
         "llm_forbidden_scenario_limit": 12,
+        "llm_daily_candidate_limit": 12,
         "disabled_scenarios": [],
         "scenario_weights": {},
         "custom_scenarios": [],
     },
+    "daily_life_profile": {},
     "max_events": MAX_DAILY_EVENTS,
     "max_context_bits": 2000,
     "season": {
@@ -57,8 +61,8 @@ DEFAULT_CONFIG = {
 @dataclass
 class LifeConfig:
     """Bot 人生轨迹配置"""
-    daily_interval_seconds: int = 3600
-    major_interval_seconds: int = 21600
+    daily_interval_seconds: int = REALTIME_DAILY_INTERVAL_SECONDS
+    major_interval_seconds: int = REALTIME_MAJOR_INTERVAL_SECONDS
     time_ratio: int = 1
     time_ratio_warning_threshold: int = 500
     daily_event_min_gap_days: int = 2
@@ -69,9 +73,11 @@ class LifeConfig:
     unexpected_event_cooldown_days: int = 365
     llm_recent_event_limit: int = 20
     llm_forbidden_scenario_limit: int = 12
+    llm_daily_candidate_limit: int = 12
     disabled_scenarios: list = field(default_factory=list)
     scenario_weights: dict = field(default_factory=dict)
     custom_scenarios: list = field(default_factory=list)
+    daily_life_profile: dict = field(default_factory=dict)
     max_events: int = MAX_DAILY_EVENTS
     max_context_bits: int = 2000
     season_hemisphere: str = "north"
@@ -108,8 +114,8 @@ class LifeConfig:
                 logger.info(f"[LifeConfig] 加载配置: {self._config_path}")
 
                 # 应用配置到字段
-                self.daily_interval_seconds = self._config.get("daily_interval_seconds", 3600)
-                self.major_interval_seconds = self._config.get("major_interval_seconds", 21600)
+                self.daily_interval_seconds = self._config.get("daily_interval_seconds", REALTIME_DAILY_INTERVAL_SECONDS)
+                self.major_interval_seconds = self._config.get("major_interval_seconds", REALTIME_MAJOR_INTERVAL_SECONDS)
                 self.time_ratio = self._config.get("time_ratio", 1)
                 self.time_ratio_warning_threshold = self._config.get("time_ratio_warning_threshold", 500)
                 self.daily_event_min_gap_days = max(1, int(self._config.get("daily_event_min_gap_days", 2)))
@@ -127,9 +133,11 @@ class LifeConfig:
                 self.unexpected_event_cooldown_days = max(0, int(event_policy.get("unexpected_event_cooldown_days", 365)))
                 self.llm_recent_event_limit = max(3, int(event_policy.get("llm_recent_event_limit", 20)))
                 self.llm_forbidden_scenario_limit = max(0, int(event_policy.get("llm_forbidden_scenario_limit", 12)))
+                self.llm_daily_candidate_limit = min(20, max(3, int(event_policy.get("llm_daily_candidate_limit", 12))))
                 self.disabled_scenarios = event_policy.get("disabled_scenarios", []) or []
                 self.scenario_weights = event_policy.get("scenario_weights", {}) or {}
                 self.custom_scenarios = event_policy.get("custom_scenarios", []) or []
+                self.daily_life_profile = self._config.get("daily_life_profile", {}) or {}
                 self.max_events = min(
                     MAX_DAILY_EVENTS,
                     max(1, int(self._config.get("max_events", MAX_DAILY_EVENTS))),

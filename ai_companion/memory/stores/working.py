@@ -239,13 +239,23 @@ class WorkingMemoryStore:
             return None
 
         conn = sqlite3.connect(self.db_path)
-        # 获取除了最近 K 轮之外的所有消息
+        keep_count = self.KEEP_RECENT_TURNS * 2
+        keep_boundary = conn.execute("""
+            SELECT id FROM messages
+            WHERE session_id = ? AND compressed = 0
+            ORDER BY id DESC
+            LIMIT 1 OFFSET ?
+        """, (sid, keep_count - 1)).fetchone()
+        if not keep_boundary:
+            conn.close()
+            return None
+
+        keep_id = keep_boundary[0]
         cursor = conn.execute("""
             SELECT role, content FROM messages
-            WHERE session_id = ? AND compressed = 0
+            WHERE session_id = ? AND compressed = 0 AND id < ?
             ORDER BY id ASC
-            LIMIT -1 OFFSET ?
-        """, (sid, self.KEEP_RECENT_TURNS * 2))
+        """, (sid, keep_id))
         old_rows = cursor.fetchall()
 
         if len(old_rows) < 4:
@@ -263,31 +273,8 @@ class WorkingMemoryStore:
             # 无 summarizer 时用简单策略
             summary = self._simple_summarize(old_messages_text)
 
-        # 标记旧消息为已压缩
-        oldest_id = conn.execute(
-            "SELECT MIN(id) FROM messages WHERE session_id = ? AND compressed = 0",
-            (sid,)
-        ).fetchone()[0]
-        newest_keep_id = conn.execute("""
-            SELECT id FROM messages
-            WHERE session_id = ? AND compressed = 0
-            ORDER BY id DESC
-            LIMIT 1 OFFSET ?
-        """, (sid, 0)).fetchone()
-
-        # 把除最近K轮之外的全部标记为压缩
-        keep_boundary = conn.execute("""
-            SELECT id FROM messages
-            WHERE session_id = ? AND compressed = 0
-            ORDER BY id DESC
-            LIMIT 1 OFFSET ?
-        """, (sid, self.KEEP_RECENT_TURNS * 2)).fetchone()
-
-        if keep_boundary:
-            keep_id = keep_boundary[0]
-            conn.execute("UPDATE messages SET compressed = 1 WHERE session_id = ? AND id < ?", (sid, keep_id))
-        else:
-            conn.execute("UPDATE messages SET compressed = 1 WHERE session_id = ?", (sid,))
+        # 只标记已进入摘要的旧消息，保留最近 K 轮原文。
+        conn.execute("UPDATE messages SET compressed = 1 WHERE session_id = ? AND id < ?", (sid, keep_id))
 
         # 写入摘要记录
         conn.execute(

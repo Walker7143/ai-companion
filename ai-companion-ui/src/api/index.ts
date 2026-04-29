@@ -48,8 +48,8 @@ export const botsApi = {
 
 // Session API
 export const sessionApi = {
-  listSessions: (_botId: string): Promise<SessionInfo[]> =>
-    fetchApi<{sessions: SessionInfo[]}>('/admin/sessions').then(r => r.sessions),
+  listSessions: (botId: string): Promise<SessionInfo[]> =>
+    fetchApi<{sessions: SessionInfo[]}>(`/admin/sessions?bot_id=${encodeURIComponent(botId)}`).then(r => r.sessions),
 
   getSessionDetail: (sessionKey: string): Promise<SessionDetail> =>
     fetchApi<SessionDetail>(`/admin/sessions/${sessionKey}`),
@@ -117,7 +117,7 @@ export const logsApi = {
   },
 
   exportLogs: (_botId: string, _format: string): Promise<string> =>
-    Promise.resolve(''),  // Not implemented yet
+    Promise.reject(new Error('日志导出暂未实现')),
 };
 
 // Config API
@@ -131,8 +131,17 @@ export const configApi = {
       body: JSON.stringify(config),
     }),
 
-  testConnection: (_provider: string, _apiKey: string, _baseUrl: string): Promise<boolean> =>
-    Promise.resolve(true),  // Not implemented yet
+  testConnection: (provider: string, apiKey: string, baseUrl: string, botId = '_default'): Promise<boolean> =>
+    fetchApi<{ok: boolean; error?: string}>(`/admin/config/${encodeURIComponent(botId)}/test`, {
+      method: 'POST',
+      body: JSON.stringify({
+        model: {
+          provider,
+          api_key: apiKey,
+          base_url: baseUrl,
+        },
+      }),
+    }).then(r => r.ok),
 };
 
 // Re-export types

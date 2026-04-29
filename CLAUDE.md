@@ -11,11 +11,11 @@ pip install -r requirements.txt
 # 本地开发安装
 pip install -e .
 
-# 运行测试（181个测试用例）
-python tests/test_comprehensive.py
+# 运行系统测试
+python tests/system_test_suite.py
 
-# 真实使用场景测试（10项核心功能验证）
-python tests/test_real_usage.py
+# 语法健康检查
+python -m compileall -q ai_companion
 
 # CLI 启动
 ai-companion start
@@ -109,12 +109,11 @@ Storage Layer（SQLite + Chroma 向量）
 
 | 层 | 技术 |
 |----|------|
-| 桌面框架 | Tauri 2.x |
-| 前端框架 | React 18 + TypeScript |
-| 构建工具 | Vite 5 |
-| 样式 | TailwindCSS 3 |
-| 状态管理 | Zustand 4 |
-| 图表 | Recharts 2 |
+| 前端框架 | React 19 + TypeScript |
+| 构建工具 | Vite 7 |
+| 样式 | TailwindCSS 4 |
+| 状态管理 | Zustand 5 |
+| 图表 | Recharts 3 |
 
 详细文档：
 - `docs/ui/UI_DESIGN.md` - UI 设计方案（设计规范、页面布局、组件规范）
@@ -122,9 +121,9 @@ Storage Layer（SQLite + Chroma 向量）
 - `docs/ui/UI_TECH_DESIGN.md` - 技术设计方案（架构、API、目录结构）
 - `docs/ui/UI_PROGRESS.md` - 实现进度追踪（150个任务步骤）
 
-开发命令（TODO，待初始化）：
+开发命令：
 ```bash
 cd ai-companion-ui
 npm install
-npm run tauri dev
+npm run dev
 ```

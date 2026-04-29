@@ -294,13 +294,15 @@ class MemoryEngine:
         if self._summarizer is None:
             await self.working.compress(session_id=self._session_id, summarizer=None)
         else:
+            summarizer = self._summarizer
+
             # 构建 summarizer 包装
             class _Summarizer:
                 async def summarize_old_conversation(self, text: str) -> str:
                     prompt = MemoryEngine.COMPRESS_PROMPT.format(
                         old_messages_text=text
                     )
-                    response = await self._summarizer.chat(
+                    response = await summarizer.chat(
                         messages=[{"role": "user", "content": prompt}],
                         system_prompt=None,
                     )
@@ -321,12 +323,14 @@ class MemoryEngine:
             return
 
         # 构建 summarizer 包装
+        summarizer = self._summarizer
+
         class _Summarizer:
             async def summarize_old_conversation(self, text: str) -> str:
                 prompt = MemoryEngine.COMPRESS_PROMPT.format(
                     old_messages_text=text
                 )
-                response = await self._summarizer.chat(
+                response = await summarizer.chat(
                     messages=[{"role": "user", "content": prompt}],
                     system_prompt=None,
                 )

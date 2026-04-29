@@ -1,7 +1,34 @@
 {
-  "daily_interval_seconds": 3600,
-  "major_interval_seconds": 21600,
+  "daily_interval_seconds": 86400,
+  "major_interval_seconds": 604800,
   "time_ratio": 1,
+  "event_policy": {
+    "scenario_cooldown_days": 14,
+    "major_scenario_cooldown_days": 180,
+    "unexpected_event_probability": 0.01,
+    "unexpected_event_cooldown_days": 365,
+    "llm_daily_candidate_limit": 12,
+    "disabled_scenarios": [],
+    "scenario_weights": {},
+    "custom_scenarios": []
+  },
+  "daily_life_profile": {
+    "city_type": "大学城",
+    "commute_mode": "步行和地铁",
+    "living_status": "宿舍",
+    "work_style": "大学生",
+    "hobbies": ["奶茶", "短视频", "追星", "自拍"],
+    "family_contact_style": "经常和家里微信聊天",
+    "social_style": "喜欢主动分享日常，朋友互动频繁",
+    "personality_event_bias": {
+      "social": 1.8,
+      "food": 1.5,
+      "digital": 1.4,
+      "hobby": 1.4,
+      "kindness": 1.2,
+      "solitude": 0.7
+    }
+  },
   "season": {
     "hemisphere": "north",
     "birthday_month": 3

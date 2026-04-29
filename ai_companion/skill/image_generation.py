@@ -1,7 +1,7 @@
 """
 ImageGenerationSkill - 图片生成技能
 
-支持多种模型：DALL-E, Stable Diffusion, MiniMax 等
+支持 MiniMax 图片生成；其他 provider 需在实现后再声明。
 """
 
 import os
@@ -20,7 +20,7 @@ class ImageGenerationSkill(Skill):
     name = "image_generation"
     description = "根据文字描述生成图片"
     capabilities = ["image_generation"]
-    supported_models = ["dalle", "minimax", "stable_diffusion"]
+    supported_models = ["minimax"]
 
     def __init__(self, config: dict = None):
         super().__init__(config)
@@ -29,7 +29,10 @@ class ImageGenerationSkill(Skill):
 
     def _check_config(self) -> bool:
         """检查配置是否完整"""
-        return True  # 暂时允许无配置（降级为不可用）
+        model = self.default_model or self.config.get("model")
+        if model and model not in self.supported_models:
+            return False
+        return bool(os.environ.get("MINIMAX_API_KEY") or self.config.get("api_key"))
 
     async def execute(self, params: dict, context: SkillContext) -> SkillResult:
         """执行图片生成"""
@@ -42,26 +45,13 @@ class ImageGenerationSkill(Skill):
             return SkillResult(success=False, content="未指定模型且未配置默认模型")
 
         try:
-            if model == "dalle":
-                return await self._generate_dalle(prompt, params)
-            elif model == "minimax":
+            if model == "minimax":
                 return await self._generate_minimax(prompt, params)
-            elif model == "stable_diffusion":
-                return await self._generate_sd(prompt, params)
             else:
                 return SkillResult(success=False, content=f"不支持的模型: {model}")
         except Exception as e:
             logger.error(f"[ImageGenerationSkill] 生成失败: {e}")
             return SkillResult(success=False, content=str(e))
-
-    async def _generate_dalle(self, prompt: str, params: dict) -> SkillResult:
-        """DALL-E 生成"""
-        # TODO: 实现 DALL-E API 调用
-        logger.info(f"[ImageGenerationSkill] DALL-E 生成（暂未实现）: {prompt[:50]}")
-        return SkillResult(
-            success=False,
-            content="DALL-E 技能未配置，请检查 config/models.yaml"
-        )
 
     async def _generate_minimax(self, prompt: str, params: dict) -> SkillResult:
         """MiniMax 图片生成 API - text_to_image"""
@@ -141,12 +131,3 @@ class ImageGenerationSkill(Skill):
         except Exception as e:
             logger.error(f"[ImageGenerationSkill] MiniMax 生成失败: {e}")
             return SkillResult(success=False, content=str(e))
-
-    async def _generate_sd(self, prompt: str, params: dict) -> SkillResult:
-        """Stable Diffusion 生成"""
-        # TODO: 实现 SD API 调用
-        logger.info(f"[ImageGenerationSkill] SD 生成（暂未实现）: {prompt[:50]}")
-        return SkillResult(
-            success=False,
-            content="Stable Diffusion 技能未配置"
-        )

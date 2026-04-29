@@ -1,10 +1,11 @@
 import logging
+import os
 import re
 import sys
 from pathlib import Path
 from typing import Optional
 
-LOG_DIR = Path.home() / ".ai-companion" / "logs"
+LOG_DIR = Path(os.environ.get("AI_COMPANION_LOG_DIR", Path.home() / ".ai-companion" / "logs"))
 _HANDLER_TAG_KEY = "_ai_companion_handler_type"
 
 

@@ -423,58 +423,73 @@ class SemanticStore:
         await self._update_attitude_profile(new_score)
         logger.info(f"[Semantic]  attitude_score: {current_score} {delta:+d} -> {new_score}")
 
-    # ── 人格文件写回 ─────────────────────────────────────────
+    # ── 运行态人格状态 ───────────────────────────────────────
+
+    def _runtime_profile_path(self) -> Optional[Path]:
+        if not self._persona_backstory_path:
+            return None
+        return Path(self._persona_backstory_path).parent / "runtime_profile.json"
+
+    def _load_runtime_profile(self) -> dict:
+        path = self._runtime_profile_path()
+        if not path or not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _write_runtime_profile(self, data: dict):
+        path = self._runtime_profile_path()
+        if not path:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(".json.tmp")
+        payload = dict(data or {})
+        payload["updated_at"] = datetime.now().isoformat()
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp_path.replace(path)
+
+    # ── 人格运行态写回 ───────────────────────────────────────
 
     async def _append_key_moment(self, moment: str):
-        """将关键时刻追加到人格 backst"""
+        """将关键时刻追加到 runtime_profile.json，避免污染模板 backstory。"""
         if not self._persona_backstory_path:
             return
         try:
-            with open(self._persona_backstory_path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = self._load_runtime_profile()
             moments = data.get("key_moments", [])
             if moment not in moments:
                 moments.append(moment)
                 data["key_moments"] = moments
-                with open(self._persona_backstory_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                logger.info(f"[Semantic]  key_moment 已写回人格文件: {moment[:30]}...")
+                self._write_runtime_profile(data)
+                logger.info(f"[Semantic]  key_moment 已写入 runtime_profile: {moment[:30]}...")
         except Exception as e:
             logger.info(f"[Semantic]  写回 key_moment 失败: {e}")
 
     async def _update_relationship(self, relationship: str):
-        """将关系变化更新到人格 profile.json"""
+        """将关系变化更新到 runtime_profile.json。"""
         if not self._persona_backstory_path:
             return
         try:
-            import os
-            # persona_backstory_path = data/bots/suqing/persona/backstory.json
-            # profile.json 和 backstory.json 同一目录（persona/）
-            profile_path = os.path.join(os.path.dirname(self._persona_backstory_path), "profile.json")
-            with open(profile_path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = self._load_runtime_profile()
             old_rel = data.get("relationship_to_user", "")
             if old_rel != relationship:
                 data["relationship_to_user"] = relationship
-                with open(profile_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                logger.info(f"[Semantic]  relationship 已更新: {old_rel} -> {relationship}")
+                self._write_runtime_profile(data)
+                logger.info(f"[Semantic]  relationship 已更新到 runtime_profile: {old_rel} -> {relationship}")
         except Exception as e:
             logger.info(f"[Semantic]  写回 relationship 失败: {e}")
 
     async def _update_attitude_profile(self, new_score: int):
-        """将 attitude_score 变化更新到人格 profile.json"""
+        """将 attitude_score 变化更新到 runtime_profile.json。"""
         if not self._persona_backstory_path:
             return
         try:
-            import os
-            profile_path = os.path.join(os.path.dirname(self._persona_backstory_path), "profile.json")
-            with open(profile_path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = self._load_runtime_profile()
             data["attitude_score"] = new_score
-            with open(profile_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.info(f"[Semantic]  attitude_score 已写回 profile.json: {new_score}")
+            self._write_runtime_profile(data)
+            logger.info(f"[Semantic]  attitude_score 已写入 runtime_profile: {new_score}")
         except Exception as e:
             logger.info(f"[Semantic]  写回 attitude_score 失败: {e}")
 

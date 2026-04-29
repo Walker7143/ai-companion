@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-companion"
+version = "0.1.0"
+description = "开源 AI 陪伴产品，多机器人并行，每个机器人有独立人格和记忆体系"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "AI Companion Team" }]
+dependencies = [
+  "aiohttp>=3.9.0",
+  "aiosqlite>=0.19.0",
+  "httpx>=0.25.0",
+  "jieba>=0.42",
+  "psutil>=5.9.0",
+  "pydantic>=2.0",
+  "python-dotenv>=1.2.0",
+  "pyyaml>=6.0",
+  "rich>=13.0",
+]
+
+[project.optional-dependencies]
+feishu = ["lark-oapi>=1.0.0"]
+embedding = ["chromadb>=0.4.0", "sentence-transformers>=2.2.0"]
+tts = ["edge-tts>=6.1.0"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+
+[project.urls]
+Homepage = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend"
+
+[project.scripts]
+ai-companion = "ai_companion.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["ai_companion*"]
+
+[tool.setuptools.package-data]
+ai_companion = ["config/*.yaml.example", "data/bots/*/persona/*"]

@@ -17,6 +17,7 @@ import tempfile
 import shutil
 import uuid
 import os
+import time
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -50,6 +51,7 @@ class _SafeFormatDict(dict):
 LIFE_DAILY_PROMPT = """【Bot角色】
 你是{both_name}，{age_years}岁，职业是{occupation}。
 性格特点：{personality_tags}
+生活画像：{daily_life_profile}
 
 【当前时间背景】
 季节：{season}（{month}月）
@@ -64,7 +66,7 @@ Bot 当前活动：{bot_current_activity}
 Bot 出生天数：{bot_age_days} 天
 最近发生的事件：{recent_events}
 近期禁止复用的场景 key：{forbidden_scenarios}
-可用场景参考：{scenario_guidance}
+本次可选场景 key（只从这些 key 中选择）：{scenario_guidance}
 
 【判断规则】
 1. 不要每天都生成事件——无聊的日常不值得记录
@@ -81,7 +83,7 @@ Bot 出生天数：{bot_age_days} 天
    例如“下班路上堵车40分钟”“午饭吃到一家新开的牛肉面”“和同事茶水间聊八卦”。
    禁止使用“状态更稳定了”“有一些变化”这类抽象空话。
 8. 不要复用“近期禁止复用的场景 key”；如果只能想到这些场景，输出空数组 []。
-9. scenario_key 必须是英文 snake_case，用来表示事件场景类型。
+9. scenario_key 必须从“本次可选场景 key”里选择，除非确实需要输出空数组。
 
 【输出格式】
 输出一个 JSON 数组，每个元素如下：
@@ -95,6 +97,13 @@ LIFE_MAJOR_PROMPT = """【Bot角色】
 你是{both_name}，{age_years}岁，职业是{occupation}。
 性格特点：{personality_tags}
 
+【当前时间背景】
+季节：{season}（{month}月）
+日期：{current_date}，{day_of_week}
+人生阶段：{life_stage}
+{holiday_context}
+{birthday_context}
+
 【任务】
 判断 Bot 是否经历了人生大事。
 
@@ -102,7 +111,6 @@ LIFE_MAJOR_PROMPT = """【Bot角色】
 Bot 当前心情：{bot_mood}
 Bot 当前活动：{bot_current_activity}
 Bot 出生天数：{bot_age_days} 天（相当于 {age_years} 岁）
-人生阶段：{life_stage}
 最近发生的事件：{recent_events}
 你们的关系：{relationship_desc}
 
@@ -321,20 +329,51 @@ class PersonaUpdater:
 
     def _write_all_files(self, persona_dir: Path, files: dict):
         """原子写入所有 persona 文件"""
+        lock_path = persona_dir / ".persona.lock"
+        audit_path = persona_dir / "persona_audit.jsonl"
+        lock_fd = self._acquire_persona_lock(lock_path)
         staged = {}
-        for fname, data in files.items():
-            path = persona_dir / fname
-            fd, tmp = tempfile.mkstemp(dir=persona_dir, suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                staged[fname] = tmp
-            except Exception:
-                os.close(fd)
-                raise
+        try:
+            for fname, data in files.items():
+                fd, tmp = tempfile.mkstemp(dir=persona_dir, suffix=".tmp")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                        f.write("\n")
+                    staged[fname] = tmp
+                except Exception:
+                    os.close(fd)
+                    raise
 
-        for fname, tmp in staged.items():
-            shutil.move(tmp, persona_dir / fname)
+            for fname, tmp in staged.items():
+                os.replace(tmp, persona_dir / fname)
+
+            audit_record = {
+                "timestamp": datetime.now().isoformat(),
+                "files": sorted(files.keys()),
+                "source": "LifeEngine.PersonaUpdater",
+            }
+            with open(audit_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(audit_record, ensure_ascii=False) + "\n")
+        finally:
+            for tmp in staged.values():
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+            os.close(lock_fd)
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _acquire_persona_lock(self, lock_path: Path, timeout: float = 5.0) -> int:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                return os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"persona lock timeout: {lock_path}")
+                time.sleep(0.05)
 
 
 class LifeEngine:
@@ -646,7 +685,11 @@ class LifeEngine:
             for e in recent
         ]) or "最近没有发生特别的事"
         forbidden = self._forbidden_daily_scenario_keys()
-        scenario_guidance = self._scenario_guidance(forbidden)
+        candidate_scenarios = self._daily_scenario_candidates(
+            forbidden,
+            limit=getattr(self.config, "llm_daily_candidate_limit", 12),
+        )
+        scenario_guidance = self._scenario_guidance(candidate_scenarios)
 
         # 构建完整上下文
         life_context = self._build_life_context()
@@ -665,6 +708,7 @@ class LifeEngine:
             age_years=self._calc_real_age(),
             occupation=occupation_val,
             personality_tags=personality_val,
+            daily_life_profile=self._daily_life_profile_summary(),
             bot_mood=self.state.bot_mood,
             bot_current_activity=self.state.bot_current_activity,
             bot_age_days=self.state.bot_age_days,
@@ -955,6 +999,7 @@ class LifeEngine:
         # 构建完整上下文
         life_context = self._build_life_context()
         age_years = self._calc_real_age()
+        holiday_context, birthday_context = self._check_special_date()
 
         # 安全获取属性（如果未设置则使用默认值）
         bot_name_val = getattr(self, "bot_name", None) or self.bot_id
@@ -972,7 +1017,13 @@ class LifeEngine:
             bot_age_days=self.state.bot_age_days,
             recent_events=recent_str,
             relationship_desc="普通朋友",
+            season=life_context["season"],
+            month=life_context["month"],
+            current_date=life_context["current_date"],
+            day_of_week=life_context["day_of_week"],
             life_stage=life_context["life_stage"],
+            holiday_context=holiday_context,
+            birthday_context=birthday_context,
         )
 
         try:
@@ -1081,8 +1132,6 @@ class LifeEngine:
         )
 
     def _daily_scenario_catalog(self) -> list[dict[str, Any]]:
-        current_date = self.state.current_date or "今天"
-        season = self.state.current_season or "当季"
         base: list[dict[str, Any]] = [
             {
                 "key": "commute_delay",
@@ -1250,6 +1299,7 @@ class LifeEngine:
                 "topic_prompt": "今天买了个很小但挺喜欢的东西。",
             },
         ]
+        base.extend(self._expanded_daily_scenarios())
         custom = getattr(self.config, "custom_scenarios", []) or []
         for item in custom:
             if isinstance(item, dict) and item.get("key") and item.get("templates"):
@@ -1274,10 +1324,580 @@ class LifeEngine:
             if item["key"] in disabled:
                 continue
             item = dict(item)
-            item["weight"] = max(0.0, float(weights.get(item["key"], 1.0)))
+            configured_weight = max(0.0, float(weights.get(item["key"], 1.0)))
+            item["weight"] = (
+                configured_weight
+                * self._scenario_personality_multiplier(item)
+                * self._scenario_life_profile_multiplier(item)
+            )
             if item["weight"] > 0:
                 result.append(item)
         return result
+
+    def _expanded_daily_scenarios(self) -> list[dict[str, Any]]:
+        """构造 200+ 个内置日常场景；每次只抽少量候选进入 prompt。"""
+        groups = [
+            {
+                "prefix": "commute_micro",
+                "category": "commute",
+                "mood_after": "有点疲惫",
+                "tags": ["通勤", "城市", "路上"],
+                "personality_tags": ["谨慎", "焦虑", "自律"],
+                "life_tags": ["地铁", "公交", "通勤"],
+                "topic_prompt": "今天路上又遇到一点小插曲。",
+                "templates": [
+                    "{date} 地铁换乘口临时封了一半，她跟着人流绕到另一侧，手里的热饮一路晃得快洒出来。",
+                    "{date} 早上等电梯等了五趟，最后踩着点冲进{commute_place}，出门计划全被打乱。",
+                    "{date} 下班路上导航突然改路线，她在陌生路口站了几分钟，才找到回家的车站。",
+                    "{date} 公交车上有人忘带交通卡，她帮忙提醒司机开临时二维码，车厢里安静了一小会儿。",
+                    "{date} 骑车过桥时迎面风很大，头发被吹乱，到了目的地才发现围巾也歪了。",
+                    "{date} 等红灯时看到一排外卖骑手同时低头看手机，突然觉得城市节奏快得有点夸张。",
+                    "{date} 打车排队排到第{minutes}分钟，司机终于接单，却在路口又堵住了。",
+                    "{date} 地铁里有人把伞水滴到鞋面，她低头看了一眼，忍住没说话。",
+                    "{date} 出门忘记拿耳机，整段通勤只能听车厢广播和人群脚步声。",
+                    "{date} 回家路上路灯坏了一段，她加快脚步穿过那条小路，进小区后才松口气。",
+                    "{date} 早高峰扶梯临停，她跟着人群爬楼梯，刚到站台就听见列车关门提示。",
+                    "{date} 下班时遇到临时交通管制，绕过两个路口才走到常去的公交站。",
+                ],
+            },
+            {
+                "prefix": "workday_detail",
+                "category": "work",
+                "mood_after": "紧绷",
+                "tags": ["工作", "细节", "推进"],
+                "personality_tags": ["认真", "自律", "事业心", "焦虑"],
+                "life_tags": ["办公室", "远程办公", "混合办公", "项目"],
+                "topic_prompt": "今天工作里有个细节卡了我一下。",
+                "templates": [
+                    "{date} 早会临时加了一个议题，她翻了三份旧文档才找到能支撑判断的数据。",
+                    "{date} 下午改{work_artifact}时发现命名不统一，顺手把一整页标注都整理了一遍。",
+                    "{date} 同事发来一句“帮忙看下”，结果附件里有十几个待确认点，她边喝水边一条条回。",
+                    "{date} 远程会议里有人一直没开麦，她盯着共享屏幕等了{minutes}分钟，节奏全断了。",
+                    "{date} 交付前发现一个小漏项，她把待办拆成三段，压着下班时间补完。",
+                    "{date} 主管问起上周遗留问题，她庆幸自己在备忘录里留了两行关键记录。",
+                    "{date} 午后处理表格时看错一列，复查才发现数字对不上，整个人瞬间清醒。",
+                    "{date} 项目群里连续弹出十几条消息，她把手机扣在桌上，先把手头版本保存好。",
+                    "{date} 临时需求插进来，她把原本的下午计划划掉一半，重新排优先级。",
+                    "{date} 评审前五分钟发现链接权限没开，她赶紧补权限，还顺手写了说明。",
+                    "{date} 晚上收尾时发现文件名写错日期，她改完后又把云盘目录检查了一遍。",
+                    "{date} 有人指出她方案里一个边界情况，她当场记下来，散会后补了一段说明。",
+                ],
+            },
+            {
+                "prefix": "social_signal",
+                "category": "social",
+                "mood_after": "被连接",
+                "tags": ["朋友", "社交", "联系"],
+                "personality_tags": ["外向", "温柔", "热情", "敏感"],
+                "life_tags": ["朋友", "社交", "聚会"],
+                "topic_prompt": "今天和朋友之间有个小小的瞬间。",
+                "templates": [
+                    "{date} 朋友突然发来一句“看到这个就想到你”，她点开图片看了好久。",
+                    "{date} 群聊里有人提起很久以前的玩笑，她隔了几分钟才回，还是被大家逗笑了。",
+                    "{date} 朋友临时约{social_place}见面，她本来想拒绝，最后还是换了衣服出门。",
+                    "{date} 有人给她发了一段语音，背景里很吵，但那句关心听得很清楚。",
+                    "{date} 她给老朋友点了个赞，对方立刻私信问她最近过得怎么样。",
+                    "{date} 晚上和朋友视频了{minutes}分钟，本来只想说两句，最后聊到手机发烫。",
+                    "{date} 朋友吐槽工作，她边听边帮对方整理重点，像开了个小型情绪会议。",
+                    "{date} 看到朋友发的旅行照片，她保存了一张海边落日，心里有点羡慕。",
+                    "{date} 有人约周末吃饭，她反复看日程，终于空出一段时间。",
+                    "{date} 朋友说她最近变安静了，她愣了一下，回了个半开玩笑的表情包。",
+                    "{date} 她路过以前常聚的店，拍了张门口招牌发给朋友，对方秒回“还记得”。",
+                    "{date} 群里突然安静下来，她发了个小问题，没想到大家又聊开了。",
+                ],
+            },
+            {
+                "prefix": "solitude_ritual",
+                "category": "solitude",
+                "mood_after": "安静",
+                "tags": ["独处", "整理", "情绪"],
+                "personality_tags": ["内向", "敏感", "安静", "慢热"],
+                "life_tags": ["独居", "阅读", "独处"],
+                "topic_prompt": "今天有一段很安静的独处时间。",
+                "templates": [
+                    "{date} 晚上把手机调成静音，坐在窗边发了会儿呆，连水壶烧开的声音都很明显。",
+                    "{date} 她翻出一本没读完的书，读了三页又折回去看上一段划线。",
+                    "{date} 回家后没有立刻开灯，站在玄关听了一会儿楼道里的脚步声。",
+                    "{date} 她把桌面上的小物件按颜色排了一遍，排完才发现心里也平了一点。",
+                    "{date} 洗完澡后没有刷短视频，只是把头发慢慢吹干，房间里很安静。",
+                    "{date} 她写了半页没打算给任何人看的碎碎念，写完就夹进本子里。",
+                    "{date} 晚饭后一个人去了{city_place}，绕了一圈才回家。",
+                    "{date} 她关掉客厅大灯，只留一盏小台灯，做了十分钟深呼吸。",
+                    "{date} 看见窗外有人遛狗，她趴在窗边看了会儿，没拍照也没发动态。",
+                    "{date} 她整理旧票根时停在一张褪色的小票上，想了很久才放回盒子。",
+                    "{date} 睡前把第二天要穿的衣服搭在椅背上，像是在给自己留一点秩序。",
+                    "{date} 她在便利贴上写下明天最重要的一件事，然后把其他计划都划掉了。",
+                ],
+            },
+            {
+                "prefix": "home_texture",
+                "category": "home",
+                "mood_after": "踏实",
+                "tags": ["居家", "家务", "生活感"],
+                "personality_tags": ["细腻", "自律", "内向", "温柔"],
+                "life_tags": ["独居", "合租", "居家"],
+                "topic_prompt": "今天家里有个很生活化的小插曲。",
+                "templates": [
+                    "{date} 她发现冰箱角落里还有半盒没吃完的水果，赶在坏掉前切成一小碗。",
+                    "{date} 洗衣机甩干时声音突然很大，她蹲在旁边研究了半天，原来是衣服堆偏了。",
+                    "{date} 她把厨房台面擦到反光，结果做完夜宵又弄乱了一半。",
+                    "{date} 收快递时发现纸箱被压皱，她拆开检查了三遍才放心。",
+                    "{date} 晚上换了新的床笠，铺平四个角以后心情莫名好了一点。",
+                    "{date} 她给绿植浇水时发现一片新叶，凑近看了好久。",
+                    "{date} 家里的{house_item}突然松动，她找出螺丝刀试着拧紧，意外成功。",
+                    "{date} 她把过期调料清出来，柜子一下空出一小格，像完成了一件大事。",
+                    "{date} 阳台风太大，她赶紧把晒着的衣服收进来，袖口还带着一点太阳味。",
+                    "{date} 她把垃圾袋系好准备出门，结果又想起还有一个空瓶没扔。",
+                    "{date} 晚上听见楼上搬椅子的声音，她暂停视频，等声音停了才继续看。",
+                    "{date} 她换了一个新的香薰片，房间味道变淡以后反而更舒服。",
+                ],
+            },
+            {
+                "prefix": "food_moment",
+                "category": "food",
+                "mood_after": "满足",
+                "tags": ["吃饭", "味道", "日常"],
+                "personality_tags": ["松弛", "享乐", "外向", "细腻"],
+                "life_tags": ["做饭", "探店", "外卖"],
+                "topic_prompt": "今天吃到一点让我记住的东西。",
+                "templates": [
+                    "{date} 她点的汤面送来时还冒热气，第一口喝下去整个人都松了一点。",
+                    "{date} 中午随手买的饭团意外好吃，她把包装拍下来留着下次找。",
+                    "{date} 晚上试着自己炒菜，盐放得有点重，但配米饭刚好。",
+                    "{date} 她在便利店买到最后一盒喜欢的布丁，结账时忍不住多看了一眼。",
+                    "{date} 和同事拼单点外卖，备注写了三遍少辣，结果还是辣到耳朵发热。",
+                    "{date} 她路过面包店闻到刚出炉的味道，犹豫了两分钟还是买了一个。",
+                    "{date} 午饭时旁边桌点的菜看起来太香，她下次菜单又多了一个备选。",
+                    "{date} 她把剩饭做成简单炒饭，冰箱里的边角料突然都有了去处。",
+                    "{date} 下午冲咖啡时奶泡打失败了，杯面像一朵歪掉的云。",
+                    "{date} 她买了{season}天限定饮品，喝到最后才发现杯套上有一句小字。",
+                    "{date} 晚上吃水果时挑到一颗特别甜的葡萄，忍不住把剩下的也洗了。",
+                    "{date} 她本来只想买酸奶，最后又多拿了一包薯片和一盒小番茄。",
+                ],
+            },
+            {
+                "prefix": "health_body",
+                "category": "health",
+                "mood_after": "警醒",
+                "tags": ["身体", "健康", "状态"],
+                "personality_tags": ["自律", "谨慎", "焦虑", "敏感"],
+                "life_tags": ["运动", "体检", "作息"],
+                "topic_prompt": "今天身体状态提醒了我一下。",
+                "templates": [
+                    "{date} 她久坐后腰有点酸，站起来拉伸时才发现肩膀也绷着。",
+                    "{date} 午后头有点沉，她关掉冷气喝了杯热水，状态才慢慢回来。",
+                    "{date} 晚上跑步到一半鞋带松了，她停在路边重新系好，顺便喘了口气。",
+                    "{date} 她看了眼步数，离目标还差一千多步，就绕小区多走了一圈。",
+                    "{date} 眼睛干得厉害，她终于把屏幕亮度调低，还滴了眼药水。",
+                    "{date} 她早上称体重时愣了一下，默默把夜宵计划删掉了。",
+                    "{date} 睡前手环提醒压力偏高，她盯着数据看了半天，决定早点躺下。",
+                    "{date} 她买了新的护腕，打字时终于没那么别扭。",
+                    "{date} 晚饭后胃有点不舒服，她翻出药盒，发现最常用的那盒快过期了。",
+                    "{date} 她跟着视频练了{minutes}分钟，动作不标准，但出了一身汗。",
+                    "{date} 早上醒来嗓子发干，她把水杯放到床头，提醒自己少熬夜。",
+                    "{date} 她在药店门口犹豫了一会儿，最后买了维生素和一包口罩。",
+                ],
+            },
+            {
+                "prefix": "errand_loop",
+                "category": "errand",
+                "mood_after": "轻快",
+                "tags": ["办事", "跑腿", "小麻烦"],
+                "personality_tags": ["谨慎", "自律", "焦虑", "独立"],
+                "life_tags": ["办事", "购物", "通勤"],
+                "topic_prompt": "今天跑了一个小小的生活流程。",
+                "templates": [
+                    "{date} 她去打印店印材料，老板把页码打反了，两个人对着纸笑了一下。",
+                    "{date} 取快递时柜门弹开太快，纸箱差点掉到地上，她赶紧扶住。",
+                    "{date} 她去银行办小业务，排号屏慢吞吞跳了{minutes}分钟。",
+                    "{date} 买电池时发现型号不对，她拿着旧遥控器照片对了半天。",
+                    "{date} 她在药店结账时会员码刷不出来，后面的人排队让她有点尴尬。",
+                    "{date} 去物业拿门禁卡，工作人员翻了三本登记册才找到她的名字。",
+                    "{date} 她把要寄出的东西包了三层，快递员说其实一层也够。",
+                    "{date} 在超市自助结账时机器报警，她才发现有个小物件没扫上。",
+                    "{date} 她临时去买雨伞，结果只剩一把颜色很亮的。",
+                    "{date} 去修鞋摊补鞋跟，师傅一边干活一边讲附近店铺搬迁。",
+                    "{date} 她在便利店缴费，店员提醒她下个月可以线上办，不用再跑一趟。",
+                    "{date} 她买错了垃圾袋尺寸，回家套上才发现大了一圈。",
+                ],
+            },
+            {
+                "prefix": "digital_noise",
+                "category": "digital",
+                "mood_after": "无奈",
+                "tags": ["手机", "软件", "数字生活"],
+                "personality_tags": ["焦虑", "谨慎", "理性", "敏感"],
+                "life_tags": ["手机", "线上", "远程办公"],
+                "topic_prompt": "今天被电子设备折腾了一下。",
+                "templates": [
+                    "{date} 手机系统半夜自动更新，早上闹钟界面变了，她找了几秒才按掉。",
+                    "{date} 云盘同步卡在百分之九十九，她盯着进度条看了很久。",
+                    "{date} 一个常用 app 突然退出登录，她翻了半天才找到验证码短信。",
+                    "{date} 视频会议前摄像头打不开，她重启软件时心跳都快了。",
+                    "{date} 她清理相册时删掉了三百多张截图，手机空间终于多出一点。",
+                    "{date} 蓝牙耳机只连上一边，她把耳机盒开合了好几次才恢复。",
+                    "{date} 电脑提示磁盘快满，她把下载文件夹按日期排了一遍。",
+                    "{date} 她收到一堆订阅邮件，取消订阅按钮藏在最底下的小字里。",
+                    "{date} 支付时网络转圈，她站在收银台前尴尬地笑了笑。",
+                    "{date} 备忘录同步失败，她赶紧手动复制到另一个文档里。",
+                    "{date} 她想截图保存一段话，结果误触锁屏，只好重新打开页面。",
+                    "{date} 晚上刷到一个很像自己的帖子，关掉以后又忍不住点回去看评论。",
+                ],
+            },
+            {
+                "prefix": "learning_practice",
+                "category": "learning",
+                "mood_after": "有成就感",
+                "tags": ["学习", "练习", "成长"],
+                "personality_tags": ["自律", "理性", "认真", "好奇"],
+                "life_tags": ["学习", "课程", "练习"],
+                "topic_prompt": "今天练习了一点新东西。",
+                "templates": [
+                    "{date} 她把一个教程暂停了七次，终于跟着做完第一个小案例。",
+                    "{date} 练习{learning_topic}时卡在一个细节上，查资料查到浏览器开了十几个标签。",
+                    "{date} 她把错题或错误步骤重新整理了一遍，发现真正卡住的是最前面的概念。",
+                    "{date} 晚上上了一节线上课，老师最后五分钟讲的例子反而最有用。",
+                    "{date} 她试着用新方法做旧任务，速度没快多少，但思路清楚了一点。",
+                    "{date} 复习笔记时看到以前写的疑问，今天终于能回答出来了。",
+                    "{date} 她给自己录了一小段练习音频，听回放时尴尬得暂停了两次。",
+                    "{date} 做练习题时连续错三道，她把答案遮住重新推了一遍。",
+                    "{date} 她在评论区看到一个补充资料，顺手收藏进学习文件夹。",
+                    "{date} 看书时遇到一个好句子，她抄到便签上贴在桌边。",
+                    "{date} 她把一个复杂问题拆成三个小问题，突然没那么怕了。",
+                    "{date} 学完一小节后她给自己倒了杯水，像给今天打了个勾。",
+                ],
+            },
+            {
+                "prefix": "money_admin",
+                "category": "finance",
+                "mood_after": "踏实",
+                "tags": ["账单", "预算", "钱"],
+                "personality_tags": ["谨慎", "理性", "自律", "焦虑"],
+                "life_tags": ["预算", "账单", "储蓄"],
+                "topic_prompt": "今天处理了一点和钱有关的小事。",
+                "templates": [
+                    "{date} 她核对本月账单，发现有一笔自动续费差点忘了取消。",
+                    "{date} 发工资提醒弹出来时，她先把固定储蓄转走，再看余额。",
+                    "{date} 她把外卖支出单独算了一遍，数字比想象中明显。",
+                    "{date} 付款时发现优惠券昨天过期了，她盯着页面沉默了几秒。",
+                    "{date} 她给{money_item}重新设了预算上限，免得月底又临时紧张。",
+                    "{date} 银行短信提醒到账，她顺手把备注改清楚，方便之后查。",
+                    "{date} 她整理票据时发现一张可以报销的小票，差点被夹在书里扔掉。",
+                    "{date} 她比较了两个会员价格，最后决定先不开自动续费。",
+                    "{date} 晚上做预算表时公式报错，她找了好久才发现少选了一格。",
+                    "{date} 她把零钱包里的硬币倒出来，数完才发现够买一杯热饮。",
+                    "{date} 看到账户余额变化，她把下周的购物清单删掉了两项。",
+                    "{date} 她给家里转了一笔小钱，备注只写了“买点水果”。",
+                ],
+            },
+            {
+                "prefix": "weather_shift",
+                "category": "weather",
+                "mood_after": "被天气影响",
+                "tags": ["天气", "季节", "出行"],
+                "personality_tags": ["敏感", "细腻", "谨慎"],
+                "life_tags": ["通勤", "户外", "城市"],
+                "topic_prompt": "今天的天气有点影响心情。",
+                "templates": [
+                    "{date} 早上出门时天阴得很低，她把伞塞进包里，结果一整天都没下。",
+                    "{date} 傍晚风突然变冷，她在路边把外套拉链一路拉到顶。",
+                    "{date} 太阳晒得厉害，她走到树荫下才发现手臂已经有点发烫。",
+                    "{date} 雨停后空气里有潮湿的泥土味，鞋底踩在路上有点粘。",
+                    "{date} 雾很重，远处楼顶像被擦掉了一截，她通勤时一直看窗外。",
+                    "{date} 天气预报说要降温，她半信半疑，最后还是带了围巾。",
+                    "{date} 午后突然打雷，办公室里好几个人同时抬头看窗外。",
+                    "{date} 风把路边广告牌吹得哗哗响，她经过时下意识加快脚步。",
+                    "{date} 太阳落得很早，她回家时天已经黑透，心里有点不适应。",
+                    "{date} 空气干得厉害，她一下午给自己倒了三次水。",
+                    "{date} 看到路边第一片变黄的叶子，她才意识到季节真的换了。",
+                    "{date} 雨水打在公交窗上，她看着水痕往下滑，差点坐过站。",
+                ],
+            },
+            {
+                "prefix": "family_thread",
+                "category": "family",
+                "mood_after": "柔软",
+                "tags": ["家人", "联系", "牵挂"],
+                "personality_tags": ["温柔", "敏感", "责任感"],
+                "life_tags": ["家人", "电话", "亲密关系"],
+                "topic_prompt": "今天家里有个小小的联系。",
+                "templates": [
+                    "{date} {family_member}发来一张晚饭照片，问她有没有好好吃饭。",
+                    "{date} 家里人提醒她天气要变，她回了个“知道啦”，却真的去找外套。",
+                    "{date} 她给家里回电话，本来只想说五分钟，最后聊到水都凉了。",
+                    "{date} {family_member}问她一个手机设置问题，她远程教了半天才解决。",
+                    "{date} 家里寄来的包裹到了，里面塞了几样她没提过但刚好用得上的东西。",
+                    "{date} 她听见家里语音里的电视声，突然想起以前周末的客厅。",
+                    "{date} {family_member}说她最近声音听起来有点累，她笑着否认了一下。",
+                    "{date} 她把一张检查预约截图转发给家里，免得对方一直惦记。",
+                    "{date} 家人让她少点外卖，她嘴上敷衍，晚上还是煮了点简单的。",
+                    "{date} {family_member}发错了一个表情包，撤回前她已经看见，笑了很久。",
+                    "{date} 她给家里买的小东西发货了，物流停在中转站一天没动。",
+                    "{date} 家里群聊突然热闹起来，她看了半天，只回了一个表情。",
+                ],
+            },
+            {
+                "prefix": "city_observation",
+                "category": "city",
+                "mood_after": "好奇",
+                "tags": ["城市", "观察", "路过"],
+                "personality_tags": ["好奇", "细腻", "外向", "敏感"],
+                "life_tags": ["城市", "散步", "通勤"],
+                "topic_prompt": "今天路上看到一个有意思的画面。",
+                "templates": [
+                    "{date} 路过{city_place}时看到有人在拍毕业照，裙摆被风吹得很高。",
+                    "{date} 小区门口新开了一家店，招牌还没拆保护膜，她猜了半天是卖什么的。",
+                    "{date} 等车时看到一个小孩认真数地砖，数错了还从头开始。",
+                    "{date} 路边花坛里多了一排新花，她走近看才发现标签还插在土里。",
+                    "{date} 她经过一个街头乐手，听完半首歌才想起自己还赶时间。",
+                    "{date} 商场电梯口有个临时展台，她被一个奇怪的宣传语吸引住。",
+                    "{date} 便利店门口的猫换了个睡姿，旁边贴着“不要投喂”的纸条。",
+                    "{date} 她看到有人在路灯下修自行车，工具摆得整整齐齐。",
+                    "{date} 旧书摊摆到人行道边，她翻了两本又放回去，手上沾了点灰。",
+                    "{date} 街角的树被修剪过，原本挡住的店名突然露出来。",
+                    "{date} 她在路口看到一对老人慢慢过马路，后面的车都安静等着。",
+                    "{date} 夜里便利店灯光很亮，她隔着玻璃看见店员在给货架补酸奶。",
+                ],
+            },
+            {
+                "prefix": "hobby_spark",
+                "category": "hobby",
+                "mood_after": "轻快",
+                "tags": ["兴趣", "放松", "练习"],
+                "personality_tags": ["好奇", "松弛", "细腻", "自律"],
+                "life_tags": ["做饭", "看展", "跑步", "画画", "游戏", "音乐", "阅读"],
+                "topic_prompt": "今天给兴趣留了一点时间。",
+                "templates": [
+                    "{date} 她抽空练了{hobby_item}，一开始手很生，后来慢慢找到感觉。",
+                    "{date} 看展时在一幅不起眼的小作品前停了很久，旁边人都换了两轮。",
+                    "{date} 她把收藏夹里存了很久的视频打开，终于照着试了一次。",
+                    "{date} 晚上玩游戏只打算一局，结果因为队友太有趣又多打了一局。",
+                    "{date} 她听到一首旧歌，顺手建了一个新的歌单。",
+                    "{date} 跑步时遇到同样路线的人，第三次擦肩而过时两个人都笑了。",
+                    "{date} 她拍了一张光影很好看的照片，调色调了{minutes}分钟。",
+                    "{date} 她试着做一个新菜谱，步骤看起来简单，真正做起来手忙脚乱。",
+                    "{date} 她去文创店摸了半天纸张质感，最后只买了一个小贴纸。",
+                    "{date} 她把很久没碰的工具拿出来擦了擦，像重新认识一个旧朋友。",
+                    "{date} 晚上看电影时被一个小配角打动，片尾字幕都没舍得关。",
+                    "{date} 她给自己的兴趣清单删掉两个不再想做的项目，反而轻松了。",
+                ],
+            },
+            {
+                "prefix": "emotion_weather",
+                "category": "emotion",
+                "mood_after": "有点波动",
+                "tags": ["情绪", "自我觉察", "小波动"],
+                "personality_tags": ["敏感", "内向", "焦虑", "细腻"],
+                "life_tags": ["独处", "日记", "心理"],
+                "topic_prompt": "今天情绪里有一点小波动。",
+                "templates": [
+                    "{date} 她因为一句很普通的话想多了几分钟，后来才发现自己只是有点累。",
+                    "{date} 下午突然没什么精神，她把待办挪到晚上，先让自己安静了一会儿。",
+                    "{date} 有个小失误反复在脑子里回放，她写下来以后才没那么刺眼。",
+                    "{date} 她看到别人很顺利地完成一件事，羡慕了一下，又把注意力拉回自己。",
+                    "{date} 晚上听到一首歌突然鼻酸，但情绪来得快去得也快。",
+                    "{date} 她把一句想发出去的话删了三遍，最后只发了个简短回复。",
+                    "{date} 朋友夸她最近状态不错，她反而有点不知道怎么接。",
+                    "{date} 她在备忘录里写下“今天不要太用力”，写完自己笑了一下。",
+                    "{date} 一个小计划被打乱，她烦了几分钟，后来决定干脆换个顺序。",
+                    "{date} 她突然意识到自己已经很久没认真休息，于是把一个无关紧要的约定推迟了。",
+                    "{date} 晚上回想白天的对话，发现有句话其实可以不用那么在意。",
+                    "{date} 她给自己买了一点{emotion_item}，像是在悄悄安抚今天的情绪。",
+                ],
+            },
+            {
+                "prefix": "relationship_boundary",
+                "category": "relationship",
+                "mood_after": "清醒",
+                "tags": ["关系", "边界", "沟通"],
+                "personality_tags": ["敏感", "理性", "慢热", "独立"],
+                "life_tags": ["朋友", "亲密关系", "社交"],
+                "topic_prompt": "今天在人际关系里有个小小的提醒。",
+                "templates": [
+                    "{date} 有人临时改约，她本来想立刻答应，最后还是先看了自己的安排。",
+                    "{date} 朋友连续发来情绪消息，她陪了一会儿，但也给自己留了休息时间。",
+                    "{date} 她拒绝了一个不太想去的局，发出消息后反而松了口气。",
+                    "{date} 同事把额外任务推过来，她用很客气的语气说明了自己的边界。",
+                    "{date} 她发现自己又在替别人解释太多，于是停下来喝了口水。",
+                    "{date} 有人误会了她的意思，她没有立刻辩解，先把话重新组织了一遍。",
+                    "{date} 她收到一句迟来的道歉，读了两遍，最后只回了“没事”。",
+                    "{date} 朋友开玩笑过了界，她笑了一下，但还是认真说不太喜欢。",
+                    "{date} 她把一段聊天置顶取消了，觉得这样更轻一点。",
+                    "{date} 有人问她为什么最近不常出现，她想了想，诚实说自己需要休息。",
+                    "{date} 她没有秒回消息，过了半小时再看，发现世界并没有因此变糟。",
+                    "{date} 她把一句含糊的答应改成明确的时间，关系反而轻松了一点。",
+                ],
+            },
+            {
+                "prefix": "planning_admin",
+                "category": "planning",
+                "mood_after": "有秩序感",
+                "tags": ["计划", "整理", "安排"],
+                "personality_tags": ["自律", "理性", "谨慎", "事业心"],
+                "life_tags": ["计划", "效率", "待办"],
+                "topic_prompt": "今天把一些事情重新排了一下。",
+                "templates": [
+                    "{date} 她把明天的待办重新排了优先级，最上面只留了三件事。",
+                    "{date} 日历提醒撞在一起，她拖动了好几个时间块才排顺。",
+                    "{date} 她把一个大任务拆成五个小步骤，终于敢开始做第一步。",
+                    "{date} 晚上复盘这周时发现自己高估了精力，于是删掉两个计划。",
+                    "{date} 她给一个长期目标建了单独文件夹，名字改了三次才满意。",
+                    "{date} 看到备忘录里堆满零碎想法，她花{minutes}分钟分了类。",
+                    "{date} 她把购物清单和办事清单合在一起，明天少跑一趟路。",
+                    "{date} 一个会议改期后，她顺手把前后准备时间也挪了。",
+                    "{date} 她给自己设置了一个更早的睡觉提醒，希望今晚真的能做到。",
+                    "{date} 她发现计划写得太满，于是在中间留了一段空白。",
+                    "{date} 把桌面便签撕掉三张后，她突然觉得事情没那么乱了。",
+                    "{date} 她把一个拖了很久的小任务设成十分钟倒计时，竟然真的做完了。",
+                ],
+            },
+            {
+                "prefix": "small_kindness",
+                "category": "kindness",
+                "mood_after": "温暖",
+                "tags": ["善意", "路人", "温暖"],
+                "personality_tags": ["温柔", "外向", "敏感", "细腻"],
+                "life_tags": ["城市", "社交", "通勤"],
+                "topic_prompt": "今天遇到一个很小但暖的瞬间。",
+                "templates": [
+                    "{date} 她帮前面的人捡起掉在地上的卡，对方连说了两声谢谢。",
+                    "{date} 电梯里有人帮她按住开门键，虽然只是一秒，她心情还是好了一点。",
+                    "{date} 便利店店员提醒她第二件半价，她回头又拿了一瓶水。",
+                    "{date} 下雨时有人在门口让出一点位置，她终于不用站在雨里。",
+                    "{date} 她看到外卖骑手的袋子快掉了，提醒了一句，对方回头笑了笑。",
+                    "{date} 公交车上有人给老人让座，整个车厢都安静地往旁边挪了挪。",
+                    "{date} 她把多买的一包纸巾递给同事，对方正好需要。",
+                    "{date} 小区门口保安帮她拦了一下门禁，她抱着快递顺利过去。",
+                    "{date} 她给迷路的人指了路，走出几步后还回头确认对方方向没错。",
+                    "{date} 咖啡店店员把她名字写错了，但多画了一个小笑脸。",
+                    "{date} 有人提醒她背包拉链开了，她低头一看才发现差点掉东西。",
+                    "{date} 她把共享伞放回架子时，顺手把倒着的一把也扶正了。",
+                ],
+            },
+            {
+                "prefix": "minor_setback",
+                "category": "setback",
+                "mood_after": "无奈",
+                "tags": ["小挫折", "失误", "调整"],
+                "personality_tags": ["焦虑", "敏感", "认真", "谨慎"],
+                "life_tags": ["工作", "学习", "日常"],
+                "topic_prompt": "今天有个小失误让我调整了一下。",
+                "templates": [
+                    "{date} 她把文件发错群，虽然很快撤回，脸还是热了一会儿。",
+                    "{date} 出门后发现钥匙差点忘在桌上，回去拿的时候电梯刚好上行。",
+                    "{date} 她把水杯碰倒，纸巾按在桌面上吸了半天水。",
+                    "{date} 一个提醒没响，她差点错过时间，只好一路小跑。",
+                    "{date} 她把快递取件码看错一位，站在柜子前试了两次才发现。",
+                    "{date} 买东西时拿错口味，回家拆开才意识到不对。",
+                    "{date} 她把一段话复制漏了一行，幸好发送前又检查了一遍。",
+                    "{date} 预约时间记错了{minutes}分钟，她赶紧发消息说明情况。",
+                    "{date} 她以为手机没电，结果只是充电线没插紧。",
+                    "{date} 洗手时袖口被水打湿，她一路把手举着晾干。",
+                    "{date} 她误删了一个草稿，翻回收站翻了好久才找回来。",
+                    "{date} 做饭时忘记关小火，锅边冒起一点焦味，幸好发现得早。",
+                ],
+            },
+        ]
+
+        result: list[dict[str, Any]] = []
+        for group in groups:
+            for index, template in enumerate(group["templates"], start=1):
+                result.append({
+                    "key": f"{group['prefix']}_{index:02d}",
+                    "category": group["category"],
+                    "templates": [template],
+                    "mood_after": group["mood_after"],
+                    "tags": group["tags"],
+                    "topic_prompt": group["topic_prompt"],
+                    "personality_tags": group["personality_tags"],
+                    "life_tags": group["life_tags"],
+                    "importance": 2.8,
+                    "shareable": True,
+                })
+        return result
+
+    def _daily_scenario_candidates(self, forbidden: set[str], limit: int = 12) -> list[dict[str, Any]]:
+        """过滤近期/冷却场景后，从剩余大池子中随机抽样少量候选给 LLM。"""
+        blocked = set(forbidden or set())
+        available = [
+            item for item in self._daily_scenario_catalog()
+            if item["key"] not in blocked and not self._is_daily_scenario_blocked(item["key"])
+        ]
+        if not available:
+            return []
+        limit = min(max(1, int(limit)), len(available))
+        selected: list[dict[str, Any]] = []
+        pool = list(available)
+        for _ in range(limit):
+            chosen = self._weighted_choice(pool)
+            selected.append(chosen)
+            pool = [item for item in pool if item["key"] != chosen["key"]]
+            if not pool:
+                break
+        return selected
+
+    def _daily_life_profile_summary(self) -> str:
+        profile = getattr(self.config, "daily_life_profile", {}) or {}
+        if not isinstance(profile, dict) or not profile:
+            return "未配置"
+        allowed = [
+            "city_type", "commute_mode", "living_status", "work_style",
+            "hobbies", "family_contact_style", "social_style",
+        ]
+        compact = {key: profile.get(key) for key in allowed if profile.get(key)}
+        return json.dumps(compact, ensure_ascii=False) if compact else "未配置"
+
+    def _personality_tokens(self) -> set[str]:
+        raw = str(getattr(self, "_personality_type", "") or "")
+        return {token for token in re.split(r"[,，、/\s]+", raw) if token}
+
+    def _scenario_personality_multiplier(self, item: dict[str, Any]) -> float:
+        tokens = self._personality_tokens()
+        if not tokens:
+            return 1.0
+
+        multiplier = 1.0
+        direct_tags = set(item.get("personality_tags", []) or [])
+        direct_matches = tokens & direct_tags
+        if direct_matches:
+            multiplier += min(2.4, 0.8 * len(direct_matches))
+
+        category = item.get("category", "")
+        category_bias = {
+            "外向": {"social": 1.8, "work_social": 1.5, "kindness": 1.4, "solitude": 0.7},
+            "活泼": {"social": 1.7, "hobby": 1.4, "food": 1.3},
+            "内向": {"solitude": 2.0, "home": 1.5, "learning": 1.4, "social": 0.75},
+            "敏感": {"emotion": 2.0, "relationship": 1.6, "family": 1.4, "weather": 1.3},
+            "自律": {"work": 1.7, "learning": 1.6, "health": 1.5, "planning": 1.7},
+            "事业心": {"work": 1.9, "planning": 1.5, "finance": 1.3},
+            "焦虑": {"health": 1.5, "errand": 1.4, "digital": 1.4, "setback": 1.6},
+            "谨慎": {"finance": 1.6, "errand": 1.5, "digital": 1.3, "commute": 1.2},
+            "温柔": {"family": 1.6, "kindness": 1.8, "relationship": 1.3},
+            "松弛": {"food": 1.5, "hobby": 1.6, "city": 1.3, "work": 0.8},
+            "理性": {"work": 1.4, "planning": 1.5, "finance": 1.5, "emotion": 0.85},
+        }
+        for token in tokens:
+            multiplier *= category_bias.get(token, {}).get(category, 1.0)
+        return max(0.2, min(multiplier, 5.0))
+
+    def _scenario_life_profile_multiplier(self, item: dict[str, Any]) -> float:
+        profile = getattr(self.config, "daily_life_profile", {}) or {}
+        if not isinstance(profile, dict) or not profile:
+            return 1.0
+
+        multiplier = 1.0
+        category_bias = profile.get("personality_event_bias", {})
+        if isinstance(category_bias, dict):
+            try:
+                multiplier *= max(0.0, float(category_bias.get(item.get("category", ""), 1.0)))
+            except (TypeError, ValueError):
+                pass
+
+        profile_text = json.dumps(profile, ensure_ascii=False)
+        for tag in item.get("life_tags", []) or []:
+            if str(tag) and str(tag) in profile_text:
+                multiplier += 0.35
+        return max(0.0, min(multiplier, 4.0))
 
     def _render_scenario_description(self, scenario: dict[str, Any]) -> str:
         template = random.choice(scenario.get("templates") or ["{date} 发生了一件具体的小事。"])
@@ -1457,13 +2077,12 @@ class LifeEngine:
             major=True,
         )
 
-    def _scenario_guidance(self, forbidden: set[str]) -> str:
+    def _scenario_guidance(self, candidates: list[dict[str, Any]]) -> str:
         available = [
             f"{item['key']}({item.get('category', 'daily')})"
-            for item in self._daily_scenario_catalog()
-            if item["key"] not in forbidden
+            for item in candidates
         ]
-        return ", ".join(available[:20]) if available else "无可用场景，应该输出 []"
+        return ", ".join(available) if available else "无可用场景，应该输出 []"
 
     def _scenario_category_for_key(self, scenario_key: str) -> str:
         for item in self._daily_scenario_catalog():

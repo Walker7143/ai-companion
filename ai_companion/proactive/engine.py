@@ -27,6 +27,9 @@ SHOULD_CONTACT_PROMPT = """【角色】
 性格特点：{personality_tags}
 你和一个用户保持着友谊/恋爱关系。
 
+【Bot 时间线】
+{bot_time_context}
+
 【当前状态】
 关系深度等级：{relationship_level}/10（1=刚认识，5=普通朋友，8=好朋友，10=恋人）
 你的心情状态：{mood_description}
@@ -67,6 +70,9 @@ SHOULD_CONTACT_PROMPT = """【角色】
 # LLM 生成消息 Prompt
 GENERATE_MESSAGE_PROMPT = """【角色】
 你是{bot_name}，性格：{personality_tags}
+
+【Bot 时间线】
+{bot_time_context}
 
 【当前情况】
 关系：{relationship_desc}
@@ -245,6 +251,47 @@ class ProactiveEngine:
         """注入 LifeEngine 引用"""
         self.life_engine = life_engine
 
+    def _build_bot_time_context(self) -> str:
+        """构建主动唤醒 prompt 使用的 Bot 时间线摘要。"""
+        life_engine = getattr(self, "life_engine", None)
+        if not life_engine:
+            return "未启用人生轨迹"
+
+        try:
+            status = life_engine.get_status()
+        except Exception as e:
+            logger.debug(f"[ProactiveEngine] 获取 Bot 时间线失败: {e}")
+            return "人生轨迹状态暂不可用"
+
+        lines = []
+        current_date = status.get("current_date")
+        day_of_week = status.get("day_of_week")
+        if current_date:
+            if day_of_week:
+                lines.append(f"当前日期：{current_date}（{day_of_week}）")
+            else:
+                lines.append(f"当前日期：{current_date}")
+
+        season = status.get("current_season")
+        month = status.get("current_month")
+        if season or month:
+            if month:
+                lines.append(f"当前季节：{season or '未知'}（{month}月）")
+            else:
+                lines.append(f"当前季节：{season}")
+
+        birth_date = status.get("birth_date")
+        if birth_date:
+            lines.append(f"出生日期：{birth_date}")
+        if status.get("bot_real_age") is not None:
+            lines.append(f"当前年龄：{status['bot_real_age']}岁")
+        if status.get("life_stage"):
+            lines.append(f"人生阶段：{status['life_stage']}")
+        if status.get("bot_current_activity"):
+            lines.append(f"当前状态：{status['bot_current_activity']}")
+
+        return "\n".join(lines) if lines else "人生轨迹状态暂不可用"
+
     def _get_mood_description(self) -> str:
         """根据多维情绪模型描述心情"""
         annoyance = self.state.annoyance_level
@@ -417,11 +464,14 @@ class ProactiveEngine:
         personality_tags = self._get_personality_type()
         rel_level = await self._get_relationship_level()
         rel_desc = await self._get_relationship_desc()
+        bot_time_context = self._build_bot_time_context()
+        recent_context = await self._build_context()
         prompt = SHOULD_CONTACT_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             age=getattr(self, "age", "?"),
             occupation=getattr(self, "occupation", "?"),
             personality_tags=personality_tags,
+            bot_time_context=bot_time_context,
             relationship_level=rel_level,
             mood_description=self._get_mood_description(),
             idle_hours=idle_hours,
@@ -429,8 +479,8 @@ class ProactiveEngine:
             user_contacted_today="有" if self.state.last_message_time else "没有",
             relationship_desc=rel_desc,
             relationship_behavior=rel_adjustment["behavior"],
-            user_facts=await self._build_context(),
-            recent_context=await self._build_context(),
+            user_facts=recent_context,
+            recent_context=recent_context,
             idle_threshold=adjusted_idle_threshold,
             max_idle_days=self.config.max_idle_days,
         )
@@ -480,6 +530,7 @@ class ProactiveEngine:
         prompt = GENERATE_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
+            bot_time_context=self._build_bot_time_context(),
             relationship_desc=rel_desc,
             feeling_description=feeling,
             contact_reason=reason or "想和用户聊天",

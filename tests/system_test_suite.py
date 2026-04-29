@@ -12,6 +12,7 @@ import asyncio
 import inspect
 import json
 import os
+import random
 import re
 import shlex
 import subprocess
@@ -99,11 +100,16 @@ class SystemTestSuite:
         env: dict | None = None,
         timeout: int = 120,
     ) -> tuple[int, str, str, bool]:
+        run_env = dict(os.environ)
+        run_env.setdefault("AI_COMPANION_LOG_DIR", str(self.artifacts_dir / "logs"))
+        run_env.setdefault("AI_COMPANION_GATEWAY_PID_FILE", str(self.artifacts_dir / "gateway.pid"))
+        if env:
+            run_env.update(env)
         try:
             proc = subprocess.run(
                 cmd,
                 cwd=str(cwd or self.root),
-                env=env,
+                env=run_env,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -206,6 +212,14 @@ class SystemTestSuite:
         self._run_case("T25", "Life daily events hard cap at 100", self.case_life_daily_events_hard_cap)
         self._run_case("T26", "Major fallback events are concrete", self.case_major_fallback_events_concrete)
         self._run_case("T27", "Unexpected major events use separate low-probability channel", self.case_unexpected_major_events_low_probability)
+        self._run_case("T28", "Daily scenario pool uses random candidate sampling", self.case_daily_scenario_pool_random_candidates)
+        self._run_case("T29", "Major and proactive prompts include bot timeline", self.case_major_and_proactive_prompts_include_bot_timeline)
+        self._run_case("T30", "Setup preserves existing config and defaults to real-time life clock", self.case_setup_preserves_config_realtime_defaults)
+        self._run_case("T31", "Gateway admin safety defaults and Feishu fallback", self.case_gateway_admin_safety_defaults)
+        self._run_case("T32", "Working memory compression preserves recent messages", self.case_working_memory_compression_boundary)
+        self._run_case("T33", "LLM summarizer compression uses outer adapter", self.case_memory_summarizer_closure)
+        self._run_case("T34", "Persona runtime profile overlays template files", self.case_persona_runtime_profile_overlay)
+        self._run_case("T35", "Dependency and UI contract cleanup", self.case_dependency_and_ui_contract_cleanup)
 
         return self._finalize()
 
@@ -433,6 +447,7 @@ class SystemTestSuite:
                 await asyncio.sleep(0.6)
                 memory_status = await bot.memory.get_memory_status() if bot.memory else {}
                 life_loader_ok = getattr(bot.life_engine, "_persona_loader", None) is not None
+                proactive_life_link_ok = getattr(bot.proactive_engine, "life_engine", None) is bot.life_engine
                 proactive_running = bool(bot.proactive_scheduler and bot.proactive_scheduler.get_status().get("running"))
                 life_running = bool(bot.life_scheduler and bot.life_scheduler.get_status().get("running"))
                 chat_prompts = [
@@ -450,11 +465,13 @@ class SystemTestSuite:
                     and proactive_running
                     and life_running
                     and life_loader_ok
+                    and proactive_life_link_ok
                     and prompt_has_life_context
                 )
                 detail = (
                     f"reply_len={len(reply)} working_turns={memory_status.get('working_turns', 0)} "
-                    f"life_loader_ok={life_loader_ok} prompt_life_context={prompt_has_life_context}"
+                    f"life_loader_ok={life_loader_ok} proactive_life_link={proactive_life_link_ok} "
+                    f"prompt_life_context={prompt_has_life_context}"
                 )
                 log = json.dumps(
                     {
@@ -464,6 +481,7 @@ class SystemTestSuite:
                         "proactive_running": proactive_running,
                         "life_running": life_running,
                         "life_loader_ok": life_loader_ok,
+                        "proactive_life_link_ok": proactive_life_link_ok,
                         "prompt_excerpt": chat_prompts[-1][:800] if chat_prompts else "",
                     },
                     ensure_ascii=False,
@@ -1310,6 +1328,460 @@ class SystemTestSuite:
                 indent=2,
             )
             return passed, detail, log
+
+    def case_daily_scenario_pool_random_candidates(self) -> tuple[bool, str, str]:
+        from ai_companion.proactive.life_config import LifeConfig
+        from ai_companion.proactive.life_engine import LifeEngine
+        from ai_companion.proactive.life_state import LifeState
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-daily-candidates-") as td:
+            root = Path(td)
+            state = LifeState("daily_candidates_bot", root)
+            state.current_date = "2030-05-08"
+            cfg = LifeConfig(llm_daily_candidate_limit=12)
+            engine = LifeEngine("daily_candidates_bot", cfg, state, model=FakeModel())
+            engine.set_bot_info("候选测试", 27, "产品经理", "内向, 敏感, 自律")
+
+            catalog = engine._daily_scenario_catalog()
+            sequential_keys = [item["key"] for item in catalog[:12]]
+            forbidden = {item["key"] for item in catalog[:20]}
+
+            random.seed(20260429)
+            candidates = engine._daily_scenario_candidates(forbidden, limit=12)
+            candidate_keys = [item["key"] for item in candidates]
+
+            random.seed(20260429)
+            unblocked_candidates = engine._daily_scenario_candidates(set(), limit=12)
+            unblocked_keys = [item["key"] for item in unblocked_candidates]
+
+            guidance = engine._scenario_guidance(candidates)
+            solitude_item = next(item for item in catalog if item.get("category") == "solitude")
+            social_item = next(item for item in catalog if item.get("category") == "social")
+            solitude_weight = engine._scenario_personality_multiplier(solitude_item)
+            social_weight = engine._scenario_personality_multiplier(social_item)
+
+            passed = (
+                len(catalog) >= 200
+                and len(candidates) == 12
+                and not (set(candidate_keys) & forbidden)
+                and len(set(candidate_keys)) == len(candidate_keys)
+                and unblocked_keys != sequential_keys
+                and len(guidance.split(", ")) == len(candidates)
+                and solitude_weight > social_weight
+            )
+            detail = (
+                f"catalog={len(catalog)} candidates={len(candidates)} "
+                f"random_not_front={unblocked_keys != sequential_keys} "
+                f"solitude_weight={solitude_weight:.2f} social_weight={social_weight:.2f}"
+            )
+            log = json.dumps(
+                {
+                    "catalog_count": len(catalog),
+                    "sequential_keys": sequential_keys,
+                    "forbidden": sorted(forbidden),
+                    "candidate_keys": candidate_keys,
+                    "unblocked_keys": unblocked_keys,
+                    "guidance": guidance,
+                    "weights": {
+                        "solitude": solitude_weight,
+                        "social": social_weight,
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            return passed, detail, log
+
+    async def case_major_and_proactive_prompts_include_bot_timeline(self) -> tuple[bool, str, str]:
+        from ai_companion.proactive.config import ProactiveConfig
+        from ai_companion.proactive.engine import ProactiveEngine
+        from ai_companion.proactive.life_config import LifeConfig
+        from ai_companion.proactive.life_engine import LifeEngine
+        from ai_companion.proactive.life_state import LifeState
+        from ai_companion.proactive.state import ProactiveState
+
+        class _NoMajorModel(FakeModel):
+            async def chat(self, messages: list[dict], system_prompt: str = "", **kwargs) -> str:
+                self.chat_calls.append({"messages": messages, "system_prompt": system_prompt})
+                return '{"is_major": false, "reason": "stable"}'
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-bot-timeline-prompts-") as td:
+            root = Path(td)
+            persona_dir = root / "persona"
+            persona_dir.mkdir(parents=True, exist_ok=True)
+            (persona_dir / "proactive.json").write_text(
+                json.dumps(
+                    {
+                        "enabled": True,
+                        "mode": "active",
+                        "scheduler": {
+                            "idle_threshold_hours": 1,
+                            "max_daily": 5,
+                            "min_interval_hours": 0,
+                            "max_idle_days": 7,
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            life_state = LifeState("timeline_prompt_bot", root)
+            life_state.birth_date = "2002-11-03"
+            life_state.current_date = "2030-05-08"
+            life_state.day_of_week = "周三"
+            life_state.year = 2030
+            life_state.current_month = 5
+            life_state.current_season = "春"
+            life_state.initial_age = 24
+            life_state.bot_age_days = 985
+            life_state.bot_mood = "平静"
+            life_state.bot_current_activity = "在准备一次项目评审"
+
+            major_model = _NoMajorModel()
+            life_engine = LifeEngine("timeline_prompt_bot", LifeConfig(major_event_fixed_probability=0.0), life_state, model=major_model)
+            life_engine.set_bot_info("时间测试", 24, "产品设计师", "理性, 敏感")
+            await life_engine.generate_major_event()
+            major_prompt = major_model.chat_calls[-1]["messages"][-1]["content"]
+
+            proactive_model = FakeModel()
+            proactive_state = ProactiveState("timeline_prompt_bot", root)
+            proactive_state.last_message_time = datetime.now() - timedelta(hours=3)
+            proactive_engine = ProactiveEngine(
+                bot_id="timeline_prompt_bot",
+                config=ProactiveConfig(persona_dir),
+                state=proactive_state,
+                model=proactive_model,
+                memory=None,
+                personality_type="温柔",
+            )
+            proactive_engine.bot_name = "时间测试"
+            proactive_engine.age = life_engine.get_status()["bot_real_age"]
+            proactive_engine.occupation = "产品设计师"
+            proactive_engine.set_life_engine(life_engine)
+
+            decision = await proactive_engine.should_contact()
+            message = await proactive_engine.generate_message("测试时间线")
+            proactive_prompts = [call["messages"][-1]["content"] for call in proactive_model.chat_calls]
+            should_prompt = next((p for p in proactive_prompts if "should_contact" in p), "")
+            message_prompt = next((p for p in proactive_prompts if '"opening"' in p and '"ending"' in p), "")
+
+            expected_major = [
+                "【当前时间背景】",
+                "季节：春（5月）",
+                "日期：2030-05-08，周三",
+                "人生阶段：职场初期",
+            ]
+            expected_proactive = [
+                "【Bot 时间线】",
+                "当前日期：2030-05-08（周三）",
+                "当前季节：春（5月）",
+                "出生日期：2002-11-03",
+                "当前年龄：27岁",
+                "人生阶段：职场初期",
+                "当前状态：在准备一次项目评审",
+            ]
+            passed = (
+                all(item in major_prompt for item in expected_major)
+                and all(item in should_prompt for item in expected_proactive)
+                and all(item in message_prompt for item in expected_proactive)
+                and decision.should_contact is True
+                and message == "hi，there"
+            )
+            detail = (
+                f"major_time={all(item in major_prompt for item in expected_major)} "
+                f"should_time={all(item in should_prompt for item in expected_proactive)} "
+                f"message_time={all(item in message_prompt for item in expected_proactive)}"
+            )
+            log = json.dumps(
+                {
+                    "major_prompt": major_prompt,
+                    "should_prompt": should_prompt,
+                    "message_prompt": message_prompt,
+                    "decision": {
+                        "should_contact": decision.should_contact,
+                        "reason": decision.reason,
+                        "urgency": decision.urgency,
+                    },
+                    "message": message,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            return passed, detail, log
+
+    def case_setup_preserves_config_realtime_defaults(self) -> tuple[bool, str, str]:
+        from ai_companion.proactive.life_config import LifeConfig
+        from ai_companion.setup import (
+            LIFE_TIME_PRESETS,
+            REALTIME_DAILY_INTERVAL_SECONDS,
+            REALTIME_MAJOR_INTERVAL_SECONDS,
+            _deep_merge,
+            _merge_bot_entries,
+        )
+
+        model_existing = {
+            "model": {"provider": "minimax", "temperature": 0.7},
+            "minimax": {"api_key": "keep-minimax", "model": "old-model"},
+            "memory": {"embedding": "local", "max_working_turns": 9},
+        }
+        model_update = {
+            "model": {"provider": "openai"},
+            "openai": {"api_key": "new-openai", "model": "gpt-4o"},
+        }
+        merged_model = _deep_merge(model_existing, model_update)
+
+        life_existing = {
+            "daily_interval_seconds": 3600,
+            "major_interval_seconds": 21600,
+            "time_ratio": 24,
+            "event_policy": {"scenario_cooldown_days": 14},
+            "daily_life_profile": {"hobbies": ["咖啡"]},
+        }
+        life_update = {
+            "daily_interval_seconds": REALTIME_DAILY_INTERVAL_SECONDS,
+            "major_interval_seconds": REALTIME_MAJOR_INTERVAL_SECONDS,
+            "time_ratio": LIFE_TIME_PRESETS["1"]["time_ratio"],
+            "max_events": 100,
+        }
+        merged_life = _deep_merge(life_existing, life_update)
+        existing_bots = [
+            {
+                "id": "suqing",
+                "name": "旧苏晴",
+                "description": "keep me",
+                "enabled": False,
+                "custom": {"tone": "quiet"},
+            }
+        ]
+        preserved_bots = _merge_bot_entries(
+            existing_bots,
+            [{"id": "suqing", "name": "新苏晴"}],
+            overwritten_bot_ids=set(),
+        )
+        overwritten_bots = _merge_bot_entries(
+            existing_bots,
+            [{"id": "suqing", "name": "新苏晴"}],
+            overwritten_bot_ids={"suqing"},
+        )
+        default_life = LifeConfig()
+
+        passed = (
+            merged_model["model"]["provider"] == "openai"
+            and merged_model["model"]["temperature"] == 0.7
+            and merged_model["minimax"]["api_key"] == "keep-minimax"
+            and merged_model["memory"]["embedding"] == "local"
+            and merged_life["daily_interval_seconds"] == 86400
+            and merged_life["major_interval_seconds"] == 604800
+            and merged_life["time_ratio"] == 1
+            and merged_life["event_policy"]["scenario_cooldown_days"] == 14
+            and merged_life["daily_life_profile"]["hobbies"] == ["咖啡"]
+            and preserved_bots["suqing"]["name"] == "旧苏晴"
+            and preserved_bots["suqing"]["description"] == "keep me"
+            and preserved_bots["suqing"]["enabled"] is False
+            and preserved_bots["suqing"]["custom"]["tone"] == "quiet"
+            and overwritten_bots["suqing"]["name"] == "新苏晴"
+            and overwritten_bots["suqing"]["description"] == "keep me"
+            and default_life.daily_interval_seconds == 86400
+            and default_life.major_interval_seconds == 604800
+            and default_life.daily_interval == 86400
+        )
+        detail = (
+            f"provider={merged_model['model']['provider']} "
+            f"daily={default_life.daily_interval_seconds} major={default_life.major_interval_seconds}"
+        )
+        log = json.dumps(
+            {
+                "merged_model": merged_model,
+                "merged_life": merged_life,
+                "preserved_bots": preserved_bots,
+                "overwritten_bots": overwritten_bots,
+                "default_life": {
+                    "daily_interval_seconds": default_life.daily_interval_seconds,
+                    "major_interval_seconds": default_life.major_interval_seconds,
+                    "daily_interval": default_life.daily_interval,
+                    "major_interval": default_life.major_interval,
+                },
+                "life_time_presets": LIFE_TIME_PRESETS,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
+
+    def case_gateway_admin_safety_defaults(self) -> tuple[bool, str, str]:
+        from ai_companion.gateway.admin_services import admin_host, mask_secret, public_model_config
+
+        gateway_text = (self.root / "ai_companion" / "gateway" / "cmd.py").read_text(encoding="utf-8")
+        public_cfg = public_model_config({"provider": "openai", "api_key": "sk-1234567890abcdef"})
+        passed = (
+            "bot_manager._bots" not in gateway_text
+            and "bot_manager.first_bot" in gateway_text
+            and admin_host({}) == "127.0.0.1"
+            and 'Access-Control-Allow-Origin"] = "*"' not in gateway_text
+            and public_cfg["api_key"] == mask_secret("sk-1234567890abcdef")
+            and public_cfg["api_key"] != "sk-1234567890abcdef"
+        )
+        detail = f"masked={public_cfg['api_key']} fallback={'bot_manager.first_bot' in gateway_text}"
+        log = json.dumps(
+            {
+                "public_cfg": public_cfg,
+                "admin_host": admin_host({}),
+                "has_private_bots_access": "bot_manager._bots" in gateway_text,
+                "has_wildcard_cors_assignment": 'Access-Control-Allow-Origin"] = "*"' in gateway_text,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
+
+    async def case_working_memory_compression_boundary(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.stores.working import WorkingMemoryStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = WorkingMemoryStore(str(Path(tmp) / "working.db"))
+            await store.init()
+            store.start_session("s1")
+            for i in range(10):
+                await store.append(f"user-{i}", f"bot-{i}", session_id="s1")
+            summary = await store.compress("s1", summarizer=None)
+
+            import sqlite3
+
+            conn = sqlite3.connect(str(Path(tmp) / "working.db"))
+            rows = conn.execute("SELECT id, compressed FROM messages ORDER BY id ASC").fetchall()
+            summary_row = conn.execute("SELECT message_count FROM summaries").fetchone()
+            conn.close()
+
+        compressed_ids = [row[0] for row in rows if row[1] == 1]
+        active_ids = [row[0] for row in rows if row[1] == 0]
+        passed = (
+            summary is not None
+            and compressed_ids == list(range(1, 9))
+            and active_ids == list(range(9, 21))
+            and summary_row
+            and summary_row[0] == 8
+        )
+        detail = f"compressed={compressed_ids} active_first={active_ids[:1]} active_count={len(active_ids)}"
+        log = json.dumps(
+            {
+                "summary": summary,
+                "compressed_ids": compressed_ids,
+                "active_ids": active_ids,
+                "summary_row": summary_row,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
+
+    async def case_memory_summarizer_closure(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        class Summarizer:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages: list[dict], system_prompt: str = "") -> dict:
+                self.calls += 1
+                return {"content": "LLM summary"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = MemoryEngine("bot", Path(tmp), config={"embedding": "none"})
+            await engine.init()
+            engine.start_session("s1")
+            summarizer = Summarizer()
+            engine.set_summarizer(summarizer)
+            for i in range(10):
+                await engine.working.append(f"user-{i}", f"bot-{i}", session_id="s1")
+            await engine._do_compress()
+            summaries = engine.working.get_summaries("s1")
+            await engine.close()
+
+        passed = summarizer.calls == 1 and summaries == ["LLM summary"]
+        detail = f"calls={summarizer.calls} summaries={summaries}"
+        return passed, detail, json.dumps({"calls": summarizer.calls, "summaries": summaries}, ensure_ascii=False, indent=2)
+
+    async def case_persona_runtime_profile_overlay(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.stores.semantic import SemanticStore
+        from ai_companion.persona.engine import PersonaEngine
+        from ai_companion.persona.loader import PersonaLoader
+
+        with tempfile.TemporaryDirectory() as tmp:
+            persona_dir = Path(tmp) / "persona"
+            persona_dir.mkdir()
+            profile_path = persona_dir / "profile.json"
+            backstory_path = persona_dir / "backstory.json"
+            profile_path.write_text(
+                json.dumps({"name": "苏晴", "age": 20, "occupation": "学生", "relationship_to_user": "朋友"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            backstory_path.write_text(json.dumps({"key_moments": ["初识"]}, ensure_ascii=False), encoding="utf-8")
+            (persona_dir / "values.json").write_text(json.dumps({"non_negotiable": []}, ensure_ascii=False), encoding="utf-8")
+            (persona_dir / "speaking_style.json").write_text(json.dumps({"tone": "自然"}, ensure_ascii=False), encoding="utf-8")
+
+            store = SemanticStore(str(Path(tmp) / "semantic.db"), persona_backstory_path=str(backstory_path))
+            await store._update_relationship("恋人")
+            await store._update_attitude_profile(6)
+            await store._append_key_moment("一起看烟花")
+
+            profile_after = json.loads(profile_path.read_text(encoding="utf-8"))
+            backstory_after = json.loads(backstory_path.read_text(encoding="utf-8"))
+            persona = PersonaLoader(persona_dir).load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        passed = (
+            profile_after["relationship_to_user"] == "朋友"
+            and backstory_after["key_moments"] == ["初识"]
+            and persona.profile["relationship_to_user"] == "恋人"
+            and persona.profile["attitude_score"] == 6
+            and "一起看烟花" in prompt
+            and "你和用户的关系：恋人" in prompt
+        )
+        detail = f"template_rel={profile_after['relationship_to_user']} runtime_rel={persona.profile.get('relationship_to_user')}"
+        log = json.dumps(
+            {
+                "profile_after": profile_after,
+                "backstory_after": backstory_after,
+                "persona_profile": persona.profile,
+                "prompt": prompt,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
+
+    def case_dependency_and_ui_contract_cleanup(self) -> tuple[bool, str, str]:
+        pyproject = (self.root / "pyproject.toml").read_text(encoding="utf-8")
+        setup_py = (self.root / "setup.py").read_text(encoding="utf-8")
+        requirements = (self.root / "requirements.txt").read_text(encoding="utf-8").strip()
+        api_text = (self.root / "ai-companion-ui" / "src" / "api" / "index.ts").read_text(encoding="utf-8")
+        gateway_text = (self.root / "ai_companion" / "gateway" / "cmd.py").read_text(encoding="utf-8")
+
+        passed = (
+            "[project]" in pyproject
+            and "lark-oapi" in pyproject
+            and "chromadb" in pyproject
+            and "install_requires" not in setup_py
+            and requirements == "."
+            and "bot_id=" in api_text
+            and "Promise.resolve(true)" not in api_text
+            and "Promise.resolve('')" not in api_text
+            and 'os.environ.get("START_UI", os.environ.get("AI_COMPANION_START_UI", "false"))' in gateway_text
+        )
+        detail = f"pyproject={'[project]' in pyproject} requirements={requirements}"
+        log = json.dumps(
+            {
+                "has_pyproject": "[project]" in pyproject,
+                "requirements": requirements,
+                "ui_uses_bot_filter": "bot_id=" in api_text,
+                "ui_has_fake_success": "Promise.resolve(true)" in api_text or "Promise.resolve('')" in api_text,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
 
     def case_model_entrypoints_use_factory(self) -> tuple[bool, str, str]:
         main_text = (self.root / "ai_companion" / "main.py").read_text(encoding="utf-8")

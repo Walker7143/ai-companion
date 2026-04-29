@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import shutil
@@ -6,8 +7,185 @@ from pathlib import Path
 from rich.console import Console
 from rich.prompt import Prompt, Confirm
 from rich.table import Table
+import yaml
 
 console = Console()
+
+
+REALTIME_DAILY_INTERVAL_SECONDS = 86400
+REALTIME_MAJOR_INTERVAL_SECONDS = 604800
+
+LIFE_TIME_PRESETS = {
+    "1": {
+        "name": "现实同步 1:1",
+        "time_ratio": 1,
+        "description": "现实 1 天 = Bot 1 天；日常约 24 小时检查一次，人生大事约 7 天检查一次",
+    },
+    "2": {
+        "name": "轻度加速 24x",
+        "time_ratio": 24,
+        "description": "现实 1 小时 = Bot 1 天；适合日常体验中稍快推进",
+    },
+    "3": {
+        "name": "观察测试 1440x",
+        "time_ratio": 1440,
+        "description": "现实 1 分钟 = Bot 1 天；适合短时间观察人生轨迹",
+    },
+    "4": {
+        "name": "极速压测 86400x",
+        "time_ratio": 86400,
+        "description": "现实 1 秒 = Bot 1 天；仅建议测试使用",
+    },
+}
+
+
+def _load_yaml_file(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+def _write_yaml_file(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def _load_structured_file(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            return yaml.safe_load(text) or {}
+        except Exception:
+            return {}
+
+
+def _write_json_file(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _deep_merge(base: dict, updates: dict) -> dict:
+    result = dict(base or {})
+    for key, value in (updates or {}).items():
+        if isinstance(result.get(key), dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _bot_label(bot: dict) -> str:
+    return bot.get("name") or bot.get("id") or "unknown"
+
+
+def _merge_bot_entries(
+    existing_bots: list[dict],
+    selected_bots: list[dict],
+    overwritten_bot_ids: set[str] | None = None,
+) -> dict[str, dict]:
+    overwritten_bot_ids = overwritten_bot_ids or set()
+    bots_by_id = {b["id"]: dict(b) for b in existing_bots}
+
+    for bot in selected_bots:
+        bot_id = bot["id"]
+        existing = bots_by_id.get(bot_id)
+        if existing and bot_id not in overwritten_bot_ids:
+            # Re-running setup should not mutate an existing Bot unless the user
+            # explicitly chose to overwrite/update it.
+            bots_by_id[bot_id] = existing
+            continue
+
+        entry = dict(existing or {})
+        entry["id"] = bot_id
+        entry["name"] = bot.get("name") or entry.get("name") or bot_id
+        entry.setdefault("description", "")
+        entry.setdefault("enabled", True)
+        bots_by_id[bot_id] = entry
+
+    return bots_by_id
+
+
+def _copy_persona_template(project_dir: Path, data_dir: Path, bot_id: str, overwrite: bool = False) -> bool:
+    src_persona = project_dir / "ai_companion" / "data" / "bots" / bot_id / "persona"
+    if not src_persona.exists():
+        src_persona = data_dir / "data" / "bots" / bot_id / "persona"
+    dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
+    if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
+        if overwrite or not dst_persona.exists():
+            shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
+        else:
+            dst_persona.mkdir(parents=True, exist_ok=True)
+        return True
+    dst_persona.mkdir(parents=True, exist_ok=True)
+    return False
+
+
+def _life_profile_default_choice(existing_life: dict) -> str:
+    if not existing_life:
+        return "1"
+    ratio = int(existing_life.get("time_ratio", 1) or 1)
+    daily = int(existing_life.get("daily_interval_seconds", REALTIME_DAILY_INTERVAL_SECONDS) or REALTIME_DAILY_INTERVAL_SECONDS)
+    major = int(existing_life.get("major_interval_seconds", REALTIME_MAJOR_INTERVAL_SECONDS) or REALTIME_MAJOR_INTERVAL_SECONDS)
+    if daily != REALTIME_DAILY_INTERVAL_SECONDS or major != REALTIME_MAJOR_INTERVAL_SECONDS:
+        return "5"
+    for key, preset in LIFE_TIME_PRESETS.items():
+        if preset["time_ratio"] == ratio:
+            return key
+    return "5"
+
+
+def _build_life_time_config(existing_life: dict | None = None) -> dict:
+    existing_life = existing_life or {}
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("选项")
+    table.add_column("名称")
+    table.add_column("效果")
+    for key, preset in LIFE_TIME_PRESETS.items():
+        table.add_row(key, preset["name"], preset["description"])
+    table.add_row("5", "自定义", "手动输入基础检查间隔和 time_ratio")
+    console.print(table)
+
+    choice = Prompt.ask(
+        "请选择 Bot 时间流速",
+        choices=["1", "2", "3", "4", "5"],
+        default=_life_profile_default_choice(existing_life),
+    )
+    if choice == "5":
+        daily_interval = int(Prompt.ask(
+            "日常事件基础检查间隔（秒；86400 表示现实 1 天）",
+            default=str(existing_life.get("daily_interval_seconds", REALTIME_DAILY_INTERVAL_SECONDS)),
+        ))
+        major_interval = int(Prompt.ask(
+            "人生大事基础检查间隔（秒；604800 表示现实 7 天）",
+            default=str(existing_life.get("major_interval_seconds", REALTIME_MAJOR_INTERVAL_SECONDS)),
+        ))
+        time_ratio = int(Prompt.ask(
+            "时间流速倍率（1=现实同步，24=现实1小时过1个Bot日，1440=现实1分钟过1个Bot日）",
+            default=str(existing_life.get("time_ratio", 1)),
+        ))
+    else:
+        preset = LIFE_TIME_PRESETS[choice]
+        daily_interval = REALTIME_DAILY_INTERVAL_SECONDS
+        major_interval = REALTIME_MAJOR_INTERVAL_SECONDS
+        time_ratio = preset["time_ratio"]
+
+    return {
+        "daily_interval_seconds": daily_interval,
+        "major_interval_seconds": major_interval,
+        "time_ratio": max(1, time_ratio),
+        "time_ratio_warning_threshold": int(existing_life.get("time_ratio_warning_threshold", 500) or 500),
+        "max_events": 100,
+        "max_context_bits": int(existing_life.get("max_context_bits", 2000) or 2000),
+    }
 
 
 def get_data_dir() -> Path:
@@ -37,8 +215,15 @@ async def run_setup():
 
     console.print(f"[dim]数据目录: {data_dir}[/dim]\n")
 
+    config_dir = data_dir / "config"
+    config_dir.mkdir(exist_ok=True)
+    models_config_path = config_dir / "models.yaml"
+    bots_config_path = config_dir / "bots.yaml"
+    existing_config = _load_yaml_file(models_config_path)
+    existing_provider = existing_config.get("model", {}).get("provider", "minimax") if isinstance(existing_config.get("model"), dict) else "minimax"
+
     # Step 1: API Key 配置
-    console.print("[bold]步骤 1/6:[/bold] 模型配置")
+    console.print("[bold]步骤 1/7:[/bold] 模型配置")
     console.print("-" * 40)
 
     console.print("可选模型:")
@@ -48,10 +233,20 @@ async def run_setup():
     console.print("  4. Ollama        - 本地运行的大模型（如 qwen2.5）")
     console.print("  5. 自定义        - 接入其他 API")
 
+    provider_choice_map = {
+        "minimax": "1",
+        "openai": "2",
+        "claude": "3",
+        "ollama": "4",
+        "custom": "5",
+    }
+    if existing_config:
+        console.print("[dim]发现现有模型配置；本步骤只会合并更新所选 provider，其他 provider/memory 配置会保留[/dim]")
+
     model_choice = Prompt.ask(
         "\n请选择模型来源",
         choices=["1", "2", "3", "4", "5"],
-        default="1"
+        default=provider_choice_map.get(existing_provider, "1")
     )
 
     model_map = {
@@ -65,70 +260,50 @@ async def run_setup():
     provider_key, provider_name, default_model, default_url = model_map[model_choice]
     console.print(f"选择: [green]{provider_name}[/green]")
 
-    # 检查现有配置
-    config_dir = data_dir / "config"
-    config_dir.mkdir(exist_ok=True)
-    models_config_path = config_dir / "models.yaml"
-
-    existing_config = {}
-    if models_config_path.exists():
-        try:
-            import yaml
-            existing_config = yaml.safe_load(models_config_path.read_text(encoding="utf-8")) or {}
-            console.print("[dim]发现现有模型配置，将以此为默认值[/dim]")
-        except Exception:
-            pass
-
     existing_api_key = existing_config.get(provider_key, {}).get("api_key", "") if isinstance(existing_config.get(provider_key), dict) else existing_config.get("api_key", "")
     existing_base_url = existing_config.get(provider_key, {}).get("base_url", "") if isinstance(existing_config.get(provider_key), dict) else ""
     existing_model = existing_config.get(provider_key, {}).get("model", "") if isinstance(existing_config.get(provider_key), dict) else ""
 
-    # 读取现有 API Key（如果有的话，用作默认）
-    existing_minimax_key = ""
-    if models_config_path.exists():
-        try:
-            import yaml
-            existing_models = yaml.safe_load(models_config_path.read_text(encoding="utf-8")) or {}
-            existing_minimax_key = existing_models.get("minimax", {}).get("api_key", "") if isinstance(existing_models.get("minimax"), dict) else ""
-        except Exception:
-            pass
+    api_key = existing_api_key or ""
+    if provider_key != "ollama":
+        api_key_prompt = Prompt.ask(
+            "[dim]请输入 API Key[/dim]" if not existing_api_key else "[dim]请输入 API Key（直接回车保留现有配置）[/dim]",
+            password=True,
+            default="",
+        )
 
-    api_key_prompt = Prompt.ask(
-        "[dim]请输入 API Key[/dim]" if not existing_minimax_key else "[dim]请输入 API Key（直接回车保留现有配置）[/dim]",
-        password=True,
-        default=""
-    )
-
-    # 只有用户输入了内容才更新
-    if api_key_prompt.strip():
-        api_key = api_key_prompt
-    elif existing_minimax_key:
-        api_key = existing_minimax_key
-        console.print("[dim]保留现有 API Key[/dim]")
+        # 只有用户输入了内容才更新
+        if api_key_prompt.strip():
+            api_key = api_key_prompt
+        elif existing_api_key:
+            console.print("[dim]保留现有 API Key[/dim]")
     else:
-        api_key = ""
+        console.print("[dim]Ollama 默认不需要 API Key[/dim]")
 
     if model_choice == "5":
         custom_url = Prompt.ask("请输入 API URL", default=existing_base_url or "https://api.example.com/v1")
         custom_model = Prompt.ask("请输入模型名称", default=existing_model or "custom-model")
     else:
-        custom_url = default_url
+        custom_url = existing_base_url or default_url
         custom_model = Prompt.ask("模型名称", default=existing_model or default_model)
 
-    # 如果有提供新配置，则更新
-    if api_key.strip() or custom_model.strip():
-        models_config = f"""{provider_key}:
-  api_key: "{api_key}"
-  base_url: "{custom_url}"
-  model: "{custom_model}"
-"""
-        (config_dir / "models.yaml").write_text(models_config, encoding="utf-8")
-        console.print("✓ 模型配置已保存\n")
-    else:
-        console.print("[dim]跳过模型配置保存[/dim]\n")
+    models_config = dict(existing_config)
+    model_defaults = dict(models_config.get("model", {}) if isinstance(models_config.get("model"), dict) else {})
+    model_defaults["provider"] = provider_key
+    models_config["model"] = model_defaults
+
+    provider_config = dict(models_config.get(provider_key, {}) if isinstance(models_config.get(provider_key), dict) else {})
+    if api_key.strip() or existing_api_key:
+        provider_config["api_key"] = api_key
+    provider_config["base_url"] = custom_url
+    provider_config["model"] = custom_model
+    models_config[provider_key] = provider_config
+
+    _write_yaml_file(models_config_path, models_config)
+    console.print("✓ 模型配置已保存（已保留其他模型和 memory 配置）\n")
 
     # Step 2: 创建 Bot(s)
-    console.print("[bold]步骤 2/6:[/bold] 创建 Bot")
+    console.print("[bold]步骤 2/7:[/bold] 创建 Bot")
     console.print("-" * 40)
 
     templates = [
@@ -141,90 +316,116 @@ async def run_setup():
     console.print("可选人格模板:")
     for i, (tid, tname, tdesc) in enumerate(templates, 1):
         console.print(f"  {i}. {tname} - {tdesc}")
+    console.print("  5. 自定义 Bot")
+
+    bots_config = _load_yaml_file(bots_config_path)
+    existing_bots = [b for b in bots_config.get("bots", []) if isinstance(b, dict) and b.get("id")]
+    if existing_bots:
+        console.print("\n[dim]发现现有 Bot 配置，默认保留不覆盖：[/dim]")
+        for bot in existing_bots:
+            console.print(f"  - {_bot_label(bot)} ({bot.get('id')})")
 
     created_bots = []
+    overwritten_bot_ids = set()
+    configure_bots = Confirm.ask("是否添加或更新 Bot?", default=not bool(existing_bots))
 
-    # 允许创建多个 bot
-    while True:
-        console.print("\n当前已创建: [cyan]" + ", ".join(b["name"] for b in created_bots) if created_bots else "[dim]无[/dim]")
-        add_more = Confirm.ask("是否添加 Bot?", default=True)
-        if not add_more:
-            break
+    if configure_bots:
+        # 允许创建多个 bot
+        while True:
+            current_names = ", ".join(_bot_label(b) for b in created_bots) if created_bots else "无"
+            console.print(f"\n本次已选择: [cyan]{current_names}[/cyan]")
+            add_more = Confirm.ask("是否添加 Bot?", default=not bool(created_bots))
+            if not add_more:
+                break
 
-        bot_choice = Prompt.ask(
-            "请选择人格模板",
-            choices=["1", "2", "3", "4", "5"],
-            default="5"
-        )
+            bot_choice = Prompt.ask(
+                "请选择人格模板",
+                choices=["1", "2", "3", "4", "5"],
+                default="5"
+            )
 
-        if bot_choice == "5":
-            # 自定义 Bot
-            bot_id = Prompt.ask("请输入 Bot ID (英文唯一标识)")
-            bot_name = Prompt.ask("请输入 Bot 名称")
-        else:
-            bot_id, bot_name = templates[int(bot_choice) - 1][0], templates[int(bot_choice) - 1][1]
+            if bot_choice == "5":
+                # 自定义 Bot
+                bot_id = Prompt.ask("请输入 Bot ID (英文唯一标识)")
+                bot_name = Prompt.ask("请输入 Bot 名称")
+            else:
+                bot_id, bot_name = templates[int(bot_choice) - 1][0], templates[int(bot_choice) - 1][1]
 
-        # 检查是否已存在
-        if any(b["id"] == bot_id for b in created_bots):
-            console.print(f"[yellow]⚠ Bot {bot_id} 已存在，跳过[/yellow]")
-            continue
+            if any(b["id"] == bot_id for b in created_bots):
+                console.print(f"[yellow]⚠ Bot {bot_id} 已在本次选择中，跳过[/yellow]")
+                continue
 
-        # 始终优先从包内目录读取模板（pip 安装后包内才有模板文件）
-        src_persona = project_dir / "ai_companion" / "data" / "bots" / bot_id / "persona"
-        if not src_persona.exists():
-            src_persona = data_dir / "data" / "bots" / bot_id / "persona"
-        dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
+            bot_exists = any(b.get("id") == bot_id for b in existing_bots)
+            overwrite_persona = False
+            if bot_exists:
+                overwrite_persona = Confirm.ask(
+                    f"Bot {bot_id} 已存在，是否覆盖它的人格文件?",
+                    default=False,
+                )
+                if overwrite_persona:
+                    overwritten_bot_ids.add(bot_id)
 
-        if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
-            shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
-            console.print(f"✓ [green]{bot_name}[/green] 已添加")
-        else:
-            console.print(f"[yellow]⚠ 模板 {bot_id} 不存在，已创建空 Bot[/yellow]")
-            (data_dir / "data" / "bots" / bot_id / "persona").mkdir(parents=True, exist_ok=True)
+            template_found = _copy_persona_template(project_dir, data_dir, bot_id, overwrite=overwrite_persona)
+            if template_found:
+                if bot_exists and not overwrite_persona:
+                    console.print(f"✓ [green]{bot_name}[/green] 已保留现有人格文件")
+                else:
+                    console.print(f"✓ [green]{bot_name}[/green] 已添加/更新")
+            else:
+                console.print(f"[yellow]⚠ 模板 {bot_id} 不存在，已创建空 Bot[/yellow]")
 
-        created_bots.append({"id": bot_id, "name": bot_name})
+            created_bots.append({"id": bot_id, "name": bot_name})
 
-    if not created_bots:
+    if not existing_bots and not created_bots:
         console.print("[yellow]⚠ 未创建任何 Bot，将创建默认 Bot[/yellow]")
         bot_id, bot_name = "suqing", "苏晴"
-        # 优先从包内目录读取模板
-        src_persona = project_dir / "ai_companion" / "data" / "bots" / bot_id / "persona"
-        if not src_persona.exists():
-            src_persona = data_dir / "data" / "bots" / bot_id / "persona"
-        dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
-        if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
-            shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
+        _copy_persona_template(project_dir, data_dir, bot_id, overwrite=False)
         created_bots.append({"id": bot_id, "name": bot_name})
 
-    # 更新 bots.yaml
-    import yaml
-    bots_config = {"bots": []}
-    for b in created_bots:
-        bots_config["bots"].append({
-            "id": b["id"],
-            "name": b["name"],
-            "description": "",
-            "enabled": True
-        })
-
-    (config_dir / "bots.yaml").write_text(yaml.dump(bots_config, allow_unicode=True), encoding="utf-8")
-    console.print(f"✓ Bot 列表已更新 ({len(created_bots)} 个)\n")
+    bots_by_id = _merge_bot_entries(existing_bots, created_bots, overwritten_bot_ids)
+    bots_config["bots"] = list(bots_by_id.values())
+    _write_yaml_file(bots_config_path, bots_config)
+    raw_target_bots = created_bots if created_bots else list(bots_by_id.values())
+    target_bots = [{"id": b["id"], "name": _bot_label(bots_by_id.get(b["id"], b))} for b in raw_target_bots if b.get("id")]
+    console.print(f"✓ Bot 列表已保存（总计 {len(bots_config['bots'])} 个；旧 Bot 配置已保留）\n")
 
     # Step 3: 主动唤醒配置
-    console.print("[bold]步骤 3/6:[/bold] 主动唤醒配置")
+    console.print("[bold]步骤 3/7:[/bold] 主动唤醒配置")
     console.print("-" * 40)
 
-    if Confirm.ask("是否启用 Bot 主动唤醒功能?", default=True):
-        default_idle = Prompt.ask("空闲触发阈值（小时）", default="24")
-        default_max_daily = Prompt.ask("每日最大主动消息数", default="5")
-        default_min_interval = Prompt.ask("最小发送间隔（小时）", default="3")
+    sample_proactive = {}
+    if target_bots:
+        sample_path = data_dir / "data" / "bots" / target_bots[0]["id"] / "persona" / "proactive.json"
+        sample_proactive = _load_structured_file(sample_path)
+    proactive_default = bool(created_bots) or not bool(existing_bots)
+
+    if Confirm.ask("是否配置 Bot 主动唤醒功能?", default=proactive_default):
+        sample_scheduler = sample_proactive.get("scheduler", {}) if isinstance(sample_proactive.get("scheduler"), dict) else {}
+        sample_triggers = sample_proactive.get("triggers", {}) if isinstance(sample_proactive.get("triggers"), dict) else {}
+        sample_emotion = sample_triggers.get("emotion_trigger", {}) if isinstance(sample_triggers.get("emotion_trigger"), dict) else {}
+
+        default_idle = Prompt.ask(
+            "空闲触发阈值（小时）",
+            default=str(sample_scheduler.get("idle_threshold_hours", sample_proactive.get("idle_threshold_hours", 24))),
+        )
+        default_max_daily = Prompt.ask(
+            "每日最大主动消息数",
+            default=str(sample_scheduler.get("max_daily", sample_proactive.get("max_daily", 5))),
+        )
+        default_min_interval = Prompt.ask(
+            "最小发送间隔（小时）",
+            default=str(sample_scheduler.get("min_interval_hours", sample_proactive.get("min_interval_hours", 4))),
+        )
 
         console.print("\n发送平台:")
         console.print("  1. CLI       - 终端输出（默认）")
         console.print("  2. 飞书     - 通过飞书机器人发送")
         console.print("  3. Webhook   - 通过 Webhook 发送")
 
-        platform_choice = Prompt.ask("选择发送平台", choices=["1", "2", "3"], default="1")
+        sample_platform = sample_proactive.get("platform", {}) if isinstance(sample_proactive.get("platform"), dict) else {}
+        existing_platform_type = sample_platform.get("type", sample_proactive.get("platform_type", "cli"))
+        platform_default = {"cli": "1", "feishu": "2", "webhook": "3"}.get(existing_platform_type, "1")
+        platform_choice = Prompt.ask("选择发送平台", choices=["1", "2", "3"], default=platform_default)
         platform_map = {"1": "cli", "2": "feishu", "3": "webhook"}
         platform_type = platform_map[platform_choice]
         console.print(f"选择: [green]{platform_choice}[/green]")
@@ -233,65 +434,77 @@ async def run_setup():
         console.print("  1. 启用 - Bot 会主动联系你")
         console.print("  2. 禁用 - Bot 不会主动发送消息")
 
-        mode_choice = Prompt.ask("选择模式", choices=["1", "2"], default="1")
+        existing_mode = sample_proactive.get("mode", "active")
+        mode_choice = Prompt.ask("选择模式", choices=["1", "2"], default="1" if existing_mode == "active" else "2")
         mode_map = {"1": "active", "2": "silent"}
         proactive_mode = mode_map[mode_choice]
 
         proactive_config = {
             "enabled": True,
             "mode": proactive_mode,
-            "check_interval": 60,
-            "idle_threshold_hours": int(default_idle),
-            "min_interval_hours": float(default_min_interval),
-            "max_daily": int(default_max_daily),
-            "emotion_trigger_enabled": True,
-            "emotion_keywords": ["难过", "伤心", "生气", "委屈", "累"],
-            "emotion_response_delay_minutes": 30,
-            "platform_type": platform_type,
+            "scheduler": {
+                "check_interval_seconds": int(sample_scheduler.get("check_interval_seconds", sample_proactive.get("check_interval", 600))),
+                "idle_threshold_hours": int(default_idle),
+                "min_interval_hours": float(default_min_interval),
+                "max_daily": int(default_max_daily),
+                "max_idle_days": int(sample_scheduler.get("max_idle_days", sample_proactive.get("max_idle_days", 7))),
+            },
+            "triggers": {
+                "idle_reminder": {
+                    "enabled": True,
+                    "idle_hours": int(default_idle),
+                },
+                "emotion_trigger": {
+                    "enabled": True,
+                    "keywords": sample_emotion.get("keywords", sample_proactive.get("emotion_keywords", ["难过", "伤心", "生气", "委屈", "累"])),
+                    "response_delay_minutes": int(sample_emotion.get("response_delay_minutes", sample_proactive.get("emotion_response_delay_minutes", 30))),
+                },
+            },
+            "platform": {
+                "type": platform_type,
+            },
         }
+        if platform_type == "webhook":
+            existing_webhook = sample_platform.get("webhook_url", sample_proactive.get("webhook_url", ""))
+            proactive_config["platform"]["webhook_url"] = Prompt.ask("Webhook URL", default=existing_webhook)
 
-        # 为每个创建的 Bot 更新 proactive.json
-        for b in created_bots:
+        # 为目标 Bot 合并更新 proactive.json，未配置字段保留旧值
+        for b in target_bots:
             proactive_path = data_dir / "data" / "bots" / b["id"] / "persona" / "proactive.json"
-            if proactive_path.exists():
-                existing = yaml.safe_load(proactive_path.read_text(encoding="utf-8")) or {}
-                existing.update(proactive_config)
-                proactive_path.write_text(yaml.dump(existing, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            existing = _load_structured_file(proactive_path)
+            merged = _deep_merge(existing, proactive_config)
+            _write_json_file(proactive_path, merged)
             console.print(f"✓ [green]{b['name']}[/green] 主动唤醒已配置")
         console.print("[dim]可在 data/bots/{bot_id}/persona/proactive.json 中进一步调整[/dim]\n")
     else:
         console.print("[dim]跳过主动唤醒配置[/dim]\n")
 
     # Step 4: Bot 人生轨迹配置
-    console.print("[bold]步骤 4/6:[/bold] Bot 人生轨迹配置")
+    console.print("[bold]步骤 4/7:[/bold] Bot 人生轨迹配置")
     console.print("-" * 40)
 
-    if Confirm.ask("是否启用 Bot 人生轨迹（LifeEngine）?", default=True):
-        daily_interval = Prompt.ask("日常事件检查间隔（秒）", default="3600")
-        major_interval = Prompt.ask("人生大事检查间隔（秒）", default="21600")
-        time_ratio = Prompt.ask("时间加速比率（1=现实时间）", default="1")
+    sample_life = {}
+    if target_bots:
+        sample_path = data_dir / "data" / "bots" / target_bots[0]["id"] / "persona" / "life.json"
+        sample_life = _load_structured_file(sample_path)
+    life_default = bool(created_bots) or not bool(existing_bots)
 
-        life_config = {
-            "daily_interval_seconds": int(daily_interval),
-            "major_interval_seconds": int(major_interval),
-            "time_ratio": int(time_ratio),
-            "max_events": 20,
-            "max_context_bits": 2000
-        }
+    if Confirm.ask("是否配置 Bot 人生轨迹（LifeEngine）?", default=life_default):
+        console.print("[dim]默认推荐“现实同步 1:1”：现实 1 天推进 1 个 Bot 日。需要观察测试时再选择加速档。[/dim]")
+        life_config = _build_life_time_config(sample_life)
 
-        for b in created_bots:
+        for b in target_bots:
             life_path = data_dir / "data" / "bots" / b["id"] / "persona" / "life.json"
-            if life_path.exists():
-                existing = yaml.safe_load(life_path.read_text(encoding="utf-8")) or {}
-                existing.update(life_config)
-                life_path.write_text(yaml.dump(existing, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            existing = _load_structured_file(life_path)
+            merged = _deep_merge(existing, life_config)
+            _write_json_file(life_path, merged)
             console.print(f"✓ [green]{b['name']}[/green] 人生轨迹已配置")
         console.print("[dim]可在 data/bots/{bot_id}/persona/life.json 中进一步调整[/dim]\n")
     else:
         console.print("[dim]跳过人生轨迹配置[/dim]\n")
 
     # Step 5: 飞书配置
-    console.print("[bold]步骤 5/6:[/bold] 飞书配置")
+    console.print("[bold]步骤 5/7:[/bold] 飞书配置")
     console.print("-" * 40)
 
     # 加载现有飞书配置（用于默认值）
@@ -409,20 +622,20 @@ async def run_setup():
 
         if routing_mode == "dedicated":
             existing_bot_id = existing_routing.get("bot_id", "")
-            if created_bots:
-                console.print(f"\n请选择 Bot（默认: {existing_bot_id or created_bots[0]['name']}）:")
-                for i, b in enumerate(created_bots, 1):
+            if target_bots:
+                console.print(f"\n请选择 Bot（默认: {existing_bot_id or target_bots[0]['name']}）:")
+                for i, b in enumerate(target_bots, 1):
                     console.print(f"  {i}. {b['name']} ({b['id']})")
-                bot_choice = Prompt.ask("选择", choices=[str(i) for i in range(1, len(created_bots) + 1)], default="1")
-                routing_config["bot_id"] = created_bots[int(bot_choice) - 1]["id"]
+                bot_choice = Prompt.ask("选择", choices=[str(i) for i in range(1, len(target_bots) + 1)], default="1")
+                routing_config["bot_id"] = target_bots[int(bot_choice) - 1]["id"]
         else:  # chat_routed
-            if created_bots:
+            if target_bots:
                 existing_default_bot = existing_routing.get("default_bot", "")
-                console.print(f"\n请选择默认 Bot（默认: {existing_default_bot or created_bots[0]['name']}）:")
-                for i, b in enumerate(created_bots, 1):
+                console.print(f"\n请选择默认 Bot（默认: {existing_default_bot or target_bots[0]['name']}）:")
+                for i, b in enumerate(target_bots, 1):
                     console.print(f"  {i}. {b['name']} ({b['id']})")
-                bot_choice = Prompt.ask("选择", choices=[str(i) for i in range(1, len(created_bots) + 1)], default="1")
-                routing_config["default_bot"] = created_bots[int(bot_choice) - 1]["id"]
+                bot_choice = Prompt.ask("选择", choices=[str(i) for i in range(1, len(target_bots) + 1)], default="1")
+                routing_config["default_bot"] = target_bots[int(bot_choice) - 1]["id"]
 
             existing_group_map = existing_routing.get("group_bot_map", {})
             console.print("\n群聊 ID -> Bot 映射（留空结束，输入 . 保留现有）:")
@@ -454,7 +667,7 @@ async def run_setup():
         console.print("✗ 跳过飞书配置\n")
 
     # Step 6: 环境变量配置（可选）
-    console.print("[bold]步骤 6/6:[/bold] 环境变量配置")
+    console.print("[bold]步骤 6/7:[/bold] 环境变量配置")
     console.print("-" * 40)
 
     # 检查是否已有 .env
@@ -472,13 +685,19 @@ async def run_setup():
         # 写入必要的环境变量（不覆盖已有值）
         env_lines = []
 
-        # API Key - 只在用户输入了新值时才写入
-        if api_key.strip():
-            env_lines.append(f'MINIMAX_API_KEY="{api_key}"')
-        elif existing_env.get("MINIMAX_API_KEY"):
-            console.print("[dim]保留现有 MINIMAX_API_KEY[/dim]")
-        else:
-            env_lines.append(f'MINIMAX_API_KEY=""')
+        # API Key - 只更新当前 provider 对应的环境变量，其他变量保留
+        provider_env_key = {
+            "minimax": "MINIMAX_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "claude": "ANTHROPIC_API_KEY",
+        }.get(provider_key)
+        if provider_env_key:
+            if api_key.strip():
+                env_lines.append(f'{provider_env_key}="{api_key}"')
+            elif existing_env.get(provider_env_key):
+                console.print(f"[dim]保留现有 {provider_env_key}[/dim]")
+            else:
+                env_lines.append(f'{provider_env_key}=""')
 
         # 默认 Bot
         if created_bots:
@@ -520,15 +739,15 @@ async def run_setup():
     else:
         console.print("✗ 跳过\n")
 
-    # Step 5: 完成
+    # Step 7: 完成
     console.print("[bold]步骤 7/7:[/bold] 完成")
     console.print("-" * 40)
 
-    console.print("\n[bold]创建的 Bots:[/bold]")
+    console.print("\n[bold]当前可用 Bots:[/bold]")
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("ID")
     table.add_column("名称")
-    for b in created_bots:
+    for b in target_bots:
         table.add_row(b["id"], b["name"])
     console.print(table)
 

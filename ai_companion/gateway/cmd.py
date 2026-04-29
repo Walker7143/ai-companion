@@ -31,6 +31,20 @@ from ai_companion.gateway.config import Platform, PlatformConfig
 from ai_companion.gateway.platforms.feishu import FeishuAdapter
 from ai_companion.gateway.router import PlatformRouter
 from ai_companion.gateway.control import GATEWAY_PID_FILE, GATEWAY_LOG_FILE, save_gateway_pid, remove_gateway_pid
+from ai_companion.gateway.admin_services import (
+    admin_host,
+    admin_port,
+    allowed_cors_origins,
+    is_masked_secret,
+    list_sessions as admin_list_sessions,
+    public_model_config,
+    working_messages,
+)
+from ai_companion.gateway.path_resolver import (
+    discover_bots as resolve_discover_bots,
+    get_data_dir as resolve_data_dir,
+    get_memory_db_path as resolve_memory_db_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,60 +161,18 @@ _admin_runner = None
 
 
 def _get_data_dir() -> Path:
-    """获取 Bot 数据根目录。
-
-    优先返回有实际数据的目录：
-    1. ~/.ai-companion/data/bots（如果该目录下有 bot 目录）
-    2. 项目 data/bots 目录（兼容旧数据）
-    """
-    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
-    project_dir = Path(__file__).parent.parent.parent / "data" / "bots"
-    # 如果用户目录存在且有内容，使用用户目录
-    if user_dir.exists() and any(user_dir.iterdir()):
-        return user_dir
-    # 否则用项目目录
-    return project_dir
+    """获取 Bot 数据根目录。"""
+    return resolve_data_dir()
 
 
 def _discover_bots() -> list[dict]:
     """扫描所有 data/bots/ 目录，自动发现所有 Bot（用户目录 + 项目目录）"""
-    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
-    project_dir = Path(__file__).parent.parent.parent / "data" / "bots"
-    seen = set()
-    bots = []
-    for base_dir in (user_dir, project_dir):
-        if not base_dir.exists():
-            continue
-        for bot_dir in base_dir.iterdir():
-            if not bot_dir.is_dir() or bot_dir.name in seen:
-                continue
-            persona_file = bot_dir / "persona" / "profile.json"
-            name = bot_dir.name
-            description = ""
-            if persona_file.exists():
-                try:
-                    import json as _json
-                    profile = _json.loads(persona_file.read_text(encoding="utf-8"))
-                    name = profile.get("name", name)
-                    description = profile.get("description", description)
-                except Exception:
-                    pass
-            seen.add(bot_dir.name)
-            bots.append({"id": bot_dir.name, "name": name, "description": description})
-    return bots
+    return resolve_discover_bots()
 
 
 def _get_memory_db_path(bot_id: str, db_name: str) -> Path | None:
     """获取 Bot 内存数据库路径，同时检查用户目录和项目目录"""
-    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
-    # gateway/cmd.py -> parent=ai_companion/gateway -> parent.parent=ai_companion -> parent.parent.parent=project_root
-    project_dir = Path(__file__).parent.parent.parent / "data" / "bots"
-    # 优先返回有实际数据的目录（检查 db 文件是否存在）
-    for base in (project_dir, user_dir):
-        db_path = base / bot_id / "memory" / db_name
-        if db_path.exists():
-            return db_path
-    return None
+    return resolve_memory_db_path(bot_id, db_name)
 
 
 async def _start_admin_api(bot_manager: BotManager, config: Config):
@@ -342,46 +314,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
     async def handle_sessions(request):
         """GET /api/v1/admin/sessions"""
-        import sqlite3
-        # 扫描所有 Bot 的 working.db，获取会话列表
-        all_sessions = []
-        bots = _discover_bots()
-        for bot in bots:
-            bot_id = bot["id"]
-            db_path = _get_memory_db_path(bot_id, "working.db")
-            if not db_path:
-                continue
-            try:
-                conn = sqlite3.connect(str(db_path))
-                rows = conn.execute("""
-                    SELECT session_id,
-                           COUNT(*) as msg_count,
-                           MAX(id) as last_msg_id,
-                           MAX(created_at) as last_at,
-                           COALESCE(SUM(LENGTH(content)), 0) as total_chars
-                    FROM messages
-                    GROUP BY session_id
-                    ORDER BY last_msg_id DESC
-                    LIMIT 100
-                """).fetchall()
-                conn.close()
-                for r in rows:
-                    all_sessions.append({
-                        "session_key": f"{bot_id}:{r[0]}",
-                        "session_id": r[0],
-                        "platform": "cli",
-                        "user": "用户",
-                        "created_at": r[3],
-                        "updated_at": r[3],
-                        "status": "active",
-                        "reset_reason": None,
-                        "total_tokens": r[4] // 2,  # ~2 chars ≈ 1 token
-                    })
-            except Exception:
-                pass
-        # 按最后消息时间倒序
-        all_sessions.sort(key=lambda x: x.get("last_at", ""), reverse=True)
-        return web.json_response({"sessions": all_sessions})
+        bot_id = request.query.get("bot_id")
+        return web.json_response({"sessions": admin_list_sessions(bot_id=bot_id)})
 
     async def handle_session_detail(request):
         """GET /api/v1/admin/sessions/:session_key"""
@@ -587,44 +521,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         """GET /api/v1/admin/memory/:bot_id/working"""
         bot_id = request.match_info["bot_id"]
         query_session = request.query.get("session_id")
-        db_path = _get_memory_db_path(bot_id, "working.db")
-        if not db_path:
-            return web.json_response([])
-
-        import sqlite3
-        conn = sqlite3.connect(str(db_path))
-
-        if query_session:
-            rows = conn.execute("""
-                SELECT role, content, created_at
-                FROM messages
-                WHERE session_id = ? AND compressed = 0
-                ORDER BY id DESC
-                LIMIT 50
-            """, (query_session,)).fetchall()
-            conn.close()
-            messages = [{"role": r[0], "content": r[1], "created_at": r[2]} for r in reversed(rows)]
-            return web.json_response(messages)
-
-        # 无 session_id 时返回最近一次会话的消息
-        row = conn.execute("""
-            SELECT session_id FROM messages
-            WHERE compressed = 0
-            ORDER BY id DESC LIMIT 1
-        """).fetchone()
-        if not row:
-            conn.close()
-            return web.json_response([])
-        session_id = row[0]
-        rows = conn.execute("""
-            SELECT role, content, created_at
-            FROM messages
-            WHERE session_id = ? AND compressed = 0
-            ORDER BY id ASC
-        """, (session_id,)).fetchall()
-        conn.close()
-        messages = [{"role": r[0], "content": r[1], "created_at": r[2]} for r in rows]
-        return web.json_response(messages)
+        return web.json_response(working_messages(bot_id, query_session))
 
     async def handle_memory_episodic(request):
         """GET /api/v1/admin/memory/:bot_id/episodic"""
@@ -788,14 +685,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         return web.json_response({
             "bot_id": bot_id,
             "name": bot_name,
-            "model": {
-                "provider": model_cfg.get("provider", "minimax"),
-                "api_key": model_cfg.get("api_key", ""),
-                "base_url": model_cfg.get("base_url", "https://api.minimax.chat/v1"),
-                "model": model_cfg.get("model", "MiniMax-M2.7"),
-                "temperature": model_cfg.get("temperature", 0.7),
-                "max_tokens": model_cfg.get("max_tokens", 2000),
-            },
+            "model": public_model_config(model_cfg),
             "memory": {
                 "hard_limit_chars": memory_cfg.get("hard_limit_chars", 100000),
                 "soft_limit_chars": memory_cfg.get("soft_limit_chars", 80000),
@@ -841,8 +731,11 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 if provider not in models_data:
                     models_data[provider] = {}
                 existing_provider = models_data.get(provider, {})
+                incoming_api_key = model_data.get("api_key")
+                if is_masked_secret(incoming_api_key):
+                    incoming_api_key = existing_provider.get("api_key", "")
                 models_data[provider] = {
-                    "api_key": model_data.get("api_key", existing_provider.get("api_key", "")),
+                    "api_key": incoming_api_key if incoming_api_key is not None else existing_provider.get("api_key", ""),
                     "base_url": model_data.get("base_url", existing_provider.get("base_url", "")),
                     "model": model_data.get("model", existing_provider.get("model", "")),
                 }
@@ -893,6 +786,30 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
     async def handle_config_test(request):
         """POST /api/v1/admin/config/:bot_id/test"""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        model_data = body.get("model", body) if isinstance(body, dict) else {}
+        provider = model_data.get("provider") or config.default_provider
+        base_url = model_data.get("base_url", "")
+        api_key = model_data.get("api_key", "")
+        provider_requires_key = provider in {"minimax", "openai", "claude"}
+        if provider_requires_key and (not api_key or is_masked_secret(api_key)):
+            existing = config.get_model_config(provider)
+            api_key = existing.get("api_key", "")
+        if provider_requires_key and not api_key:
+            return web.json_response({"ok": False, "error": "API Key 未配置"}, status=400)
+        if provider in {"ollama", "custom"} and not base_url:
+            return web.json_response({"ok": False, "error": "base_url 未配置"}, status=400)
+        try:
+            ModelFactory.create_from_runtime_config(
+                model_config={**model_data, "api_key": api_key, "base_url": base_url},
+                provider=provider,
+                api_key=api_key if provider_requires_key else None,
+            )
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)}, status=400)
         return web.json_response({"ok": True})
 
     # Create aiohttp app
@@ -917,24 +834,34 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_post("/api/v1/admin/config/{bot_id}/test", handle_config_test)
 
     # Add CORS headers
+    cors_origins = allowed_cors_origins(config.config)
+
     @web.middleware
     async def cors_middleware(request, handler):
-        if request.method == "OPTIONS":
-            return web.Response(status=200, headers={
-                "Access-Control-Allow-Origin": "*",
+        origin = request.headers.get("Origin", "")
+        cors_headers = {}
+        if origin in cors_origins:
+            cors_headers = {
+                "Access-Control-Allow-Origin": origin,
                 "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            })
+                "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                "Vary": "Origin",
+            }
+        if request.method == "OPTIONS":
+            return web.Response(status=204, headers=cors_headers)
         response = await handler(request)
-        response.headers["Access-Control-Allow-Origin"] = "*"
+        for key, value in cors_headers.items():
+            response.headers[key] = value
         return response
     _admin_app.middlewares.append(cors_middleware)
 
     _admin_runner = web.AppRunner(_admin_app)
     await _admin_runner.setup()
-    site = web.TCPSite(_admin_runner, "0.0.0.0", 8642)
+    host = admin_host(config.config)
+    port = admin_port(config.config)
+    site = web.TCPSite(_admin_runner, host, port)
     await site.start()
-    print("[OK] 管理 API 已启动 (http://0.0.0.0:8642)")
+    print(f"[OK] 管理 API 已启动 (http://{host}:{port})")
     print()
 
 
@@ -949,10 +876,7 @@ async def _stop_admin_api():
 
 def get_data_dir() -> Path:
     """获取 Bot 数据根目录"""
-    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
-    if user_dir.exists():
-        return user_dir
-    return Path(__file__).parent.parent.parent / "data" / "bots"
+    return resolve_data_dir()
 
 
 def load_feishu_config() -> dict:
@@ -1028,6 +952,7 @@ async def run_gateway(daemon: bool = True):
     """启动网关服务"""
     # 保存 PID
     save_gateway_pid(os.getpid())
+    adapter = None
 
     def cleanup():
         remove_gateway_pid()
@@ -1047,8 +972,8 @@ async def run_gateway(daemon: bool = True):
         print("[OK] 守护进程模式，关闭终端后网关将继续运行")
         print()
 
-    # 检查是否启动 UI
-    start_ui = os.environ.get("START_UI", "true").lower() in ("true", "1", "yes")
+    # 检查是否启动 UI。默认只启动 Admin API；开发环境可显式打开 Vite。
+    start_ui = os.environ.get("START_UI", os.environ.get("AI_COMPANION_START_UI", "false")).lower() in ("true", "1", "yes")
     if start_ui:
         _start_ui_server()
         print()
@@ -1153,7 +1078,7 @@ async def run_gateway(daemon: bool = True):
 
             if not bot:
                 # Fallback: 使用第一个可用的 bot
-                bot = next(iter(bot_manager._bots.values()), None)
+                bot = bot_manager.first_bot
 
             if not bot:
                 return "没有可用的 Bot"
@@ -1196,16 +1121,23 @@ async def run_gateway(daemon: bool = True):
         print("按 Ctrl+C 退出")
     print("=" * 50)
 
-    # 保持运行
     try:
+        # 保持运行
         while True:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
         print()
         print("正在停止网关...")
+    finally:
         _stop_ui_server()
-        await adapter.disconnect()
+        if adapter is not None:
+            await adapter.disconnect()
         await _stop_admin_api()
+        for bot in bot_manager.bots.values():
+            try:
+                await bot.close()
+            except Exception as e:
+                logger.debug(f"关闭 Bot 失败（忽略）: {e}")
         cleanup()
         print("[OK] 网关已停止")
 

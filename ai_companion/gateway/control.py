@@ -13,8 +13,8 @@ from pathlib import Path
 _project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
-GATEWAY_PID_FILE = Path.home() / ".ai-companion" / "gateway.pid"
-GATEWAY_LOG_FILE = Path.home() / ".ai-companion" / "logs" / "gateway.log"
+GATEWAY_PID_FILE = Path(os.environ.get("AI_COMPANION_GATEWAY_PID_FILE", Path.home() / ".ai-companion" / "gateway.pid"))
+GATEWAY_LOG_FILE = Path(os.environ.get("AI_COMPANION_LOG_DIR", Path.home() / ".ai-companion" / "logs")) / "gateway.log"
 
 
 def get_gateway_pid() -> int | None:

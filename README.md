@@ -10,7 +10,8 @@
 | **独立人格** | 每个 Bot 有独特的性格、背景故事和说话风格（傲娇/活泼/温柔/高冷...） |
 | **三层记忆** | 工作记忆 + 情景记忆 + 语义记忆，像真人一样记住你们的故事 |
 | **本地向量嵌入** | 支持 sentence-transformers 本地向量语义召回，中文友好 |
-| **主动唤醒** | 会主动找你聊天、提醒事情、偶尔撒娇，基于 LLM 推理判断时机 |
+| **人生轨迹** | 每个 Bot 有独立时间线，会生成日常小事、人生大事、生日和低概率意外事件 |
+| **主动唤醒** | 会主动找你聊天、提醒事情、偶尔撒娇，基于 LLM 推理判断时机，并可带入 Bot 当前时间线和近期生活事件 |
 | **关系进化** | 根据互动深度，Bot 行为会逐渐变化（陌生网友 → 恋人） |
 | **性格推断拒绝** | 基于性格判断该不该回答，不是简单的关键词过滤 |
 | **多媒体技能** | 支持图片生成、语音合成 |
@@ -22,7 +23,7 @@
 
 ### 环境要求
 
-- Python 3.10+
+- Python 3.11+
 - 至少一个模型 API Key (MiniMax / OpenAI / Claude / Ollama)
 
 ### 安装
@@ -46,6 +47,8 @@ source ~/.ai-companion/.venv/bin/activate  # 如果使用了虚拟环境
 ai-companion setup
 ```
 
+重复运行 `setup` 时会合并更新配置：没有选择重新配置或覆盖的部分会保留旧值，例如只改模型时不会重写已有 Bot、人生轨迹或主动唤醒配置。
+
 ---
 
 ## 项目架构
@@ -67,9 +70,12 @@ ai_companion/
 │   └── refusal_engine.py  # 拒绝引擎 - 性格推断拒绝
 ├── proactive/        # 主动唤醒系统
 │   ├── engine.py     # ProactiveEngine - LLM 判断 + 消息生成
-│   ├── scheduler.py   # ProactiveScheduler - 定时检查调度
+│   ├── scheduler.py   # ProactiveScheduler - 主动唤醒定时检查
 │   ├── platform.py   # 发送平台适配器 (CLI/飞书/Webhook)
-│   └── life_engine.py  # 生活事件引擎
+│   ├── life_engine.py     # LifeEngine - 人生轨迹事件生成
+│   ├── life_scheduler.py  # LifeScheduler - 独立人生轨迹调度
+│   ├── life_config.py     # life.json 配置加载
+│   └── life_state.py      # life_state.json 状态持久化
 ├── context/          # 上下文管理
 │   ├── compressor.py  # ContextCompressor - 上下文压缩
 │   └── tokenizer.py   # TokenEstimator - Token 估算
@@ -141,14 +147,15 @@ memory:
 - **空闲触发**: 用户超过一定时间未互动，Bot 会主动联系
 - **情绪触发**: 用户消息包含特定情绪关键词时延迟关心
 - **梯度沉默**: 根据未联系时长调整频率（7天/14天/30天阈值）
+- **生活话题**: 主动唤醒判断和消息生成会读取 Bot 当前日期、动态年龄、人生阶段和近期可分享事件
 
 ### 发送平台
 
 | 平台 | 配置 | 消息去向 |
 |------|------|---------|
-| CLI | 默认 | 终端 stdout |
-| 飞书 | `platform_type: "feishu"` | 飞书用户/群 |
-| Webhook | `platform_type: "webhook"` | 自定义 HTTP endpoint |
+| CLI | `platform.type: "cli"` | 终端 stdout |
+| 飞书 | `platform.type: "feishu"` | 飞书用户/群 |
+| Webhook | `platform.type: "webhook"` | 自定义 HTTP endpoint |
 
 ### 限流保护
 
@@ -161,26 +168,34 @@ memory:
 
 ## 人生轨迹系统
 
-Bot 具备独立人生轨迹，独立于主动消息调度器运行。
+Bot 具备独立人生轨迹，独立于主动消息调度器运行。人生轨迹状态会进入普通对话、日常事件、人生大事和主动唤醒 prompt，避免 Bot 时间线推进后仍按静态年龄回答。
 
 ### 事件类型
 
 | 类型 | 周期 | 说明 |
 |------|------|------|
-| 日常小事 | 按 `life.json` 的 `daily_interval_seconds` | 低概率生成，可分享给用户 |
-| 人生大事 | 按 `life.json` 的 `major_interval_seconds` | 触发人格文件更新 |
+| 日常小事 | 按 `life.json` 的 `daily_interval_seconds / time_ratio` | 从 200+ 场景池中随机抽少量候选给 LLM；最多保留最近 100 条 |
+| 人生大事 | 按 `life.json` 的 `major_interval_seconds / time_ratio` | 具体化的长期事件，触发人格文件更新 |
+| 意外事件 | 独立低概率通道 | 默认每个 Bot 日 `0.01` 概率，整体冷却默认 365 天 |
+
+### 事件去重与生活画像
+
+- `event_policy.scenario_cooldown_days` 和 `major_scenario_cooldown_days` 控制同类事件冷却。
+- `event_policy.llm_daily_candidate_limit` 控制每次给 LLM 的日常候选数，默认 12，不会把完整 200+ 场景池塞进 prompt。
+- `daily_life_profile` 描述 Bot 的城市、通勤、居住、工作、兴趣和事件偏好；性格标签也会影响候选权重。
 
 ### 时间加速
 
 `time_ratio` 控制 Bot 内部时间的流逝速度：
 
-| time_ratio | 实际触发间隔 | Bot 每天老化 | 适用场景 |
-|------------|------------|-------------|---------|
-| 1 | 1 小时 | 1 天 | 正常体验（默认） |
-| 60 | 1 分钟 | 60 天 | 加速体验 |
-| 360 | 10 秒 | 360 天 | 快速验证（最大有效值） |
+| time_ratio | 默认日常检查间隔 | 常见效果 | 适用场景 |
+|------------|------------------|---------|---------|
+| 1 | 86400 秒 | 现实 1 天推进 1 个 Bot 日 | 正常体验（默认） |
+| 24 | 3600 秒 | 现实 1 小时推进 1 个 Bot 日 | 轻度加速 |
+| 1440 | 60 秒 | 现实 1 分钟推进 1 个 Bot 日 | 观察测试 |
+| 3600 | 1 秒 | 极速测试，受 1 秒轮询下限约束 | 快速验证 |
 
-> 最大有效 time_ratio = **360**（LifeScheduler 每 10 秒检查一次）
+LifeScheduler 会自适应轮询，间隔为 `1-10` 秒之间；单次 `tick_daily` 至少推进 1 天，长时间离线或极高 `time_ratio` 会按经过时间补推，单次最多推进 365 天。
 
 ---
 
@@ -190,10 +205,12 @@ Bot 具备独立人生轨迹，独立于主动消息调度器运行。
 
 ```
 ~/.ai-companion/
-├── config.yaml      # 主配置
-├── models.yaml      # AI 模型配置
-├── bots.yaml        # Bot 列表
-└── proactive_states/  # 主动唤醒状态
+├── config/
+│   ├── config.yaml  # 主配置
+│   ├── models.yaml  # AI 模型配置
+│   └── bots.yaml    # Bot 列表
+└── data/
+    └── bots/        # Bot 配置、记忆、life_state/proactive_state
 ```
 
 ### models.yaml 示例
@@ -264,7 +281,15 @@ ai-companion gateway stop     # 停止
 ai-companion gateway logs     # 查看日志
 ```
 
-**管理后台**: 启动后访问 http://localhost:1421，可视化管理所有 Bot 的会话、记忆、配置、日志。
+**管理后台**: Gateway 默认只启动本地 Admin API（http://127.0.0.1:8642）。开发时可另启 Web UI：
+
+```bash
+cd ai-companion-ui
+npm install
+npm run dev
+```
+
+如需让 Gateway 同时拉起 Vite dev server，可显式设置 `START_UI=true`。
 
 ### 内置命令
 
@@ -298,7 +323,8 @@ data/bots/mybot/persona/
 ├── backstory.json      # 人生经历
 ├── values.json        # 价值观和底线
 ├── speaking_style.json # 说话风格
-└── proactive.json      # 主动唤醒配置
+├── proactive.json      # 主动唤醒配置
+└── life.json           # 人生轨迹配置
 ```
 
 复制模板：
@@ -311,17 +337,14 @@ cp -r data/bots/_template data/bots/mybot
 
 ## 测试
 
-项目包含全面的测试套件：
+项目包含系统级离线测试套件：
 
 ```bash
-# 单元/集成测试（181 个测试用例）
-python tests/test_comprehensive.py
-
-# 真实使用场景测试（10 项核心功能验证）
-python tests/test_real_usage.py
+# 端到端系统测试（配置、模型工厂、记忆、BotInstance、主动唤醒、人生轨迹、Gateway、前端构建）
+python tests/system_test_suite.py
 ```
 
-测试覆盖：配置加载、模型对话、人格系统、记忆系统、BotInstance、主动唤醒、上下文压缩、会话管理、技能系统、Gateway
+测试报告会写入 `.artifacts/system-test-rebuilt-*/`，当前套件覆盖 30 项核心行为。
 
 ---
 
@@ -392,6 +415,7 @@ rm -rf ~/.ai-companion
 - **虚拟环境**：如果系统 Python 受保护（externally-managed-environment），脚本会自动创建虚拟环境 `~/.ai-companion/.venv`
 - **数据目录**：所有数据存储在 `~/.ai-companion/`
 - **API Key**：安装后需要配置 API Key，参考[配置说明](#配置说明)
+- **重复 setup**：配置向导默认保留旧值，只合并写入本次修改的模型、Bot 或平台配置
 
 ---
 
@@ -401,7 +425,7 @@ rm -rf ~/.ai-companion
 A: `export MINIMAX_API_KEY="your_key"`
 
 **Q: Bot 不主动发消息**
-A: 检查 `data/bots/{bot_id}/persona/proactive.json` 中 `enabled` 和 `mode`
+A: 检查 `data/bots/{bot_id}/persona/proactive.json` 中 `enabled`、`mode`、`platform.type` 和发送平台配置；平台发送器未配置时不会计入已发送次数。
 
 **Q: 向量嵌入不生效**
 A: 确认 `models.yaml` 中 `memory.embedding: "local"`（sentence-transformers 已默认安装）
@@ -416,6 +440,7 @@ A: `rm -rf ~/.ai-companion/data/bots/{bot_id}/memory/*.db`
 | 文档 | 说明 |
 |------|------|
 | [使用指南](./docs/GUIDE.md) | 详细的配置说明和功能介绍 |
+| [Bot JSON 字段说明](./docs/BOT_JSON_FIELDS.md) | `profile.json` / `life.json` / `proactive.json` / 状态文件字段说明 |
 | [主动唤醒设计](./docs/DESIGN_phase5_proactive.md) | 主动唤醒架构和算法设计 |
 | [主动唤醒实现](./docs/IMPLEMENTATION_phase5_proactive.md) | 主动唤醒实现细节 |
 | [UI 设计方案](./docs/ui/UI_DESIGN.md) | 管理后台设计规范 |

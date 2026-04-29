@@ -161,11 +161,11 @@ GET  /api/v1/bots                    # Bot 列表
 
 | 层 | 技术 | 说明 |
 |----|------|------|
-| 前端框架 | React 18 + TypeScript | 已采用 |
-| 构建工具 | Vite | 已采用 |
-| 样式 | Inline styles | 已从 Tailwind 改为内联样式 |
-| 状态管理 | Zustand | 已采用 |
-| 路由 | React Router | 已采用 |
+| 前端框架 | React 19 + TypeScript | 已采用 |
+| 构建工具 | Vite 7 | 已采用 |
+| 样式 | TailwindCSS 4 + Inline styles | 已采用 |
+| 状态管理 | Zustand 5 | 已采用 |
+| 路由 | React Router 7 | 已采用 |
 | Toast | Sonner | 已采用 |
 | 图标 | Lucide React | 已采用 |
 | 后端 | Python ai_companion | 需扩展 REST API |

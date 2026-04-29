@@ -97,6 +97,7 @@ class BotInstance:
         self.proactive_scheduler: Optional[ProactiveScheduler] = None
         self._proactive_platform = None
         self._schedulers_started = False
+        self._background_tasks: set[asyncio.Task] = set()
 
         # ── 人生轨迹系统 ─────────────────────────────────────
         self.life_config = LifeConfig(_persona_dir=persona_dir)
@@ -110,6 +111,7 @@ class BotInstance:
             memory=self.memory,
             persona_dir=persona_dir,
         )
+        self.proactive_engine.set_life_engine(self.life_engine)
         self.life_scheduler: Optional[LifeScheduler] = None
 
         # 初始化日期和年龄（从 profile.json 读取）
@@ -461,11 +463,7 @@ class BotInstance:
                 return f"抱歉，网络不稳定，请稍后再试。"
 
             # 6. 异步写入记忆
-            task = asyncio.create_task(self.memory.on_message(user_input, response))
-            task.add_done_callback(
-                lambda t: None if t.cancelled() or t.exception() is None
-                else logger.error(f"[Memory] 写入异常: {t.exception()}")
-            )
+            self._track_background_task(self.memory.on_message(user_input, response), name="memory.on_message")
         else:
             system_prompt = self._build_system_prompt(adjustment_note=adjustment_note)
             messages = [{"role": "user", "content": user_input}]
@@ -527,6 +525,7 @@ class BotInstance:
                 "name": skill.name,
                 "description": skill.description,
                 "capabilities": skill.capabilities,
+                "is_available": skill.is_available(),
                 "supported_models": getattr(skill, "supported_models", []),
             }
         if self.multimodal_sender:
@@ -542,6 +541,37 @@ class BotInstance:
         if self.memory:
             self.memory.start_session()
 
+    def _track_background_task(self, coro, name: str = "background") -> asyncio.Task:
+        task = asyncio.create_task(coro, name=f"{self.id}:{name}")
+        self._background_tasks.add(task)
+
+        def _done(t: asyncio.Task):
+            self._background_tasks.discard(t)
+            if t.cancelled():
+                return
+            try:
+                exc = t.exception()
+            except asyncio.CancelledError:
+                return
+            if exc is not None:
+                logger.error(f"[BotInstance] 后台任务异常 ({name}): {exc}")
+
+        task.add_done_callback(_done)
+        return task
+
+    async def _drain_background_tasks(self, timeout: float = 5.0):
+        if not self._background_tasks:
+            return
+        done, pending = await asyncio.wait(self._background_tasks, timeout=timeout)
+        for task in done:
+            self._background_tasks.discard(task)
+        if pending:
+            logger.warning(f"[BotInstance] 取消未完成后台任务: {len(pending)}")
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            self._background_tasks.difference_update(pending)
+
     async def close(self):
         """关闭时清理资源"""
         if self.proactive_scheduler:
@@ -549,6 +579,7 @@ class BotInstance:
         if self.life_scheduler:
             await self.life_scheduler.stop()
         self._schedulers_started = False
+        await self._drain_background_tasks()
         if self.memory:
             await self.memory.close()
         # 关闭 MiniMax adapter 的 session

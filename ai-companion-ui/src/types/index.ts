@@ -32,6 +32,7 @@ export interface BotMetrics {
 export interface SessionInfo {
   session_key: string;
   session_id: string;
+  bot_id?: string;
   platform: string;
   user: string;
   created_at: string;

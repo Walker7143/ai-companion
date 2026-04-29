@@ -1,7 +1,12 @@
-# Tauri + React + Typescript
+# AI Companion 管理后台
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Web 管理后台，技术栈为 React 19、React Router 7、Zustand 5、Vite 7、TailwindCSS 4。
 
-## Recommended IDE Setup
+## 开发
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+npm install
+npm run dev
+```
+
+默认连接本机 Admin API：`http://127.0.0.1:8642`。
