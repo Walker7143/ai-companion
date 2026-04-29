@@ -1,47 +1,35 @@
-# TODO - 待完成工作
+# TODO
 
-> 最后更新: 2026-04-25
+> 最后更新: 2026-04-29
 
-## Phase 9 - 产品化 (进行中)
+## 当前未解决/待确认
 
-### Task 9-1: Docker 化验证 ⏳
+### Gateway Admin API 启动时序偶发波动
+
+**状态**: 待稳定化
+
+**现象**: `tests/system_test_suite.py` 的 `T12 Gateway lifecycle + admin API` 偶尔出现 `connection refused` 或 `connection reset by peer`。Gateway 进程能启动和停止，但测试探测 Admin API 的等待/重试窗口可能不够稳。
+
+**建议处理**:
+
+- 增加 Admin API ready check 或健康检查端点。
+- 在测试中等待明确 ready 信号，而不是只按固定时间探测端口。
+- 复测 Gateway 日志，确认不是端口占用或旧进程残留。
+
+### Docker 化验证
 
 **状态**: 待验证
 
-**说明**: Dockerfile 和 docker-compose.yml 已创建，但需要在有 Docker 的环境中验证。
+**说明**: 如需交付 Docker 部署，需要在有 Docker 的环境中重新验证镜像构建、配置挂载和数据持久化。
 
-**验证步骤**:
 ```bash
-# 1. 构建镜像
 docker build -t ai-companion .
-
-# 2. 运行测试
 docker run -it ai-companion ai-companion start
-
-# 3. 使用 docker-compose
 docker-compose up -d
 docker-compose logs -f
 ```
 
-**负责人**: 待指派
-
-**依赖**: 需要 Docker 环境
-
----
-
-## 已完成的工作
-
-| 日期 | Task | 状态 |
-|------|------|------|
-| 2026-04-25 | Phase 8-5 接入配置示例 | ✅ 完成 |
-| 2026-04-25 | Phase 8-6 真实环境验证 | ✅ 完成 |
-| 2026-04-25 | Phase 9-2 完整对话流程压测 | ✅ 完成 |
-| 2026-04-25 | Phase 9-3 一键安装脚本 Docker 选项 | ✅ 完成 |
-| 2026-04-25 | 代码重构 (gateway 模块) | ✅ 完成 |
-
----
-
-## 可能的未来工作
+## 可选未来工作
 
 ### 可选: sentence-transformers 本地向量嵌入
 
@@ -63,11 +51,3 @@ emb = encoder.encode("今天吃了火锅")
 print(f"向量维度: {len(emb)}")  # 期望 384
 ```
 
----
-
-## 完成标准
-
-- [ ] Task 9-1: Docker 镜像构建成功
-- [ ] Task 9-1: Docker 容器运行正常
-- [ ] Task 9-1: 配置文件挂载正确
-- [ ] Task 9-1: 数据目录持久化正确

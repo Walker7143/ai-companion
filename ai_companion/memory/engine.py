@@ -51,12 +51,12 @@ class MemoryEngine:
 
     示例：
         # 正确：传入根目录
-        engine = MemoryEngine(bot_id="suqing", memory_dir=Path("data/bots"))
-        # 实际路径: data/bots/suqing/memory/
+        engine = MemoryEngine(bot_id="lin_wanqing", memory_dir=Path("data/bots"))
+        # 实际路径: data/bots/lin_wanqing/memory/
 
         # 错误：传入包含 bot_id 的路径（会导致路径重复）
-        engine = MemoryEngine(bot_id="suqing", memory_dir=Path("data/bots/suqing"))
-        # 实际路径: data/bots/suqing/suqing/memory/  (错误!)
+        engine = MemoryEngine(bot_id="lin_wanqing", memory_dir=Path("data/bots/lin_wanqing"))
+        # 实际路径: data/bots/lin_wanqing/lin_wanqing/memory/  (错误!)
     """
 
     # 默认阈值（可被 config 覆盖）

@@ -72,7 +72,7 @@ ai-companion setup
 
 向导会引导你完成：
 1. API Key 配置
-2. 选择人格模板
+2. 创建或更新自定义 Bot
 3. 飞书集成（可选）
 
 重复运行 `setup` 时，向导会读取现有配置并默认保留旧值。没有选择重新配置或覆盖的部分不会被清空；例如只重新设置模型时，已有 `bots.yaml`、Bot persona、`proactive.json`、`life.json` 和飞书配置都会保留。
@@ -96,8 +96,8 @@ minimax:
 **~/.ai-companion/config/bots.yaml**:
 ```yaml
 bots:
-  - id: suqing
-    name: 苏晴
+  - id: lin_wanqing
+    name: 林晚晴
     enabled: true
 ```
 
@@ -210,13 +210,13 @@ ModelFactory.register("my-model", MyCustomAdapter)
 
 ```yaml
 bots:
-  - id: suqing          # Bot ID（唯一标识）
-    name: 苏晴           # 显示名称
+  - id: lin_wanqing     # Bot ID（唯一标识）
+    name: 林晚晴         # 显示名称
     enabled: true       # 是否启用
     model: minimax      # 可选：指定模型，默认使用 default_model
 
-  - id: aiyue
-    name: 阿月
+  - id: ethan_reed
+    name: Ethan Reed
     enabled: true
 ```
 
@@ -236,7 +236,7 @@ platforms:
       connection_mode: "websocket"  # websocket 或 webhook
     routing:
       mode: "dedicated"  # 飞书 App 与 Bot 固定一对一绑定
-      bot_id: "suqing"
+      bot_id: "lin_wanqing"
 
 # 日志配置
 logging:
@@ -332,14 +332,14 @@ data/bots/{bot_id}/persona/
 
 ```json
 {
-  "id": "suqing",
-  "name": "苏晴",
-  "age": 26,
-  "occupation": "自由插画师",
-  "personality_tags": ["傲娇", "嘴硬心软", "独立", "有艺术气质"],
-  "appearance": "黑色长发，戴着耳机，偶尔穿卫衣",
-  "avatar_prompt": "年轻女性黑色长发插画师风格",
-  "summary": "26岁自由插画师，住在上海，喜欢画水彩和板绘。性格傲娇，嘴上不饶人但其实很在意你。"
+  "id": "lin_wanqing",
+  "name": "林晚晴",
+  "age": 27,
+  "occupation": "古籍修复师",
+  "personality_tags": ["清冷温柔", "观察力强", "慢热", "有分寸感"],
+  "appearance": "黑色长发，常穿米白色针织衫或亚麻衬衣",
+  "avatar_prompt": "年轻女性古籍修复师，安静温柔，旧书店氛围",
+  "summary": "27岁古籍修复师，安静慢热，习惯用行动照顾人。"
 }
 ```
 
@@ -376,14 +376,14 @@ data/bots/{bot_id}/persona/
 
 ```json
 {
-  "style": "傲娇",
-  "traits": ["嘴硬心软", "喜欢吐槽", "偶尔撒娇"],
+  "style": "清冷温柔",
+  "traits": ["慢热", "观察细致", "克制关心"],
   "phrases": {
-    "greeting": ["哟", "干嘛", "有事啊"],
-    "care": ["才不是担心你呢", "随便你怎么想"]
+    "greeting": ["今天好像有点累。", "先别急。"],
+    "care": ["我听见了。", "慢一点也没关系。"]
   },
-  "forbidden_words": ["呵呵", "哦"],
-  "tone": "口语化、傲娇、偶尔带emoji"
+  "forbidden_words": ["呵呵", "随便"],
+  "tone": "安静、细腻、克制，不滥用 emoji"
 }
 ```
 
@@ -448,20 +448,20 @@ data/bots/{bot_id}/persona/
 
 ```json
 {
-  "id": "suqing",
-  "name": "苏晴",
-  "age": 26,
-  "occupation": "自由插画师",
+  "id": "lin_wanqing",
+  "name": "林晚晴",
+  "age": 27,
+  "occupation": "古籍修复师",
   "gender": "female",
-  "personality_tags": ["傲娇", "嘴硬心软", "独立", "有艺术气质"],
-  "relationship_to_user": "暧昧的青梅竹马",
-  "appearance": "黑色长发，戴着耳机，偶尔穿卫衣",
-  "interests": ["画水彩", "看动漫", "养猫"],
+  "personality_tags": ["清冷温柔", "观察力强", "慢热", "有分寸感"],
+  "relationship_to_user": "认识很久的朋友，关系正在从熟悉走向更亲密",
+  "appearance": "黑色长发，常穿米白色针织衫或亚麻衬衣",
+  "interests": ["古籍修复", "雨天散步", "手写便签"],
   "attitude_score": 0,
 
   "settings": {
-    "tone_default": "傲娇",
-    "emoji_usage": "偶尔",
+    "tone_default": "安静温柔",
+    "emoji_usage": "从不",
     "response_length": "中等"
   }
 }
@@ -496,16 +496,18 @@ bots:
 
 4. 重启服务
 
-### 3.9 内置人格
+### 3.9 新 Bot 样例
 
-项目提供 4 个内置人格：
+项目提供 6 个新 Bot 样例，详细设计方法见 [Bot 设计指引](./BOT_DESIGN_GUIDE.md)。
 
-| ID | 名称 | 性格 | 简介 |
-|----|------|------|------|
-| suqing | 苏晴 | 傲娇 | 26岁自由插画师，嘴硬心软 |
-| aiyue | 阿月 | 活泼 | 22岁音乐学院学生，有点粘人 |
-| chenxing | 陈行 | 沉稳 | 28岁程序员，话少但可靠，高冷温柔 |
-| yutian | 雨天 | 阳光 | 25岁健身教练，热情直接，有点占有欲 |
+| ID | 名称 | 性别 | 性格方向 |
+|----|------|------|----------|
+| lin_wanqing | 林晚晴 | 女 | 清冷温柔、慢热、细腻 |
+| shen_nian | 沈念 | 女 | 灵动、嘴快心软、创作型 |
+| sofia_rivera | Sofia Rivera | 女 | 英文、热情直接、纪录片摄影师 |
+| gu_yichen | 顾以辰 | 男 | 冷静可靠、低表达、责任感强 |
+| zhou_yan | 周砚 | 男 | 松弛幽默、会照顾人、生活感 |
+| ethan_reed | Ethan Reed | 男 | 英文、理性克制、英式冷幽默 |
 
 ---
 
@@ -608,11 +610,11 @@ Bot 人生轨迹系统（LifeEngine）让 Bot 具备「自己的生活」：
 
 ```json
 {
-  "id": "suqing",
-  "name": "苏晴",
-  "age": 26,
-  "birth_date": "1998-06-15",
-  "occupation": "自由插画师"
+  "id": "lin_wanqing",
+  "name": "林晚晴",
+  "age": 27,
+  "birth_date": "1999-03-12",
+  "occupation": "古籍修复师"
 }
 ```
 
@@ -929,7 +931,6 @@ Bot 当前的活动和情绪状态：
 ## 5. 主动唤醒系统
 
 > 详细设计文档：[DESIGN_phase5_proactive.md](./DESIGN_phase5_proactive.md)
-> 详细实现文档：[IMPLEMENTATION_phase5_proactive.md](./IMPLEMENTATION_phase5_proactive.md)
 
 ### 5.1 概述
 
@@ -1181,7 +1182,7 @@ platforms:
 ```yaml
 routing:
   mode: dedicated
-  bot_id: suqing
+  bot_id: lin_wanqing
 ```
 
 飞书通道只支持 `dedicated`。一个飞书 App 只能绑定一个 Bot，一个 Bot 也只能绑定一个飞书 App；不要使用 `chat_routed` 或 `group_bot_map` 把同一个飞书应用路由到多个 Bot。
@@ -1244,10 +1245,10 @@ platforms:
       group_policy: "open"
       allowed_users: []
       home_channel: "oc_xxx"
-      home_channel_name: "苏晴の窝"
+      home_channel_name: "林晚晴的书房"
     routing:
       mode: "dedicated"
-      bot_id: "suqing"
+      bot_id: "lin_wanqing"
 ```
 
 ### 7.6 Bot 绑定与固定会话配置
@@ -1267,10 +1268,10 @@ platforms:
       domain: "feishu"
       group_policy: "open"
     bot_bindings:
-      suqing:
+      lin_wanqing:
         home_channel:
-          chat_id: "oc_suqing_chat_id"
-          name: "苏晴"
+          chat_id: "oc_lin_wanqing_chat_id"
+          name: "林晚晴"
 ```
 
 多 Bot 使用飞书时，每个 Bot 必须覆盖成不同的飞书应用：
@@ -1280,24 +1281,24 @@ platforms:
   feishu:
     enabled: true
     bot_bindings:
-      suqing:
+      lin_wanqing:
         extra:
           app_id: "cli_xxx"
-          app_secret: "${SUQING_FEISHU_APP_SECRET}"
+          app_secret: "${LIN_WANQING_FEISHU_APP_SECRET}"
           connection_mode: "websocket"
           domain: "feishu"
         home_channel:
           chat_id: "oc_xxx"
-          name: "苏晴"
-      aiyue:
+          name: "林晚晴"
+      ethan_reed:
         extra:
           app_id: "cli_yyy"
-          app_secret: "${AIYUE_FEISHU_APP_SECRET}"
+          app_secret: "${ETHAN_REED_FEISHU_APP_SECRET}"
           connection_mode: "websocket"
           domain: "feishu"
         home_channel:
           chat_id: "oc_yyy"
-          name: "阿月"
+          name: "Ethan Reed"
 ```
 
 `home_channel.chat_id` 通常是 `oc_xxx` 这类飞书会话 ID。没有配置固定目标时，网关仍会在收到某个会话的入站消息后，把该会话作为当前运行时的主动消息目标；但重启后不会保留，建议正式使用时写入 `bot_bindings`。
@@ -1522,7 +1523,7 @@ Dashboard 显示的指标直接从 SQLite 读取，统计维度如下：
 │   └── config.yaml
 ├── data/
 │   └── bots/
-│       ├── suqing/
+│       ├── lin_wanqing/
 │       │   ├── persona/           # 人格配置
 │       │   │   ├── profile.json
 │       │   │   ├── backstory.json
@@ -1534,7 +1535,7 @@ Dashboard 显示的指标直接从 SQLite 读取，统计维度如下：
 │       │   │   └── working.db
 │       │   ├── proactive_state.json
 │       │   └── life_state.json
-│       └── aiyue/
+│       └── ethan_reed/
 │           └── ...
 ├── logs/
 │   └── ai_companion.log
@@ -1611,6 +1612,6 @@ minimax:
 
 ## 相关文档
 
+- [Bot 设计指引](./BOT_DESIGN_GUIDE.md)
+- [Bot JSON 字段说明](./BOT_JSON_FIELDS.md)
 - [主动唤醒系统设计](./DESIGN_phase5_proactive.md)
-- [主动唤醒系统实现](./IMPLEMENTATION_phase5_proactive.md)
-- [Phase 1-3 测试报告](./TEST_REPORT_phase1_3.md)

@@ -269,7 +269,7 @@ export FEISHU_APP_SECRET="your_feishu_app_secret"
 
 ```bash
 ai-companion start              # 默认 Bot
-ai-companion start --bot suqing  # 指定 Bot
+ai-companion start --bot mybot   # 指定 Bot
 ```
 
 ### 飞书网关服务
@@ -303,14 +303,9 @@ ai-companion gateway start
 
 ---
 
-## 内置人格
+## Bot 初始化
 
-| ID | 名称 | 性格 | 简介 |
-|----|------|------|------|
-| suqing | 苏晴 | 傲娇 | 26岁自由插画师，嘴硬心软 |
-| aiyue | 阿月 | 活泼 | 22岁音乐学院学生，有点粘人 |
-| chenxing | 陈行 | 沉稳 | 28岁程序员，话少但可靠，高冷温柔 |
-| yutian | 雨天 | 阳光 | 25岁健身教练，热情直接，有点占有欲 |
+仓库提供了三男三女的新 Bot 人设样例，可参考 `docs/BOT_DESIGN_GUIDE.md`。你也可以通过 `ai-companion setup` 创建自己的 Bot，并在 `data/bots/{bot_id}/persona/` 中完成设定。
 
 ---
 
@@ -439,9 +434,9 @@ A: `rm -rf ~/.ai-companion/data/bots/{bot_id}/memory/*.db`
 | 文档 | 说明 |
 |------|------|
 | [使用指南](./docs/GUIDE.md) | 详细的配置说明和功能介绍 |
+| [Bot 设计指引](./docs/BOT_DESIGN_GUIDE.md) | 新 Bot 样例与自建 Bot 方法论 |
 | [Bot JSON 字段说明](./docs/BOT_JSON_FIELDS.md) | `profile.json` / `life.json` / `proactive.json` / 状态文件字段说明 |
 | [主动唤醒设计](./docs/DESIGN_phase5_proactive.md) | 主动唤醒架构和算法设计 |
-| [主动唤醒实现](./docs/IMPLEMENTATION_phase5_proactive.md) | 主动唤醒实现细节 |
 | [UI 设计方案](./docs/ui/UI_DESIGN.md) | 管理后台设计规范 |
 | [UI 产品规格](./docs/ui/UI_SPEC.md) | 管理后台功能清单 |
 

@@ -19,7 +19,7 @@ python -m compileall -q ai_companion
 
 # CLI 启动
 ai-companion start
-ai-companion start --bot suqing  # 指定Bot
+ai-companion start --bot <bot_id>  # 指定Bot
 
 # 配置向导
 ai-companion setup
@@ -86,7 +86,7 @@ Storage Layer（SQLite + Chroma 向量）
 
 ### 运行时数据
 
-运行时数据（数据库、缓存）位于 `data/bots/{bot_id}/memory/` 和 `data/suqing/memory/`，通常不需要提交到 git。
+运行时数据（数据库、缓存）位于 `data/bots/{bot_id}/memory/`，通常不需要提交到 git。
 
 ## 设计原则
 

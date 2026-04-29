@@ -2,10 +2,26 @@
 # 运行 ai-companion setup 后会自动创建此文件
 
 bots:
-  - id: test_proactive
-    name: 测试酱
+  - id: lin_wanqing
+    name: 林晚晴
     enabled: true
 
-  - id: suqing
-    name: 苏晴
+  - id: shen_nian
+    name: 沈念
+    enabled: true
+
+  - id: sofia_rivera
+    name: Sofia Rivera
+    enabled: true
+
+  - id: gu_yichen
+    name: 顾以辰
+    enabled: true
+
+  - id: zhou_yan
+    name: 周砚
+    enabled: true
+
+  - id: ethan_reed
+    name: Ethan Reed
     enabled: true

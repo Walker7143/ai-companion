@@ -114,19 +114,50 @@ def _merge_bot_entries(
     return bots_by_id
 
 
-def _copy_persona_template(project_dir: Path, data_dir: Path, bot_id: str, overwrite: bool = False) -> bool:
-    src_persona = project_dir / "ai_companion" / "data" / "bots" / bot_id / "persona"
-    if not src_persona.exists():
-        src_persona = data_dir / "data" / "bots" / bot_id / "persona"
+def _copy_persona_template(
+    project_dir: Path,
+    data_dir: Path,
+    bot_id: str,
+    bot_name: str = "",
+    overwrite: bool = False,
+) -> bool:
+    src_candidates = [
+        project_dir / "ai_companion" / "data" / "bots" / bot_id / "persona",
+        data_dir / "data" / "bots" / bot_id / "persona",
+        project_dir / "ai_companion" / "data" / "bots" / "_template" / "persona",
+        data_dir / "data" / "bots" / "_template" / "persona",
+    ]
+    src_persona = next((path for path in src_candidates if path.exists()), None)
     dst_persona = data_dir / "data" / "bots" / bot_id / "persona"
-    if src_persona.exists() and src_persona.resolve() != dst_persona.resolve():
+    copied_template = False
+    if src_persona and src_persona.resolve() != dst_persona.resolve():
         if overwrite or not dst_persona.exists():
             shutil.copytree(src_persona, dst_persona, dirs_exist_ok=True)
         else:
             dst_persona.mkdir(parents=True, exist_ok=True)
-        return True
-    dst_persona.mkdir(parents=True, exist_ok=True)
-    return False
+        copied_template = True
+    else:
+        dst_persona.mkdir(parents=True, exist_ok=True)
+
+    profile_path = dst_persona / "profile.json"
+    profile = _load_structured_file(profile_path)
+    if not isinstance(profile, dict):
+        profile = {}
+    if not profile:
+        profile = {"id": bot_id, "name": bot_name or bot_id}
+        _write_json_file(profile_path, profile)
+    else:
+        updated = False
+        if profile.get("id") != bot_id:
+            profile["id"] = bot_id
+            updated = True
+        if bot_name and profile.get("name") in {"", "你的名字", "template"}:
+            profile["name"] = bot_name
+            updated = True
+        if updated:
+            _write_json_file(profile_path, profile)
+
+    return copied_template
 
 
 def _life_profile_default_choice(existing_life: dict) -> str:
@@ -480,17 +511,7 @@ async def run_setup():
     console.print("[bold]步骤 2/7:[/bold] 创建 Bot")
     console.print("-" * 40)
 
-    templates = [
-        ("suqing", "苏晴", "外冷内热的插画师少女，傲娇，嘴硬心软"),
-        ("aiyue", "阿月", "活泼开朗的音乐学院学生，直接，有点粘人"),
-        ("chenxing", "陈行", "沉稳内敛的程序员，话少但可靠，高冷但温柔"),
-        ("yutian", "雨天", "阳光开朗的健身教练，热情直接，有点占有欲"),
-    ]
-
-    console.print("可选人格模板:")
-    for i, (tid, tname, tdesc) in enumerate(templates, 1):
-        console.print(f"  {i}. {tname} - {tdesc}")
-    console.print("  5. 自定义 Bot")
+    console.print("当前仓库已移除内置人格模板，请创建自定义 Bot。")
 
     bots_config = _load_yaml_file(bots_config_path)
     existing_bots = [b for b in bots_config.get("bots", []) if isinstance(b, dict) and b.get("id")]
@@ -512,18 +533,11 @@ async def run_setup():
             if not add_more:
                 break
 
-            bot_choice = Prompt.ask(
-                "请选择人格模板",
-                choices=["1", "2", "3", "4", "5"],
-                default="5"
-            )
-
-            if bot_choice == "5":
-                # 自定义 Bot
-                bot_id = Prompt.ask("请输入 Bot ID (英文唯一标识)")
-                bot_name = Prompt.ask("请输入 Bot 名称")
-            else:
-                bot_id, bot_name = templates[int(bot_choice) - 1][0], templates[int(bot_choice) - 1][1]
+            bot_id = Prompt.ask("请输入 Bot ID (英文唯一标识)").strip()
+            if not bot_id:
+                console.print("[yellow]⚠ Bot ID 不能为空，已跳过[/yellow]")
+                continue
+            bot_name = Prompt.ask("请输入 Bot 名称", default=bot_id).strip() or bot_id
 
             if any(b["id"] == bot_id for b in created_bots):
                 console.print(f"[yellow]⚠ Bot {bot_id} 已在本次选择中，跳过[/yellow]")
@@ -539,7 +553,13 @@ async def run_setup():
                 if overwrite_persona:
                     overwritten_bot_ids.add(bot_id)
 
-            template_found = _copy_persona_template(project_dir, data_dir, bot_id, overwrite=overwrite_persona)
+            template_found = _copy_persona_template(
+                project_dir,
+                data_dir,
+                bot_id,
+                bot_name=bot_name,
+                overwrite=overwrite_persona,
+            )
             if template_found:
                 if bot_exists and not overwrite_persona:
                     console.print(f"✓ [green]{bot_name}[/green] 已保留现有人格文件")
@@ -551,10 +571,8 @@ async def run_setup():
             created_bots.append({"id": bot_id, "name": bot_name})
 
     if not existing_bots and not created_bots:
-        console.print("[yellow]⚠ 未创建任何 Bot，将创建默认 Bot[/yellow]")
-        bot_id, bot_name = "suqing", "苏晴"
-        _copy_persona_template(project_dir, data_dir, bot_id, overwrite=False)
-        created_bots.append({"id": bot_id, "name": bot_name})
+        console.print("[red]✗ 至少需要创建一个 Bot，setup 已中止。[/red]")
+        return
 
     bots_by_id = _merge_bot_entries(existing_bots, created_bots, overwritten_bot_ids)
     bots_config["bots"] = list(bots_by_id.values())

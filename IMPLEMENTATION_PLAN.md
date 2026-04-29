@@ -461,9 +461,9 @@ feishu:
 
   # Bot 映射
   bots:
-    - bot_id: "suqing"
-      app_id: "${FEISHU_APP_ID_SUQING}"
-      app_secret: "${FEISHU_APP_SECRET_SUQING}"
+    - bot_id: "lin_wanqing"
+      app_id: "${FEISHU_APP_ID_LIN_WANQING}"
+      app_secret: "${FEISHU_APP_SECRET_LIN_WANQING}"
 ```
 
 ---

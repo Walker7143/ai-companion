@@ -1,8 +1,0 @@
-{
-  "daily_interval_seconds": 86400,
-  "major_interval_seconds": 604800,
-  "time_ratio": 1,
-  "time_ratio_warning_threshold": 500,
-  "max_events": 100,
-  "max_context_bits": 2000
-}

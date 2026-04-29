@@ -179,10 +179,10 @@ def _calc_life_stage(age_years: int) -> str:
 
 ```json
 {
-  "name": "苏晴",
-  "age": 26,
-  "birth_date": "1998-06-15",
-  "occupation": "自由插画师"
+  "name": "林晚晴",
+  "age": 27,
+  "birth_date": "1999-03-12",
+  "occupation": "古籍修复师"
 }
 ```
 

@@ -1551,8 +1551,8 @@ class SystemTestSuite:
         merged_life = _deep_merge(life_existing, life_update)
         existing_bots = [
             {
-                "id": "suqing",
-                "name": "旧苏晴",
+                "id": "lin_wanqing",
+                "name": "旧林晚晴",
                 "description": "keep me",
                 "enabled": False,
                 "custom": {"tone": "quiet"},
@@ -1560,24 +1560,24 @@ class SystemTestSuite:
         ]
         preserved_bots = _merge_bot_entries(
             existing_bots,
-            [{"id": "suqing", "name": "新苏晴"}],
+            [{"id": "lin_wanqing", "name": "新林晚晴"}],
             overwritten_bot_ids=set(),
         )
         overwritten_bots = _merge_bot_entries(
             existing_bots,
-            [{"id": "suqing", "name": "新苏晴"}],
-            overwritten_bot_ids={"suqing"},
+            [{"id": "lin_wanqing", "name": "新林晚晴"}],
+            overwritten_bot_ids={"lin_wanqing"},
         )
         default_life = LifeConfig()
         existing_feishu = {
             "extra": {"app_id": "global-app", "app_secret": "global-secret"},
-            "routing": {"mode": "dedicated", "bot_id": "suqing"},
+            "routing": {"mode": "dedicated", "bot_id": "lin_wanqing"},
             "bot_bindings": {
-                "aiyue": {"extra": {"app_id": "aiyue-app", "app_secret": "aiyue-secret"}}
+                "ethan_reed": {"extra": {"app_id": "ethan-app", "app_secret": "ethan-secret"}}
             },
         }
-        suqing_feishu = _extract_existing_feishu_binding(existing_feishu, "suqing")
-        aiyue_feishu = _extract_existing_feishu_binding(existing_feishu, "aiyue")
+        lin_wanqing_feishu = _extract_existing_feishu_binding(existing_feishu, "lin_wanqing")
+        ethan_reed_feishu = _extract_existing_feishu_binding(existing_feishu, "ethan_reed")
 
         passed = (
             merged_model["model"]["provider"] == "openai"
@@ -1589,12 +1589,12 @@ class SystemTestSuite:
             and merged_life["time_ratio"] == 1
             and merged_life["event_policy"]["scenario_cooldown_days"] == 14
             and merged_life["daily_life_profile"]["hobbies"] == ["咖啡"]
-            and preserved_bots["suqing"]["name"] == "旧苏晴"
-            and preserved_bots["suqing"]["description"] == "keep me"
-            and preserved_bots["suqing"]["enabled"] is False
-            and preserved_bots["suqing"]["custom"]["tone"] == "quiet"
-            and overwritten_bots["suqing"]["name"] == "新苏晴"
-            and overwritten_bots["suqing"]["description"] == "keep me"
+            and preserved_bots["lin_wanqing"]["name"] == "旧林晚晴"
+            and preserved_bots["lin_wanqing"]["description"] == "keep me"
+            and preserved_bots["lin_wanqing"]["enabled"] is False
+            and preserved_bots["lin_wanqing"]["custom"]["tone"] == "quiet"
+            and overwritten_bots["lin_wanqing"]["name"] == "新林晚晴"
+            and overwritten_bots["lin_wanqing"]["description"] == "keep me"
             and default_life.daily_interval_seconds == 86400
             and default_life.major_interval_seconds == 604800
             and default_life.daily_interval == 86400
@@ -1603,8 +1603,8 @@ class SystemTestSuite:
             and "是否为每个 Bot 单独配置主动唤醒活跃程度" in setup_text
             and "是否为每个 Bot 单独配置人生轨迹参数" in setup_text
             and "是否为多个 Bot 分别配置飞书 App" in setup_text
-            and suqing_feishu["extra"]["app_id"] == "global-app"
-            and aiyue_feishu["extra"]["app_id"] == "aiyue-app"
+            and lin_wanqing_feishu["extra"]["app_id"] == "global-app"
+            and ethan_reed_feishu["extra"]["app_id"] == "ethan-app"
         )
         detail = (
             f"provider={merged_model['model']['provider']} "
@@ -1629,8 +1629,8 @@ class SystemTestSuite:
                     "feishu": "是否为多个 Bot 分别配置飞书 App" in setup_text,
                 },
                 "feishu_binding_lookup": {
-                    "suqing": suqing_feishu,
-                    "aiyue": aiyue_feishu,
+                    "lin_wanqing": lin_wanqing_feishu,
+                    "ethan_reed": ethan_reed_feishu,
                 },
                 "life_time_presets": LIFE_TIME_PRESETS,
             },
@@ -1743,7 +1743,7 @@ class SystemTestSuite:
             profile_path = persona_dir / "profile.json"
             backstory_path = persona_dir / "backstory.json"
             profile_path.write_text(
-                json.dumps({"name": "苏晴", "age": 20, "occupation": "学生", "relationship_to_user": "朋友"}, ensure_ascii=False),
+                json.dumps({"name": "林晚晴", "age": 27, "occupation": "古籍修复师", "relationship_to_user": "朋友"}, ensure_ascii=False),
                 encoding="utf-8",
             )
             backstory_path.write_text(json.dumps({"key_moments": ["初识"]}, ensure_ascii=False), encoding="utf-8")

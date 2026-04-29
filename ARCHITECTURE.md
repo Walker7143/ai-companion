@@ -94,20 +94,16 @@ install.sh / install.ps1
   ✓ API Key 已保存
 
 [2/4] 创建第一个 Bot
-  请选择人格模板:
-    1. 苏晴（傲娇插画师）
-    2. 阿月（活泼音乐生）
-    3. 导入自定义人格
-    4. 稍后创建
+  请输入 Bot ID (英文唯一标识): lin_wanqing
+  请输入 Bot 名称: 林晚晴
 
-  > 选择: 1
-  ✓ 苏晴 已创建
+  ✓ 林晚晴 已创建
 
 [3/4] 飞书配置（可选）
   是否配置飞书机器人? (y/N): y
   请输入 App ID: cli_xxxxx
   请输入 App Secret: ████████████
-  请输入 Bot 名称: 苏晴
+  请选择这个飞书 App 绑定的 Bot: 林晚晴
   ✓ 飞书配置已保存
 
 [4/4] 完成
@@ -126,7 +122,7 @@ install.sh / install.ps1
 ai-companion start
 
 # 指定启动某个 Bot
-ai-companion start --bot suqing
+ai-companion start --bot lin_wanqing
 
 # 查看帮助
 ai-companion --help
@@ -180,7 +176,7 @@ ai-companion uninstall
 ├── feishu.yaml             # 飞书配置
 ├── data/
 │   └── bots/
-│       └── suqing/         # 各 Bot 数据
+│       └── lin_wanqing/    # 各 Bot 数据
 │           └── persona/    # 人格文件
 └── logs/                   # 日志
 ```
@@ -223,10 +219,10 @@ ai-companion/              # 项目根目录
 │   ├── models.yaml          # 模型配置
 │   └── models.yaml.example  # 模型配置示例
 ├── data/bots/               # 人格和数据（per bot）
-│   ├── suqing/
-│   │   └── persona/         # 傲娇插画师人格文件
-│   └── aiyue/
-│       └── persona/         # 活泼音乐生人格文件
+│   ├── lin_wanqing/
+│   │   └── persona/         # 林晚晴人格文件
+│   └── ethan_reed/
+│       └── persona/         # Ethan Reed 人格文件
 ├── scripts/
 │   ├── install.sh           # macOS/Linux 安装脚本
 │   ├── install.ps1          # Windows 安装脚本
