@@ -4,6 +4,7 @@ export interface SystemMetrics {
   memory_percent: number;
   memory_used_mb: number;
   disk_percent: number;
+  disk_used_mb?: number;
   uptime_seconds: number;
 }
 
@@ -97,6 +98,22 @@ export interface SemanticMemory {
   relationship_level: string;
   user_understanding?: Record<string, unknown>;
   user_understanding_path?: string | null;
+}
+
+export interface UnderstandingPayload {
+  data: Record<string, unknown>;
+  path?: string | null;
+}
+
+export interface DebugContextPayload {
+  bot_id: string;
+  last_context: {
+    system_prompt: string;
+    memory_suffix: Record<string, unknown>;
+    working_history: Message[];
+    retrieved_memory: Record<string, unknown>;
+    response_style_trace: Record<string, unknown>;
+  };
 }
 
 export interface Fact {

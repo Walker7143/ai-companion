@@ -4,6 +4,10 @@ import {
   MessageSquare,
   FileText,
   Brain,
+  HeartHandshake,
+  Wand2,
+  Activity,
+  Bug,
   Settings,
   X,
   ChevronLeft,
@@ -23,6 +27,10 @@ const navItems = [
   { path: '/session', icon: MessageSquare, label: '会话管理' },
   { path: '/logs', icon: FileText, label: '日志查看' },
   { path: '/memory', icon: Brain, label: '记忆管理' },
+  { path: '/understanding', icon: HeartHandshake, label: '用户理解' },
+  { path: '/style', icon: Wand2, label: '风格调教' },
+  { path: '/operations', icon: Activity, label: '运营台' },
+  { path: '/debug', icon: Bug, label: '调试工具' },
   { path: '/settings', icon: Settings, label: '设置' },
 ];
 

@@ -1,15 +1,21 @@
 import { useEffect, useState } from 'react';
-import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui';
-import { useLogStore } from '../../stores';
+import { Card, CardHeader, CardTitle, CardContent, Button, Input, Select, Badge } from '../../components/ui';
+import { useBotStore, useLogStore } from '../../stores';
 import type { LogEntry } from '../../types';
 
 export function Logs() {
-  const { logs, fetchLogs, loading } = useLogStore();
-  const [page] = useState(1);
+  const { currentBotId } = useBotStore();
+  const { logs, fetchLogs, loading, page, totalPages, streaming, startStreaming, stopStreaming } = useLogStore();
+  const [level, setLevel] = useState('all');
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
-    fetchLogs({ page, pageSize: 20 });
-  }, [page, fetchLogs]);
+    fetchLogs({ botId: currentBotId || '', page: 1, pageSize: 20, level });
+  }, [currentBotId, fetchLogs, level]);
+
+  const runSearch = () => {
+    fetchLogs({ botId: currentBotId || '', page: 1, pageSize: 20, level, query });
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -26,7 +32,29 @@ export function Logs() {
         <CardHeader>
           <CardTitle>日志列表</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <Select
+              value={level}
+              onChange={(e) => setLevel(e.target.value)}
+              style={{ maxWidth: '140px' }}
+              options={[
+                { value: 'all', label: '全部级别' },
+                { value: 'debug', label: 'DEBUG' },
+                { value: 'info', label: 'INFO' },
+                { value: 'warning', label: 'WARNING' },
+                { value: 'error', label: 'ERROR' },
+              ]}
+            />
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索日志内容" style={{ maxWidth: '260px' }} />
+            <Button variant="secondary" onClick={runSearch}>筛选</Button>
+            <Button
+              variant={streaming ? 'danger' : 'secondary'}
+              onClick={() => streaming ? stopStreaming() : startStreaming(currentBotId || '', level === 'all' ? undefined : level)}
+            >
+              {streaming ? '停止实时流' : '开启实时流'}
+            </Button>
+          </div>
           {loading ? (
             <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>
               加载中...
@@ -46,14 +74,24 @@ export function Logs() {
                   }}
                 >
                   <span style={{ color: 'var(--text-muted)' }}>{log.timestamp}</span>{' '}
-                  <span style={{ color: log.level === 'error' ? 'var(--error)' : log.level === 'warning' ? 'var(--warning)' : 'var(--text-secondary)' }}>
-                    [{log.level.toUpperCase()}]
-                  </span>{' '}
+                  <Badge variant={log.level === 'error' ? 'error' : log.level === 'warning' ? 'warning' : 'default'}>{log.level.toUpperCase()}</Badge>{' '}
+                  <span style={{ color: 'var(--text-muted)' }}>[{log.platform}]</span>{' '}
                   <span style={{ color: 'var(--text-primary)' }}>{log.message}</span>
+                  {log.details && (
+                    <details style={{ marginTop: '6px', color: 'var(--text-muted)', whiteSpace: 'pre-wrap' }}>
+                      <summary>详情</summary>
+                      {log.details}
+                    </details>
+                  )}
                 </div>
               ))}
             </div>
           )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Button variant="secondary" disabled={page <= 1} onClick={() => fetchLogs({ botId: currentBotId || '', page: page - 1, pageSize: 20, level, query })}>上一页</Button>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>第 {page} / {totalPages || 1} 页</span>
+            <Button variant="secondary" disabled={page >= (totalPages || 1)} onClick={() => fetchLogs({ botId: currentBotId || '', page: page + 1, pageSize: 20, level, query })}>下一页</Button>
+          </div>
         </CardContent>
       </Card>
     </div>

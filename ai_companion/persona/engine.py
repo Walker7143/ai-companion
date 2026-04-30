@@ -14,6 +14,7 @@ class PersonaEngine:
         backstory = self._load_json(self.persona.persona_dir / "backstory.json")
         values = self._load_json(self.persona.persona_dir / "values.json")
         speaking_style = self._load_json(self.persona.persona_dir / "speaking_style.json")
+        conversation_style = self._load_json(self.persona.persona_dir / "conversation_style_rules.json")
         runtime = self._load_json(self.persona.persona_dir / "runtime_profile.json")
         profile, backstory = self._apply_runtime_profile(profile, backstory, runtime)
 
@@ -65,6 +66,7 @@ class PersonaEngine:
             lines.append("  - 你的个人表达习惯：")
             for expr in speaking_style["special_expressions"]:
                 lines.append(f"    * {expr}")
+        self._append_conversation_style_rules(lines, conversation_style)
         lines.append("")
 
         # 4. 底线
@@ -100,6 +102,29 @@ class PersonaEngine:
                 lines.append(f"  - {emo}: {desc}")
 
         return "\n".join(lines)
+
+    def _append_conversation_style_rules(self, lines: list[str], rules: dict):
+        if not rules:
+            return
+        if rules.get("reply_principles"):
+            lines.append("  - 对话原则：")
+            for item in rules["reply_principles"]:
+                lines.append(f"    * {item}")
+        if rules.get("avoid_phrases"):
+            phrases = "、".join([str(item) for item in rules["avoid_phrases"]])
+            lines.append(f"  - 避免这些 AI/客服式表达：{phrases}")
+        if rules.get("avoid_patterns"):
+            lines.append("  - 避免这些回复模式：")
+            for item in rules["avoid_patterns"]:
+                lines.append(f"    * {item}")
+        if rules.get("natural_patterns"):
+            lines.append("  - 更自然的表达方式：")
+            for item in rules["natural_patterns"]:
+                lines.append(f"    * {item}")
+        if rules.get("intent_style"):
+            lines.append("  - 不同场景的分寸：")
+            for intent, rule in rules["intent_style"].items():
+                lines.append(f"    * {intent}: {rule}")
 
     def _current_age(self, profile: dict, life_context: dict | None) -> object:
         if life_context and life_context.get("bot_real_age") is not None:

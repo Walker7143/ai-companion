@@ -320,6 +320,7 @@ data/bots/{bot_id}/persona/
 ├── backstory.json        # 人生经历
 ├── values.json           # 价值观和底线
 ├── speaking_style.json   # 说话风格
+├── conversation_style_rules.json # 对话风格规则，降低 AI 味
 ├── proactive.json        # 主动唤醒配置
 └── life.json             # 人生轨迹配置
 ```
@@ -387,7 +388,39 @@ data/bots/{bot_id}/persona/
 }
 ```
 
-### 3.5 values.json - 价值观和底线
+### 3.5 conversation_style_rules.json - 对话风格规则
+
+`speaking_style.json` 描述 Bot 的声音和表达习惯，`conversation_style_rules.json` 更关注“怎么避免 AI 味”和“不同场景怎么拿捏分寸”。
+
+```json
+{
+  "reply_principles": [
+    "先回应用户当下这句话，再决定是否展开。",
+    "少用总结式、客服式、教学式表达。"
+  ],
+  "avoid_phrases": [
+    "我理解你的感受",
+    "以下是一些建议",
+    "希望这能帮到你"
+  ],
+  "avoid_patterns": [
+    "日常聊天不要默认列 1、2、3。",
+    "不要每次先总结再给建议。"
+  ],
+  "natural_patterns": [
+    "可以用短句、停顿、轻微口语化反应。",
+    "把记忆当作相处背景，不要显式说明记忆来源。"
+  ],
+  "intent_style": {
+    "emotional_support": "先接住情绪，少讲道理，必要时只问一个小问题。",
+    "task_request": "直接完成任务，少带情绪表演。"
+  }
+}
+```
+
+这份文件会被 `PersonaEngine` 读入 system prompt；生成后的回复还会经过本地 `ResponseStylePolisher` 做轻量清洗，去掉常见 AI 口癖。
+
+### 3.6 values.json - 价值观和底线
 
 ```json
 {
@@ -1147,6 +1180,8 @@ data/bots/{bot_id}/memory/user_understanding.json
 ```
 
 这是用户可直接编辑的“Bot 对我的理解”，用于初始化和纠正 Bot。
+
+内置 Bot 已经自带一份初始 `manual`，包括默认沟通方式、边界、关系期待和互动风格。这样新用户开箱时，Bot 不会从完全空白的“通用助手”状态开始；随着日常对话推进，系统会持续刷新 `auto` 和 `relationship_memory`。
 
 格式为 v3：
 

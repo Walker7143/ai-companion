@@ -15,6 +15,7 @@ from ..proactive.life_state import LifeState
 from ..proactive.life_engine import LifeEngine
 from ..proactive.life_scheduler import LifeScheduler
 from ..skill import SkillDispatcher, SkillRegistry, ImageGenerationSkill, TTSSkill, MultimodalSender, create_channel
+from .response_style import ResponseStylePolisher
 
 if TYPE_CHECKING:
     from ..model.adapters.base import ModelAdapter
@@ -123,6 +124,7 @@ class BotInstance:
 
         self.multimodal_sender: Optional[MultimodalSender] = None
         self._channel = None
+        self.response_polisher = ResponseStylePolisher()
 
     def _register_skills(self):
         """注册可用技能（内置 + 已安装的）"""
@@ -467,6 +469,7 @@ class BotInstance:
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
                 return f"抱歉，网络不稳定，请稍后再试。"
+            response = self._polish_response(response, ctx, relationship_state)
 
             # 6. 异步写入记忆
             self._track_background_task(self.memory.on_message(user_input, response), name="memory.on_message")
@@ -476,12 +479,21 @@ class BotInstance:
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
                 return f"抱歉，网络不稳定，请稍后再试。"
+            response = self._polish_response(response, {}, relationship_state)
 
         # 记录历史
         self.conversation_history.append({"role": "user", "content": user_input})
         self.conversation_history.append({"role": "assistant", "content": response})
 
         return response
+
+    def _polish_response(self, response: str, memory_context: dict | None, relationship_state: dict | None) -> str:
+        return self.response_polisher.polish(
+            response,
+            intent=(memory_context or {}).get("memory_intent", "casual_chat"),
+            relationship_state=relationship_state or {},
+            user_understanding=(memory_context or {}).get("user_understanding") or {},
+        )
 
     async def _chat_with_fallback(self, messages: list[dict], system_prompt: str = "") -> Optional[str]:
         """调用模型聊天，失败时返回 None（由调用者处理友好提示）"""

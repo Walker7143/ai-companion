@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Activity, MessageSquare, Brain, Zap, RefreshCw } from 'lucide-react';
+import { Activity, MessageSquare, Brain, Zap, RefreshCw, Cpu, HardDrive } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent, Button } from '../../components/ui';
 import { useBotStore } from '../../stores';
 import { useToast } from '../../components/ui/Toast';
@@ -50,6 +50,20 @@ function StatCard({
         >
           {icon}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ProgressMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+        <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+        <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{value.toFixed(1)}%</span>
+      </div>
+      <div style={{ height: '8px', borderRadius: '999px', backgroundColor: 'var(--bg-tertiary)', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.min(100, Math.max(0, value))}%`, height: '100%', backgroundColor: value > 85 ? 'var(--error)' : value > 70 ? 'var(--warning)' : 'var(--accent)' }} />
       </div>
     </div>
   );
@@ -214,7 +228,34 @@ export function Dashboard() {
           }
           accentColor={botMetrics?.status === 'running' ? 'var(--success-light)' : 'var(--error-light)'}
         />
+        <StatCard
+          title="CPU"
+          value={`${(systemMetrics?.cpu_percent ?? 0).toFixed(1)}%`}
+          subtitle="系统负载"
+          icon={<Cpu style={{ width: '20px', height: '20px', color: 'var(--info)' }} />}
+          accentColor="var(--info-light)"
+        />
+        <StatCard
+          title="内存"
+          value={`${(systemMetrics?.memory_percent ?? 0).toFixed(1)}%`}
+          subtitle={`${systemMetrics?.memory_used_mb ?? 0} MB`}
+          icon={<HardDrive style={{ width: '20px', height: '20px', color: 'var(--warning)' }} />}
+          accentColor="var(--warning-light)"
+        />
       </div>
+
+      {systemMetrics && (
+        <Card>
+          <CardHeader>
+            <CardTitle>系统资源</CardTitle>
+          </CardHeader>
+          <CardContent style={{ display: 'grid', gap: '16px' }}>
+            <ProgressMetric label="CPU 使用率" value={systemMetrics.cpu_percent} />
+            <ProgressMetric label="内存使用率" value={systemMetrics.memory_percent} />
+            <ProgressMetric label="磁盘使用率" value={systemMetrics.disk_percent} />
+          </CardContent>
+        </Card>
+      )}
 
       {/* Bot Metrics Details */}
       {botMetrics && (

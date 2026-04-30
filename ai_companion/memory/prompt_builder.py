@@ -74,6 +74,11 @@ class MemoryPromptBuilder:
             lines.append("用户手动设定的事实：")
             lines.extend([f"  - {k}: {v}" for k, v in manual_facts.items()])
 
+        manual_interaction = _clean_interaction_style(manual.get("interaction_style"))
+        if any(manual_interaction.values()):
+            lines.append("用户手动设定的互动风格：")
+            lines.extend(_format_interaction_style(manual_interaction))
+
         for key, title in [
             ("preferences", "用户手动设定的偏好"),
             ("communication_style", "用户手动设定的沟通方式"),
@@ -92,6 +97,11 @@ class MemoryPromptBuilder:
         auto_summary = str(auto.get("profile_summary") or auto.get("summary") or "").strip()
         if auto_summary:
             lines.append(f"Bot 在相处中逐渐形成的理解：{auto_summary}")
+
+        auto_interaction = _clean_interaction_style(auto.get("interaction_style"))
+        if any(auto_interaction.values()):
+            lines.append("自动学习到的互动风格：")
+            lines.extend(_format_interaction_style(auto_interaction))
 
         auto_facts = _clean_dict(auto.get("facts"))
         if auto_facts:
@@ -167,6 +177,12 @@ class MemoryPromptBuilder:
                     "life_context", "goals_and_projects", "routines", "recent_changes",
                 ):
                     known_values.update(_clean_list(section.get(list_key)))
+                interaction = _clean_interaction_style(section.get("interaction_style"))
+                for key, value in interaction.items():
+                    if isinstance(value, list):
+                        known_values.update(value)
+                    elif value:
+                        known_values.add(str(value))
             relationship_memory = understanding.get("relationship_memory") if isinstance(understanding.get("relationship_memory"), dict) else {}
             for list_key in (
                 "how_user_treats_bot", "what_user_seems_to_need_from_bot",
@@ -212,3 +228,34 @@ def _clean_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _clean_interaction_style(value: object) -> dict[str, object]:
+    result: dict[str, object] = {
+        "preferred_reply_length": "",
+        "accepted_humor": [],
+        "disliked_phrases": [],
+        "natural_openings": [],
+        "avoid_patterns": [],
+    }
+    if isinstance(value, dict):
+        result["preferred_reply_length"] = str(value.get("preferred_reply_length") or "").strip()
+        for key in ("accepted_humor", "disliked_phrases", "natural_openings", "avoid_patterns"):
+            result[key] = _clean_list(value.get(key))
+    return result
+
+
+def _format_interaction_style(style: dict[str, object]) -> list[str]:
+    lines: list[str] = []
+    if style.get("preferred_reply_length"):
+        lines.append(f"  - 回复长度：{style['preferred_reply_length']}")
+    for key, title in [
+        ("accepted_humor", "可接受的幽默"),
+        ("disliked_phrases", "不喜欢的表达"),
+        ("natural_openings", "自然开场"),
+        ("avoid_patterns", "避免模式"),
+    ]:
+        values = style.get(key)
+        if isinstance(values, list) and values:
+            lines.append(f"  - {title}：" + "；".join(str(v) for v in values[:5]))
+    return lines

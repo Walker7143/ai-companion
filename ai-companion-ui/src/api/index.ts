@@ -7,6 +7,8 @@ import type {
   Message,
   EpisodicItem,
   SemanticMemory,
+  UnderstandingPayload,
+  DebugContextPayload,
   LogPage,
   BotConfig,
   BotInfo,
@@ -80,11 +82,36 @@ export const memoryApi = {
   getSemantic: (botId: string): Promise<SemanticMemory> =>
     fetchApi<SemanticMemory>(`/admin/memory/${botId}/semantic`),
 
+  getUnderstanding: (botId: string): Promise<UnderstandingPayload> =>
+    fetchApi<UnderstandingPayload>(`/admin/memory/${botId}/understanding`),
+
+  updateUnderstanding: (botId: string, data: Record<string, unknown>): Promise<UnderstandingPayload & {ok: boolean}> =>
+    fetchApi<UnderstandingPayload & {ok: boolean}>(`/admin/memory/${botId}/understanding`, {
+      method: 'PUT',
+      body: JSON.stringify({ data }),
+    }),
+
   deleteMemory: (botId: string, type: string, id: string): Promise<void> =>
     fetchApi<void>(`/admin/memory/${botId}/${type}/${id}`, { method: 'DELETE' }),
 
   clearAll: (botId: string): Promise<void> =>
     fetchApi<void>(`/admin/memory/${botId}/all`, { method: 'DELETE' }),
+};
+
+export const personaApi = {
+  getConversationStyle: (botId: string): Promise<UnderstandingPayload> =>
+    fetchApi<UnderstandingPayload>(`/admin/persona/${botId}/conversation-style`),
+
+  updateConversationStyle: (botId: string, data: Record<string, unknown>): Promise<UnderstandingPayload & {ok: boolean}> =>
+    fetchApi<UnderstandingPayload & {ok: boolean}>(`/admin/persona/${botId}/conversation-style`, {
+      method: 'PUT',
+      body: JSON.stringify({ data }),
+    }),
+};
+
+export const debugApi = {
+  getLastContext: (botId: string): Promise<DebugContextPayload> =>
+    fetchApi<DebugContextPayload>(`/admin/debug/${botId}/last-context`),
 };
 
 // Logs API

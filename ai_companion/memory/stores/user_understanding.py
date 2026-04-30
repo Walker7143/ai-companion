@@ -43,6 +43,13 @@ class UserUnderstandingStore:
             "communication_style": [],
             "boundaries": [],
             "relationship_expectations": [],
+            "interaction_style": {
+                "preferred_reply_length": "",
+                "accepted_humor": [],
+                "disliked_phrases": [],
+                "natural_openings": [],
+                "avoid_patterns": [],
+            },
             "important_people": [],
             "current_context": [],
             "open_threads": [],
@@ -67,6 +74,13 @@ class UserUnderstandingStore:
             "goals_and_projects": [],
             "routines": [],
             "recent_changes": [],
+            "interaction_style": {
+                "preferred_reply_length": "",
+                "accepted_humor": [],
+                "disliked_phrases": [],
+                "natural_openings": [],
+                "avoid_patterns": [],
+            },
             "last_refresh_at": None,
         },
         "relationship_memory": {
@@ -359,6 +373,11 @@ class UserUnderstandingStore:
             lines.append("用户手动设定的事实：")
             lines.extend([f"  - {k}: {v}" for k, v in manual_facts.items()])
 
+        interaction_style = self._normalize_interaction_style(manual.get("interaction_style"))
+        if any(interaction_style.values()):
+            lines.append("用户手动设定的互动风格：")
+            lines.extend(self._format_interaction_style(interaction_style))
+
         for key, title in [
             ("preferences", "用户手动设定的偏好"),
             ("communication_style", "用户手动设定的沟通方式"),
@@ -377,6 +396,11 @@ class UserUnderstandingStore:
         auto_summary = str(auto.get("profile_summary") or auto.get("summary") or "").strip()
         if auto_summary:
             lines.append(f"Bot 在相处中逐渐形成的理解：{auto_summary}")
+
+        auto_interaction = self._normalize_interaction_style(auto.get("interaction_style"))
+        if any(auto_interaction.values()):
+            lines.append("自动学习到的互动风格：")
+            lines.extend(self._format_interaction_style(auto_interaction))
 
         auto_facts = self._clean_dict(auto.get("facts"))
         if auto_facts:
@@ -469,6 +493,7 @@ class UserUnderstandingStore:
             section["profile_summary"] = str(value.get("profile_summary") or value.get("summary") or "")
             section["identity"] = self._clean_dict(value.get("identity"))
             section["facts"] = self._clean_dict(value.get("facts"))
+            section["interaction_style"] = self._normalize_interaction_style(value.get("interaction_style"))
             for key in (*self.SECTIONS, "relationship_expectations", "notes", *self.AUTO_DEEP_SECTIONS):
                 section[key] = self._clean_list(value.get(key))
             if include_refresh:
@@ -485,6 +510,13 @@ class UserUnderstandingStore:
             "communication_style": [],
             "boundaries": [],
             "relationship_expectations": [],
+            "interaction_style": {
+                "preferred_reply_length": "",
+                "accepted_humor": [],
+                "disliked_phrases": [],
+                "natural_openings": [],
+                "avoid_patterns": [],
+            },
             "important_people": [],
             "current_context": [],
             "open_threads": [],
@@ -520,6 +552,36 @@ class UserUnderstandingStore:
             result["contradictions"] = self._clean_list(value.get("contradictions"))
             result["last_reflection_at"] = value.get("last_reflection_at")
         return result
+
+    def _normalize_interaction_style(self, value: Any) -> dict[str, Any]:
+        result = {
+            "preferred_reply_length": "",
+            "accepted_humor": [],
+            "disliked_phrases": [],
+            "natural_openings": [],
+            "avoid_patterns": [],
+        }
+        if isinstance(value, dict):
+            result["preferred_reply_length"] = str(value.get("preferred_reply_length") or "")
+            for key in ("accepted_humor", "disliked_phrases", "natural_openings", "avoid_patterns"):
+                result[key] = self._clean_list(value.get(key))
+        return result
+
+    def _format_interaction_style(self, style: dict[str, Any]) -> list[str]:
+        lines: list[str] = []
+        if style.get("preferred_reply_length"):
+            lines.append(f"  - 回复长度：{style['preferred_reply_length']}")
+        mapping = [
+            ("accepted_humor", "可接受的幽默"),
+            ("disliked_phrases", "不喜欢的表达"),
+            ("natural_openings", "自然开场"),
+            ("avoid_patterns", "避免模式"),
+        ]
+        for key, title in mapping:
+            values = style.get(key)
+            if isinstance(values, list) and values:
+                lines.append(f"  - {title}：" + "；".join(str(v) for v in values[:5]))
+        return lines
 
     def _with_compat_aliases(self, data: dict[str, Any]) -> dict[str, Any]:
         data = deepcopy(data)

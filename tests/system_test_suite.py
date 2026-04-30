@@ -229,6 +229,8 @@ class SystemTestSuite:
         self._run_case("T42", "Relationship state is separate from semantic facts", self.case_relationship_state_separate)
         self._run_case("T43", "Admin memory API supports new memory schema", self.case_admin_memory_api_schema_compatibility)
         self._run_case("T44", "User understanding v3 captures deep relationship insight", self.case_user_understanding_v3_deep_projection)
+        self._run_case("T45", "Response style polisher removes AI tone", self.case_response_style_polisher)
+        self._run_case("T46", "Built-in bots include style and understanding seeds", self.case_builtin_bot_style_and_understanding_seeds)
 
         return self._finalize()
 
@@ -2083,6 +2085,62 @@ class SystemTestSuite:
             indent=2,
         )
         return passed, f"version={understanding.get('version')} deep={'有效的安慰/陪伴方式' in suffix}", log
+
+    def case_response_style_polisher(self) -> tuple[bool, str, str]:
+        from ai_companion.bot.response_style import ResponseStylePolisher
+
+        polisher = ResponseStylePolisher()
+        understanding = {
+            "manual": {
+                "interaction_style": {
+                    "preferred_reply_length": "短一点",
+                    "disliked_phrases": ["我理解你的感受"],
+                    "avoid_patterns": ["先总结再列点"],
+                }
+            }
+        }
+        raw = "我理解你的感受。以下是一些建议：\n1. 先休息一下\n2. 然后制定计划\n3. 如果你需要，我可以继续帮你。"
+        polished = polisher.polish(
+            raw,
+            intent="emotional_support",
+            relationship_state={"tension_score": 0},
+            user_understanding=understanding,
+        )
+        passed = (
+            "我理解你的感受" not in polished
+            and "以下是一些建议" not in polished
+            and "如果你需要" not in polished
+            and "1." not in polished
+            and len(polished) < len(raw)
+        )
+        return passed, f"polished_len={len(polished)}", json.dumps({"raw": raw, "polished": polished}, ensure_ascii=False, indent=2)
+
+    def case_builtin_bot_style_and_understanding_seeds(self) -> tuple[bool, str, str]:
+        bot_ids = ["lin_wanqing", "shen_nian", "sofia_rivera", "gu_yichen", "zhou_yan", "ethan_reed"]
+        base = self.root / "ai_companion" / "data" / "bots"
+        checks = {}
+        for bot_id in bot_ids:
+            style_path = base / bot_id / "persona" / "conversation_style_rules.json"
+            understanding_path = base / bot_id / "memory" / "user_understanding.json"
+            style = json.loads(style_path.read_text(encoding="utf-8")) if style_path.exists() else {}
+            understanding = json.loads(understanding_path.read_text(encoding="utf-8")) if understanding_path.exists() else {}
+            checks[bot_id] = {
+                "style_exists": style_path.exists(),
+                "has_avoid_phrases": bool(style.get("avoid_phrases")),
+                "understanding_exists": understanding_path.exists(),
+                "understanding_v3": understanding.get("version") == 3,
+                "has_manual_interaction_style": bool(
+                    understanding.get("manual", {}).get("interaction_style", {}).get("disliked_phrases")
+                ),
+            }
+        template_style = base / "_template" / "persona" / "conversation_style_rules.json"
+        template_understanding = base / "_template" / "memory" / "user_understanding.json"
+        checks["_template"] = {
+            "style_exists": template_style.exists(),
+            "understanding_exists": template_understanding.exists(),
+        }
+        passed = all(all(item.values()) for item in checks.values())
+        return passed, f"bots={len(bot_ids)} template={checks['_template']['style_exists']}", json.dumps(checks, ensure_ascii=False, indent=2)
 
     def case_dependency_and_ui_contract_cleanup(self) -> tuple[bool, str, str]:
         pyproject = (self.root / "pyproject.toml").read_text(encoding="utf-8")

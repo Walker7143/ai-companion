@@ -428,6 +428,15 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
     async def handle_logs(request):
         """GET /api/v1/admin/logs"""
+        level_filter = (request.query.get("level") or "").lower()
+        type_filter = (request.query.get("type") or request.query.get("log_type") or "").lower()
+        date_filter = request.query.get("date") or ""
+        query_filter = (request.query.get("query") or "").lower()
+        try:
+            page = max(1, int(request.query.get("page", "1")))
+            page_size = max(1, min(200, int(request.query.get("page_size", "20"))))
+        except ValueError:
+            page, page_size = 1, 20
         hermes_home = Path.home() / ".ai-companion"
         log_dir = hermes_home / "logs"
         logs = []
@@ -451,16 +460,28 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                                 "log_type": "system",
                                 "platform": log_file.stem,
                                 "message": f"[{logger_name}] {msg}" if logger_name else msg,
+                                "details": line,
                             })
                 except Exception:
                     pass
+        if level_filter and level_filter != "all":
+            logs = [item for item in logs if item.get("level") == level_filter]
+        if type_filter and type_filter != "all":
+            logs = [item for item in logs if item.get("log_type") == type_filter]
+        if date_filter:
+            logs = [item for item in logs if str(item.get("timestamp", "")).startswith(date_filter)]
+        if query_filter:
+            logs = [item for item in logs if query_filter in str(item.get("message", "")).lower()]
         logs.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        total = len(logs)
+        start = (page - 1) * page_size
+        end = start + page_size
         return web.json_response({
-            "logs": logs[:20],
-            "total": len(logs),
-            "page": 1,
-            "page_size": 20,
-            "total_pages": 1,
+            "logs": logs[start:end],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
         })
 
     async def handle_logs_stream(request):
@@ -563,6 +584,12 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     async def handle_memory_episodic(request):
         """GET /api/v1/admin/memory/:bot_id/episodic"""
         bot_id = request.match_info["bot_id"]
+        query = request.query.get("query") or ""
+        try:
+            limit = max(1, min(200, int(request.query.get("limit", "50"))))
+            offset = max(0, int(request.query.get("offset", "0")))
+        except ValueError:
+            limit, offset = 50, 0
         db_path = _get_memory_db_path(bot_id, "episodic.db")
         if not db_path:
             return web.json_response([])
@@ -570,7 +597,14 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             import sqlite3
             conn = sqlite3.connect(str(db_path))
             cols = [r[1] for r in conn.execute("PRAGMA table_info(episodic_memory)").fetchall()]
-            where_clause = "WHERE COALESCE(archived, 0) = 0" if "archived" in cols else ""
+            clauses = []
+            params = []
+            if "archived" in cols:
+                clauses.append("COALESCE(archived, 0) = 0")
+            if query:
+                clauses.append("(summary LIKE ? OR content LIKE ? OR tokens LIKE ?)")
+                params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
+            where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
             select_cols = [
                 "id",
                 "session_id",
@@ -585,8 +619,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 FROM episodic_memory
                 {where_clause}
                 ORDER BY id DESC
-                LIMIT 50
-            """.format(cols=", ".join(select_cols), where_clause=where_clause)).fetchall()
+                LIMIT ? OFFSET ?
+            """.format(cols=", ".join(select_cols), where_clause=where_clause), params + [limit, offset]).fetchall()
             conn.close()
             result = [{"id": str(r[0]), "session_id": r[1], "summary": r[2],
                        "content": r[3], "importance": r[4], "created_at": r[5],
@@ -678,6 +712,81 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             })
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_memory_understanding(request):
+        """GET /api/v1/admin/memory/:bot_id/understanding"""
+        bot_id = request.match_info["bot_id"]
+        understanding, path = _load_user_understanding(bot_id)
+        return web.json_response({"data": understanding, "path": path})
+
+    async def handle_memory_understanding_update(request):
+        """PUT /api/v1/admin/memory/:bot_id/understanding"""
+        bot_id = request.match_info["bot_id"]
+        path = _get_memory_file_path(bot_id, "user_understanding.json")
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        data = body.get("data", body) if isinstance(body, dict) else {}
+        if not isinstance(data, dict):
+            return web.json_response({"error": "Understanding must be an object"}, status=400)
+        data["updated_at"] = datetime.now().isoformat()
+        _write_user_understanding(path, data)
+        return web.json_response({"ok": True, "data": data, "path": str(path)})
+
+    async def handle_persona_conversation_style(request):
+        """GET /api/v1/admin/persona/:bot_id/conversation-style"""
+        bot_id = request.match_info["bot_id"]
+        path = _get_data_dir() / bot_id / "persona" / "conversation_style_rules.json"
+        if not path.exists():
+            fallback = _project_root / "ai_companion" / "data" / "bots" / bot_id / "persona" / "conversation_style_rules.json"
+            path = fallback
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except Exception:
+            data = {}
+        return web.json_response({"data": data, "path": str(path)})
+
+    async def handle_persona_conversation_style_update(request):
+        """PUT /api/v1/admin/persona/:bot_id/conversation-style"""
+        bot_id = request.match_info["bot_id"]
+        path = _get_data_dir() / bot_id / "persona" / "conversation_style_rules.json"
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        data = body.get("data", body) if isinstance(body, dict) else {}
+        if not isinstance(data, dict):
+            return web.json_response({"error": "Conversation style must be an object"}, status=400)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return web.json_response({"ok": True, "data": data, "path": str(path)})
+
+    async def handle_debug_last_context(request):
+        """GET /api/v1/admin/debug/:bot_id/last-context"""
+        bot_id = request.match_info["bot_id"]
+        understanding, understanding_path = _load_user_understanding(bot_id)
+        semantic_path = _get_memory_db_path(bot_id, "semantic.db")
+        episodic_path = _get_memory_db_path(bot_id, "episodic.db")
+        working_path = _get_memory_db_path(bot_id, "working.db")
+        return web.json_response({
+            "bot_id": bot_id,
+            "last_context": {
+                "system_prompt": "运行时 prompt 仅在实际对话中生成；当前端点提供可调试的静态上下文摘要。",
+                "memory_suffix": understanding,
+                "working_history": working_messages(bot_id),
+                "retrieved_memory": {
+                    "semantic_db": str(semantic_path) if semantic_path else None,
+                    "episodic_db": str(episodic_path) if episodic_path else None,
+                    "working_db": str(working_path) if working_path else None,
+                    "user_understanding_path": understanding_path,
+                },
+                "response_style_trace": {
+                    "mode": "rule",
+                    "source": "ResponseStylePolisher",
+                },
+            },
+        })
 
     async def handle_memory_delete(request):
         """DELETE /api/v1/admin/memory/:bot_id/:memory_type/:memory_id"""
@@ -840,8 +949,13 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/working", handle_memory_working)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/episodic", handle_memory_episodic)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/semantic", handle_memory_semantic)
+    _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding)
+    _admin_app.router.add_put("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding_update)
     _admin_app.router.add_delete("/api/v1/admin/memory/{bot_id}/all", handle_memory_clear_all)
     _admin_app.router.add_delete("/api/v1/admin/memory/{bot_id}/{memory_type}/{memory_id}", handle_memory_delete)
+    _admin_app.router.add_get("/api/v1/admin/persona/{bot_id}/conversation-style", handle_persona_conversation_style)
+    _admin_app.router.add_put("/api/v1/admin/persona/{bot_id}/conversation-style", handle_persona_conversation_style_update)
+    _admin_app.router.add_get("/api/v1/admin/debug/{bot_id}/last-context", handle_debug_last_context)
     _admin_app.router.add_get("/api/v1/admin/config/{bot_id}", handle_config)
     _admin_app.router.add_put("/api/v1/admin/config/{bot_id}", handle_config_update)
     _admin_app.router.add_post("/api/v1/admin/config/{bot_id}/test", handle_config_test)
