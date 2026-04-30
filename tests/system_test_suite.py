@@ -231,6 +231,7 @@ class SystemTestSuite:
         self._run_case("T44", "User understanding v3 captures deep relationship insight", self.case_user_understanding_v3_deep_projection)
         self._run_case("T45", "Response style polisher removes AI tone", self.case_response_style_polisher)
         self._run_case("T46", "Built-in bots include style and understanding seeds", self.case_builtin_bot_style_and_understanding_seeds)
+        self._run_case("T47", "Persona importer plans, applies, and resumes drafts", self.case_persona_importer_plan_apply_resume)
 
         return self._finalize()
 
@@ -2141,6 +2142,165 @@ class SystemTestSuite:
         }
         passed = all(all(item.values()) for item in checks.values())
         return passed, f"bots={len(bot_ids)} template={checks['_template']['style_exists']}", json.dumps(checks, ensure_ascii=False, indent=2)
+
+    async def case_persona_importer_plan_apply_resume(self) -> tuple[bool, str, str]:
+        from ai_companion.persona_importer.apply import apply_draft
+        from ai_companion.persona_importer.chunker import chunk_sections, select_character_chunks
+        from ai_companion.persona_importer.paths import resolve_book_path
+        from ai_companion.persona_importer.pipeline import PersonaImportPipeline
+        from ai_companion.persona_importer.reader import load_book
+        from ai_companion.persona_importer.schema import ImportOptions, parse_character_spec
+
+        class ImporterFakeModel:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages: list[dict], system_prompt: str = "", **kwargs) -> str:
+                self.calls += 1
+                if "角色档案编辑器" in system_prompt:
+                    return json.dumps({
+                        "name": "林黛玉",
+                        "bot_id": "lin_daiyu",
+                        "profile_facts": [],
+                        "timeline": [{"stage": "当前", "event": "初入贾府", "evidence_refs": ["s0000_c0000"], "confidence": 0.9}],
+                        "traits": [{"trait": "敏感", "description": "心思细腻", "evidence_refs": ["s0000_c0000"], "confidence": 0.8}],
+                        "relationships": [],
+                        "speaking_style": [],
+                        "values_and_boundaries": [],
+                        "evidence_index": [{"ref": "s0000_c0000", "chapter": "第一章 初见", "summary": "林黛玉进府", "confidence": 0.9}],
+                        "uncertainties": [],
+                    }, ensure_ascii=False)
+                if "persona 配置作者" in system_prompt:
+                    return json.dumps({
+                        "profile.json": {
+                            "id": "lin_daiyu",
+                            "name": "林黛玉",
+                            "age": 18,
+                            "occupation": "书中角色",
+                            "gender": "female",
+                            "personality_tags": ["敏感"],
+                            "relationship_to_user": "基于书中角色改写的初识对象",
+                            "appearance": "",
+                            "interests": [],
+                            "settings": {"tone_default": "含蓄", "emoji_usage": "从不", "response_length": "中等"},
+                        },
+                        "backstory.json": {"summary": "初入贾府", "key_moments": ["初入贾府"]},
+                        "values.json": {"non_negotiable": ["不接受轻慢"], "soft_boundaries": []},
+                        "speaking_style.json": {"tone": "含蓄", "emotion_indicators": {"sad": "话少"}},
+                        "conversation_style_rules.json": {
+                            "reply_principles": ["先回应当下"],
+                            "avoid_phrases": ["作为AI"],
+                            "avoid_patterns": [],
+                            "natural_patterns": ["短句"],
+                            "intent_style": {"casual_chat": "自然"},
+                        },
+                    }, ensure_ascii=False)
+                raise AssertionError("resume should skip chunk extraction calls")
+
+            async def embeddings(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0] for _ in texts]
+
+            async def close(self):
+                return None
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-persona-importer-") as td:
+            root = Path(td)
+            book = root / "book.txt"
+            book.write_text(
+                "\n".join([
+                    "第一章 初见",
+                    "林黛玉进府，众人都看她言谈举止不俗。",
+                    "",
+                    "第二章 另事",
+                    "薛宝钗待人稳妥，话不多。",
+                ]),
+                encoding="utf-8",
+            )
+            resolved_relative = resolve_book_path("book.txt", cwd=root)
+            resolved_file_url = resolve_book_path(book.as_uri())
+            target = parse_character_spec("lin_daiyu:林黛玉=黛玉,林妹妹")
+            document = load_book(resolved_relative)
+            chunks = chunk_sections(document.sections, chunk_chars=1000, overlap_chars=100)
+            selected = select_character_chunks(chunks, [target], include_neighbors=False)
+
+            out = root / "draft"
+            out.mkdir()
+            existing = {
+                "chunk_id": "s0000_c0000",
+                "section_title": "第一章 初见",
+                "char_range": [0, 30],
+                "characters": [{
+                    "bot_id": "lin_daiyu",
+                    "name": "林黛玉",
+                    "facts": [],
+                    "events": [{"event": "初入贾府", "stage": "当前", "evidence_summary": "林黛玉进府", "confidence": 0.9}],
+                    "traits": [],
+                    "relationships": [],
+                    "speaking_style": [],
+                    "values_boundaries": [],
+                    "uncertainties": [],
+                }],
+            }
+            (out / "extractions.jsonl").write_text(json.dumps(existing, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            model = ImporterFakeModel()
+            manifest = await PersonaImportPipeline(
+                model=model,
+                options=ImportOptions(
+                    book_path=book,
+                    characters=[target],
+                    output_dir=out,
+                    chunk_chars=1000,
+                    overlap_chars=100,
+                    retry_attempts=1,
+                    resume=True,
+                    include_neighbor_chunks=False,
+                ),
+            ).run()
+
+            data_dir = root / "data" / "bots"
+            config_dir = root / "config"
+            result = apply_draft(out, data_dir=data_dir, config_dir=config_dir, yes=True)
+            profile = json.loads((data_dir / target.bot_id / "persona" / "profile.json").read_text(encoding="utf-8"))
+            bots_yaml = (config_dir / "bots.yaml").read_text(encoding="utf-8")
+            run_log = (out / "run.log").read_text(encoding="utf-8")
+
+        passed = (
+            target.bot_id == "lin_daiyu"
+            and target.aliases == ["黛玉", "林妹妹"]
+            and resolved_relative == book.resolve()
+            and resolved_file_url == book.resolve()
+            and len(chunks) >= 2
+            and len(selected) == 1
+            and model.calls == 2
+            and "chunk_skip_completed" in run_log
+            and "llm_call_success" in run_log
+            and manifest["chunks"]["resume"] is True
+            and result.applied_bot_ids == ["lin_daiyu"]
+            and profile["name"] == "林黛玉"
+            and "林黛玉" in bots_yaml
+        )
+        detail = (
+            f"chunks={len(chunks)} selected={len(selected)} calls={model.calls} "
+            f"resume={manifest['chunks'].get('resume')}"
+        )
+        log = json.dumps(
+            {
+                "target": target.to_dict(),
+                "resolved_relative": str(resolved_relative),
+                "resolved_file_url": str(resolved_file_url),
+                "document": document.to_dict(),
+                "selected": [{"chunk": chunk.to_dict(), "targets": [t.bot_id for t in targets]} for chunk, targets in selected],
+                "manifest": manifest,
+                "model_calls": model.calls,
+                "profile": profile,
+                "bots_yaml": bots_yaml,
+                "run_log": run_log,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
 
     def case_dependency_and_ui_contract_cleanup(self) -> tuple[bool, str, str]:
         pyproject = (self.root / "pyproject.toml").read_text(encoding="utf-8")

@@ -117,6 +117,7 @@ def atomic_yaml_write(
     *,
     default_flow_style: bool = False,
     sort_keys: bool = False,
+    allow_unicode: bool = True,
     extra_content: str | None = None,
 ) -> None:
     """Write YAML data to a file atomically.
@@ -130,6 +131,7 @@ def atomic_yaml_write(
         data: YAML-serializable data to write.
         default_flow_style: YAML flow style (default False).
         sort_keys: Whether to sort dict keys (default False).
+        allow_unicode: Keep non-ASCII characters readable in YAML output.
         extra_content: Optional string to append after the YAML dump
             (e.g. commented-out sections for user reference).
     """
@@ -145,7 +147,13 @@ def atomic_yaml_write(
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            yaml.dump(data, f, default_flow_style=default_flow_style, sort_keys=sort_keys)
+            yaml.dump(
+                data,
+                f,
+                default_flow_style=default_flow_style,
+                sort_keys=sort_keys,
+                allow_unicode=allow_unicode,
+            )
             if extra_content:
                 f.write(extra_content)
             f.flush()
