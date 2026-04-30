@@ -39,7 +39,7 @@ export const CardHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEleme
         ref={ref}
         className={className}
         style={{
-          paddingBottom: '12px',
+          padding: '16px 16px 12px',
           marginBottom: '16px',
           borderBottom: '1px solid var(--border-subtle)',
           ...style,
@@ -83,6 +83,7 @@ export const CardContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElem
         ref={ref}
         className={className}
         style={{
+          padding: '16px',
           ...style,
         }}
         {...props}

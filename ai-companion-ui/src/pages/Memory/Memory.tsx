@@ -161,7 +161,7 @@ export function Memory() {
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             style={{
-              padding: '12px 16px',
+              padding: '12px 20px',
               fontSize: '14px',
               fontWeight: 500,
               border: 'none',
