@@ -89,9 +89,15 @@ class Config:
             "model": provider_config.get("model", ""),
         }
 
+        # 透传运行时模型参数，例如 timeout。ModelFactory 会按 provider 过滤
+        # 可用字段，避免把无关配置传给 adapter。
+        for key, value in provider_config.items():
+            if key not in config and value not in (None, ""):
+                config[key] = value
+
         # 添加全局默认参数（如果没有在 provider 配置中指定）
         global_config = self.models.get("model", {})
-        for key in ("temperature", "max_tokens"):
+        for key in ("temperature", "max_tokens", "timeout"):
             if key not in provider_config and key in global_config:
                 config[key] = global_config[key]
 

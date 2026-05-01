@@ -53,6 +53,20 @@ from ai_companion.ui_server import (
 logger = logging.getLogger(__name__)
 
 
+def build_memory_config_for_provider(config: Config, provider: str) -> dict:
+    """Merge provider context metadata into memory compressor config."""
+    memory_config = dict(config.models.get("memory", {}) or {})
+    provider_config = config.get_provider_config(provider)
+    max_context_tokens = provider_config.get("max_context_tokens") or provider_config.get("max_context_chars")
+    if max_context_tokens:
+        context_cfg = dict(memory_config.get("context", {}) or {})
+        compressor_cfg = dict(context_cfg.get("compressor", {}) or {})
+        compressor_cfg.setdefault("model_context", int(max_context_tokens))
+        context_cfg["compressor"] = compressor_cfg
+        memory_config["context"] = context_cfg
+    return memory_config
+
+
 # Frontend dev server ownership for this gateway process
 _ui_server_result: UIStartResult | None = None
 
@@ -916,7 +930,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         provider = model_data.get("provider") or config.default_provider
         base_url = model_data.get("base_url", "")
         api_key = model_data.get("api_key", "")
-        provider_requires_key = provider in {"minimax", "openai", "claude"}
+        provider_requires_key = provider in {"minimax", "openai", "claude", "mimo"}
         if provider_requires_key and (not api_key or is_masked_secret(api_key)):
             existing = config.get_model_config(provider)
             api_key = existing.get("api_key", "")
@@ -1341,6 +1355,7 @@ async def run_gateway(daemon: bool = True):
         "minimax": "MINIMAX_API_KEY",
         "openai": "OPENAI_API_KEY",
         "claude": "ANTHROPIC_API_KEY",
+        "mimo": "MIMO_API_KEY",
     }
     env_key = env_key_map.get(provider)
     api_key = os.environ.get(env_key, "") if env_key else ""
@@ -1369,7 +1384,7 @@ async def run_gateway(daemon: bool = True):
 
     # 加载 Bot
     bot_manager = BotManager()
-    memory_config = config.models.get("memory", {})
+    memory_config = build_memory_config_for_provider(config, provider)
     data_dir = get_data_dir()
     feishu_adapters_by_app_id: dict[str, FeishuAdapter] = {}
     for profile in feishu_profiles:

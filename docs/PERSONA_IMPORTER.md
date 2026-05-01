@@ -63,6 +63,8 @@ ai-companion persona import-book \
   --overlap-chars 600 \
   --max-concurrency 1 \
   --requests-per-minute 20 \
+  --request-timeout 180 \
+  --json-repair-attempts 1 \
   --retry-attempts 3
 ```
 
@@ -82,6 +84,15 @@ file:///Users/me/books/book.txt
 ai-companion persona import-book \
   --book "/Users/me/My Books/book.txt" \
   --character "lin_daiyu:林黛玉=黛玉"
+```
+
+TXT/Markdown/HTML 会自动尝试常见编码：`utf-8-sig`、`utf-8`、`gb18030`、`gbk`、`big5`、`utf-16`。如果你明确知道编码，也可以手动指定：
+
+```bash
+ai-companion persona import-book \
+  --book "/Users/me/books/novel.txt" \
+  --encoding gb18030 \
+  --character "yangsisi:杨思思=思思"
 ```
 
 查看草稿摘要：
@@ -164,8 +175,15 @@ characters/
 
 - `--max-concurrency 1`：并发 LLM 请求数，默认 1。
 - `--requests-per-minute 0`：额外 RPM 限流，0 表示不额外限制；例如 `20` 表示每分钟最多启动 20 次 LLM 请求。
+- `--request-timeout 180`：单次底层模型请求总超时秒数。导书 prompt 比普通 Bot 对话长，默认使用 180 秒；Bot 日常对话仍使用模型配置或 adapter 默认值。
 - `--retry-attempts 3`：每次 LLM JSON 调用最多尝试 3 次。
+- `--json-repair-attempts 1`：模型返回内容不是合法 JSON 时，先让模型按最小改动修复 JSON 语法；修复失败后再进入普通重试。
 - `--retry-base-delay 2`：重试等待使用指数退避，默认约 2 秒、4 秒、8 秒。
+- `--failure-policy exit`：重试耗尽后默认退出任务，不跳过失败 chunk。
+- `--failure-policy wait-retry`：重试耗尽后等待 `--failure-retry-delay` 秒，再对同一次 LLM 调用继续重试，直到成功或手动中断。
+- `--failure-retry-delay 60`：`wait-retry` 模式下两轮重试之间默认等待 60 秒。
+- 默认会在终端实时打印进度，包括 chunk 开始/成功、LLM 请求开始/成功/失败、重试等待、档案合并和 persona 生成。
+- `--quiet`：关闭终端实时进度，只写 `run.log`。
 - 默认启用断点续跑；同一草稿目录中 `extractions.jsonl` 已有成功结果的 chunk 会跳过，不重复请求 LLM。
 - `--no-resume`：禁用断点续跑，重新抽取所有选中 chunk。
 
@@ -176,10 +194,27 @@ ai-companion persona import-book \
   --book ./books/book.txt \
   --character "lin_daiyu:林黛玉=黛玉,林妹妹" \
   --out ~/.ai-companion/imports/red-mansion \
+  --request-timeout 180 \
   --requests-per-minute 20
 ```
 
 如果进程中断，再执行同一命令即可复用已经成功的 chunk 抽取结果。
+
+中断当前任务：
+
+- 前台运行时按 `Ctrl+C`。
+- 如果已经脱离当前终端，先用 `ps aux | grep "persona import-book"` 找到进程，再用 `kill <pid>`。
+
+如果希望遇到临时限流或网络错误时不要退出，而是等一分钟继续尝试：
+
+```bash
+ai-companion persona import-book \
+  --book ./books/book.txt \
+  --character "lin_daiyu:林黛玉=黛玉,林妹妹" \
+  --out ~/.ai-companion/imports/red-mansion \
+  --failure-policy wait-retry \
+  --failure-retry-delay 60
+```
 
 ## 日志
 
@@ -197,11 +232,23 @@ run.log
 - `chunk_extract_start` / `chunk_extract_success` / `chunk_extract_failed`
 - `chunk_skip_completed`
 - `llm_call_start` / `llm_call_success` / `llm_call_error`
+- `llm_json_parse_error`
+- `llm_json_repair_start` / `llm_json_repair_success` / `llm_json_repair_error`
 - `llm_retry_sleep`
+- `llm_call_give_up`
+- `llm_retry_round_sleep`
 - `dossier_merge_start` / `dossier_merge_success`
 - `persona_generate_start` / `persona_generate_success`
 
 证据结果仍以 `extractions.jsonl`、`dossier.json` 和 `persona_raw.json` 为准。`run.log` 记录运行过程、耗时、失败和重试，便于排查长任务。
+
+当模型返回内容不是合法 JSON 时，原始返回会写入：
+
+```text
+debug/invalid_json/*.txt
+```
+
+`run.log` 只记录该文件路径和解析错误，不直接塞入大段模型返回。
 
 ## 支持格式
 

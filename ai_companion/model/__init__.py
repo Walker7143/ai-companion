@@ -10,6 +10,7 @@ from .adapters import (
     MiniMaxAdapter,
     OpenAIAdapter,
     ClaudeAdapter,
+    MimoAdapter,
     OllamaAdapter,
     CustomAdapter,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "MiniMaxAdapter",
     "OpenAIAdapter",
     "ClaudeAdapter",
+    "MimoAdapter",
     "OllamaAdapter",
     "CustomAdapter",
 ]

@@ -50,6 +50,17 @@ PERSONA_SYSTEM_PROMPT = """你是 AI Companion 的 persona 配置作者。
 """
 
 
+JSON_REPAIR_SYSTEM_PROMPT = """你是 JSON 语法修复器。
+任务：把用户给出的文本修复成严格合法 JSON。
+规则：
+- 只修复 JSON 语法，不新增事实、不改写字段含义、不扩展内容。
+- 删除 JSON 外的说明文字、Markdown 围栏和多余内容。
+- 如果字符串里有未转义引号或换行，请正确转义。
+- 如果缺少逗号、括号、引号，请按最小改动补齐。
+- 只输出严格 JSON，不要 Markdown，不要解释。
+"""
+
+
 class PersonaImportPipeline:
     def __init__(self, model: ModelAdapter | None, options: ImportOptions):
         self.model = model
@@ -57,9 +68,14 @@ class PersonaImportPipeline:
         self.warnings: list[str] = []
         self.logger = RunLogger(self.options.output_dir / "run.log")
         self.rate_limiter = AsyncRateLimiter(self.options.requests_per_minute)
+        self._progress_context: list[str] = []
+
+    def _progress(self, message: str) -> None:
+        if not self.options.quiet:
+            print(f"[persona-importer] {message}", flush=True)
 
     async def run(self) -> dict[str, Any]:
-        document = load_book(self.options.book_path)
+        document = load_book(self.options.book_path, encoding=self.options.encoding)
         self.logger.log(
             "import_start",
             book=str(self.options.book_path),
@@ -97,6 +113,8 @@ class PersonaImportPipeline:
                 "resume": self.options.resume,
                 "requests_per_minute": self.options.requests_per_minute,
                 "retry_attempts": self.options.retry_attempts,
+                "request_timeout_seconds": self.options.request_timeout_seconds,
+                "json_repair_attempts": self.options.json_repair_attempts,
             },
             "status": "plan" if self.options.plan_only else "draft",
             "warnings": self.warnings,
@@ -192,10 +210,12 @@ class PersonaImportPipeline:
             jsonl_path.unlink()
         if existing:
             await self.logger.alog("resume_loaded", completed_chunks=len(existing), path=str(jsonl_path))
+            self._progress(f"resume loaded completed_chunks={len(existing)}")
 
         async def run_one(chunk: BookChunk, targets: list[CharacterTarget]) -> dict[str, Any]:
             if self.options.resume and chunk.chunk_id in existing:
                 await self.logger.alog("chunk_skip_completed", chunk_id=chunk.chunk_id)
+                self._progress(f"skip completed chunk={chunk.chunk_id}")
                 return existing[chunk.chunk_id]
             async with semaphore:
                 await self.logger.alog(
@@ -204,19 +224,21 @@ class PersonaImportPipeline:
                     section_title=chunk.section_title,
                     targets=[target.bot_id for target in targets],
                 )
+                self._progress(
+                    f"extract start chunk={chunk.chunk_id} section={chunk.section_title} "
+                    f"targets={','.join(target.bot_id for target in targets)} chars={len(chunk.text)}"
+                )
                 try:
+                    self._progress_context.append(f"chunk={chunk.chunk_id}")
                     result = await self._extract_chunk(chunk, targets)
                     await self.logger.alog("chunk_extract_success", chunk_id=chunk.chunk_id)
+                    self._progress(f"extract success chunk={chunk.chunk_id}")
                 except Exception as exc:
-                    result = {
-                        "chunk_id": chunk.chunk_id,
-                        "section_title": chunk.section_title,
-                        "char_range": [chunk.start_char, chunk.end_char],
-                        "characters": [],
-                        "error": str(exc),
-                    }
-                    self.warnings.append(f"{chunk.chunk_id} 抽取失败: {exc}")
                     await self.logger.alog("chunk_extract_failed", chunk_id=chunk.chunk_id, error=str(exc))
+                    self._progress(f"extract failed chunk={chunk.chunk_id} error={exc}")
+                    raise
+                finally:
+                    self._progress_context.pop()
                 async with write_lock:
                     with jsonl_path.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -254,12 +276,34 @@ class PersonaImportPipeline:
     }}
   ]
 }}"""
-        data = await self._chat_json(EXTRACT_SYSTEM_PROMPT, user_prompt, temperature=0.1, max_tokens=1800)
-        if not isinstance(data, dict):
-            raise ValueError(f"分块抽取返回格式错误: {chunk.chunk_id}")
+        context_added = False
+        if not any(item == f"chunk={chunk.chunk_id}" for item in self._progress_context):
+            self._progress_context.append(f"chunk={chunk.chunk_id}")
+            context_added = True
+        try:
+            data = await self._chat_json(
+                EXTRACT_SYSTEM_PROMPT,
+                user_prompt,
+                temperature=0.1,
+                max_tokens=1800,
+                validator=lambda value: self._validate_extract_result(value, chunk),
+            )
+        finally:
+            if context_added:
+                self._progress_context.pop()
         data.setdefault("chunk_id", chunk.chunk_id)
         data.setdefault("section_title", chunk.section_title)
         data.setdefault("char_range", [chunk.start_char, chunk.end_char])
+        return data
+
+    def _validate_extract_result(self, data: Any, chunk: BookChunk) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ValueError(f"分块抽取返回格式错误: {chunk.chunk_id}，顶层类型={type(data).__name__}")
+        characters = data.get("characters")
+        if characters is None:
+            data["characters"] = []
+        elif not isinstance(characters, list):
+            raise ValueError(f"分块抽取返回格式错误: {chunk.chunk_id}，characters 不是 list")
         return data
 
     def _group_extractions_by_character(self, extractions: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -305,6 +349,7 @@ class PersonaImportPipeline:
                 batch_index=batch_index,
                 batch_items=len(batch),
             )
+            self._progress(f"dossier merge start bot={target.bot_id} batch={batch_index} items={len(batch)}")
             user_prompt = f"""目标角色：
 {json_dumps(target.to_dict())}
 
@@ -327,19 +372,27 @@ class PersonaImportPipeline:
   "evidence_index": [{{"ref": "chunk_id", "chapter": "...", "summary": "...", "confidence": 0.0}}],
   "uncertainties": ["..."]
 }}"""
-            data = await self._chat_json(MERGE_SYSTEM_PROMPT, user_prompt, temperature=0.1, max_tokens=2600)
-            if isinstance(data, dict):
+            self._progress_context.append(f"dossier={target.bot_id} batch={batch_index}")
+            try:
+                data = await self._chat_json(
+                    MERGE_SYSTEM_PROMPT,
+                    user_prompt,
+                    temperature=0.1,
+                    max_tokens=2600,
+                    validator=lambda value: self._validate_object_result(value, f"{target.name} 的合并结果"),
+                )
                 dossier = data
                 dossier.setdefault("name", target.name)
                 dossier.setdefault("bot_id", target.bot_id)
                 await self.logger.alog("dossier_merge_success", bot_id=target.bot_id, batch_index=batch_index)
-            else:
-                self.warnings.append(f"{target.name} 的合并结果不是 JSON object，已跳过一个批次。")
-                await self.logger.alog("dossier_merge_bad_result", bot_id=target.bot_id, batch_index=batch_index)
+                self._progress(f"dossier merge success bot={target.bot_id} batch={batch_index}")
+            finally:
+                self._progress_context.pop()
         return dossier
 
     async def _generate_persona(self, target: CharacterTarget, dossier: dict[str, Any]) -> dict[str, Any]:
         await self.logger.alog("persona_generate_start", bot_id=target.bot_id)
+        self._progress(f"persona generate start bot={target.bot_id}")
         user_prompt = f"""目标角色：
 {json_dumps(target.to_dict())}
 
@@ -396,10 +449,24 @@ class PersonaImportPipeline:
   }},
   "review_notes": ["..."]
 }}"""
-        data = await self._chat_json(PERSONA_SYSTEM_PROMPT, user_prompt, temperature=0.25, max_tokens=3200)
+        self._progress_context.append(f"persona={target.bot_id}")
+        try:
+            data = await self._chat_json(
+                PERSONA_SYSTEM_PROMPT,
+                user_prompt,
+                temperature=0.25,
+                max_tokens=3200,
+                validator=lambda value: self._validate_object_result(value, f"{target.name} 的 persona 生成结果"),
+            )
+            await self.logger.alog("persona_generate_success", bot_id=target.bot_id)
+            self._progress(f"persona generate success bot={target.bot_id}")
+            return data
+        finally:
+            self._progress_context.pop()
+
+    def _validate_object_result(self, data: Any, label: str) -> dict[str, Any]:
         if not isinstance(data, dict):
-            raise ValueError(f"{target.name} 的 persona 生成结果不是 JSON object")
-        await self.logger.alog("persona_generate_success", bot_id=target.bot_id)
+            raise ValueError(f"{label}不是 JSON object，顶层类型={type(data).__name__}")
         return data
 
     async def _chat_json(
@@ -409,54 +476,217 @@ class PersonaImportPipeline:
         *,
         temperature: float,
         max_tokens: int,
+        validator=None,
     ) -> Any:
         if self.model is None:
             raise ValueError("模型未初始化")
         attempts = max(1, int(self.options.retry_attempts or 1))
-        last_error: Exception | None = None
-        for attempt in range(1, attempts + 1):
+        round_index = 0
+        while True:
+            round_index += 1
+            last_error: Exception | None = None
+            for attempt in range(1, attempts + 1):
+                wait_seconds = await self.rate_limiter.wait()
+                start = time.monotonic()
+                await self.logger.alog(
+                    "llm_call_start",
+                    attempt=attempt,
+                    max_attempts=attempts,
+                    retry_round=round_index,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    request_timeout_seconds=self.options.request_timeout_seconds,
+                    rate_limit_wait_seconds=round(wait_seconds, 3),
+                )
+                context = " ".join(self._progress_context)
+                self._progress(
+                    f"llm request start {context} round={round_index} attempt={attempt}/{attempts} "
+                    f"max_tokens={max_tokens} timeout={self.options.request_timeout_seconds}s wait={wait_seconds:.1f}s"
+                )
+                try:
+                    text = await self.model.chat(
+                        [{"role": "user", "content": user_prompt}],
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    try:
+                        data = extract_json_object(text)
+                        repaired = False
+                    except (json.JSONDecodeError, ValueError) as parse_exc:
+                        data = await self._repair_json_response(
+                            text,
+                            parse_exc,
+                            retry_round=round_index,
+                            attempt=attempt,
+                            source_max_tokens=max_tokens,
+                        )
+                        repaired = True
+                    if validator is not None:
+                        data = validator(data)
+                    elapsed = time.monotonic() - start
+                    await self.logger.alog(
+                        "llm_call_success",
+                        attempt=attempt,
+                        retry_round=round_index,
+                        elapsed_seconds=round(elapsed, 3),
+                        response_chars=len(text or ""),
+                        json_repaired=repaired,
+                    )
+                    self._progress(
+                        f"llm request success {context} round={round_index} attempt={attempt}/{attempts} "
+                        f"elapsed={elapsed:.1f}s response_chars={len(text or '')} repaired={repaired}"
+                    )
+                    return data
+                except Exception as exc:
+                    last_error = exc
+                    elapsed = time.monotonic() - start
+                    await self.logger.alog(
+                        "llm_call_error",
+                        attempt=attempt,
+                        retry_round=round_index,
+                        elapsed_seconds=round(elapsed, 3),
+                        error=repr(exc),
+                    )
+                    self._progress(
+                        f"llm request error {context} round={round_index} attempt={attempt}/{attempts} "
+                        f"elapsed={elapsed:.1f}s error={exc}"
+                    )
+                    if attempt >= attempts:
+                        break
+                    delay = float(self.options.retry_base_delay_seconds or 0) * (2 ** (attempt - 1))
+                    await self.logger.alog("llm_retry_sleep", attempt=attempt, retry_round=round_index, delay_seconds=round(delay, 3))
+                    if delay > 0:
+                        self._progress(f"llm retry sleep {context} delay={delay:.1f}s")
+                        await asyncio.sleep(delay)
+
+            message = f"LLM 调用失败（已重试 {attempts} 次）: {last_error}"
+            if self.options.failure_policy != "wait-retry":
+                await self.logger.alog("llm_call_give_up", retry_round=round_index, policy="exit", error=repr(last_error))
+                raise RuntimeError(message)
+            delay = max(0.0, float(self.options.failure_retry_delay_seconds or 0))
+            await self.logger.alog("llm_retry_round_sleep", retry_round=round_index, policy="wait-retry", delay_seconds=round(delay, 3), error=repr(last_error))
+            if delay > 0:
+                self._progress(f"{message}；{delay:.0f}s 后继续重试。按 Ctrl+C 可中断。")
+                await asyncio.sleep(delay)
+
+    async def _repair_json_response(
+        self,
+        raw_text: str,
+        parse_error: Exception,
+        *,
+        retry_round: int,
+        attempt: int,
+        source_max_tokens: int,
+    ) -> Any:
+        repair_attempts = max(0, int(self.options.json_repair_attempts or 0))
+        debug_path = self._write_invalid_json_debug(raw_text, parse_error, retry_round=retry_round, attempt=attempt)
+        context = " ".join(self._progress_context)
+        await self.logger.alog(
+            "llm_json_parse_error",
+            attempt=attempt,
+            retry_round=retry_round,
+            error=repr(parse_error),
+            response_chars=len(raw_text or ""),
+            debug_path=str(debug_path),
+            repair_attempts=repair_attempts,
+        )
+        self._progress(
+            f"json parse error {context} round={retry_round} attempt={attempt} "
+            f"error={parse_error}; saved={debug_path}"
+        )
+        if repair_attempts <= 0:
+            raise parse_error
+
+        repair_prompt = f"""下面是一段模型返回内容，目标本应是严格 JSON，但解析失败。
+
+解析错误：
+{parse_error}
+
+原始返回：
+{raw_text}
+
+请只输出修复后的严格 JSON。"""
+
+        last_error: Exception = parse_error
+        for repair_attempt in range(1, repair_attempts + 1):
             wait_seconds = await self.rate_limiter.wait()
             start = time.monotonic()
+            repair_max_tokens = max(source_max_tokens, min(4096, len(raw_text or "") // 2 + 512))
             await self.logger.alog(
-                "llm_call_start",
-                attempt=attempt,
-                max_attempts=attempts,
-                max_tokens=max_tokens,
-                temperature=temperature,
+                "llm_json_repair_start",
+                repair_attempt=repair_attempt,
+                max_repair_attempts=repair_attempts,
+                source_attempt=attempt,
+                retry_round=retry_round,
+                max_tokens=repair_max_tokens,
                 rate_limit_wait_seconds=round(wait_seconds, 3),
             )
+            self._progress(
+                f"json repair start {context} round={retry_round} attempt={attempt} "
+                f"repair={repair_attempt}/{repair_attempts} max_tokens={repair_max_tokens}"
+            )
             try:
-                text = await self.model.chat(
-                    [{"role": "user", "content": user_prompt}],
-                    system_prompt=system_prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
+                repaired_text = await self.model.chat(
+                    [{"role": "user", "content": repair_prompt}],
+                    system_prompt=JSON_REPAIR_SYSTEM_PROMPT,
+                    temperature=0.0,
+                    max_tokens=repair_max_tokens,
                 )
-                data = extract_json_object(text)
+                data = extract_json_object(repaired_text)
                 elapsed = time.monotonic() - start
                 await self.logger.alog(
-                    "llm_call_success",
-                    attempt=attempt,
+                    "llm_json_repair_success",
+                    repair_attempt=repair_attempt,
+                    source_attempt=attempt,
+                    retry_round=retry_round,
                     elapsed_seconds=round(elapsed, 3),
-                    response_chars=len(text or ""),
+                    response_chars=len(repaired_text or ""),
+                )
+                self._progress(
+                    f"json repair success {context} round={retry_round} attempt={attempt} "
+                    f"repair={repair_attempt}/{repair_attempts} elapsed={elapsed:.1f}s"
                 )
                 return data
             except Exception as exc:
                 last_error = exc
                 elapsed = time.monotonic() - start
                 await self.logger.alog(
-                    "llm_call_error",
-                    attempt=attempt,
+                    "llm_json_repair_error",
+                    repair_attempt=repair_attempt,
+                    source_attempt=attempt,
+                    retry_round=retry_round,
                     elapsed_seconds=round(elapsed, 3),
                     error=repr(exc),
                 )
-                if attempt >= attempts:
-                    break
-                delay = float(self.options.retry_base_delay_seconds or 0) * (2 ** (attempt - 1))
-                await self.logger.alog("llm_retry_sleep", attempt=attempt, delay_seconds=round(delay, 3))
-                if delay > 0:
-                    await asyncio.sleep(delay)
-        raise RuntimeError(f"LLM 调用失败（已重试 {attempts} 次）: {last_error}")
+                self._progress(
+                    f"json repair error {context} round={retry_round} attempt={attempt} "
+                    f"repair={repair_attempt}/{repair_attempts} elapsed={elapsed:.1f}s error={exc}"
+                )
+        raise last_error
+
+    def _write_invalid_json_debug(
+        self,
+        raw_text: str,
+        parse_error: Exception,
+        *,
+        retry_round: int,
+        attempt: int,
+    ) -> Path:
+        debug_dir = self.options.output_dir / "debug" / "invalid_json"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        stem_parts = [part.replace("=", "-") for part in self._progress_context if part]
+        stem = "_".join(stem_parts) or "llm"
+        path = debug_dir / f"{stem}_round-{retry_round}_attempt-{attempt}.txt"
+        payload = (
+            f"parse_error: {parse_error!r}\n"
+            f"retry_round: {retry_round}\n"
+            f"attempt: {attempt}\n"
+            "\n--- raw response ---\n"
+            f"{raw_text or ''}\n"
+        )
+        path.write_text(payload, encoding="utf-8")
+        return path
 
 
 def _empty_dossier(target: CharacterTarget) -> dict[str, Any]:

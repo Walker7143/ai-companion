@@ -183,7 +183,7 @@ minimax:
   api_key: "${MINIMAX_API_KEY}"
   base_url: "https://api.minimax.chat/v1"
   model: "MiniMax-M2.7"
-  max_context_chars: 8000
+  max_context_tokens: 20000
 
 memory:
   embedding: "none"          # "local" | "none"

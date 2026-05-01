@@ -22,6 +22,7 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+from aiohttp import web
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -190,6 +191,7 @@ class SystemTestSuite:
         self._run_case("T03", "CLI bot list", self.case_cli_bot_list)
         self._run_case("T04", "Config loader", self.case_config_loader)
         self._run_case("T05", "ModelFactory provider registry", self.case_model_factory_registry)
+        self._run_case("T05b", "MiMo adapter OpenAI-compatible request", self.case_mimo_adapter_request_contract)
         self._run_case("T06", "Context compressor behavior", self.case_context_compressor)
         self._run_case("T07", "Memory engine offline roundtrip", self.case_memory_engine_roundtrip)
         self._run_case("T08", "BotInstance offline full flow", self.case_bot_instance_offline)
@@ -346,10 +348,78 @@ class SystemTestSuite:
         from ai_companion.model.factory import ModelFactory
 
         providers = set(ModelFactory.list_providers())
-        expected = {"minimax", "openai", "claude", "ollama", "custom"}
+        expected = {"minimax", "openai", "claude", "mimo", "ollama", "custom"}
         passed = providers == expected
         detail = f"providers={sorted(providers)}"
         log = json.dumps({"providers": sorted(providers), "expected": sorted(expected)}, indent=2)
+        return passed, detail, log
+
+    async def case_mimo_adapter_request_contract(self) -> tuple[bool, str, str]:
+        from ai_companion.model.factory import ModelFactory
+
+        seen: dict = {}
+
+        async def handle_chat(request):
+            seen["path"] = request.path
+            seen["headers"] = dict(request.headers)
+            seen["body"] = await request.json()
+            return web.json_response({
+                "choices": [
+                    {"message": {"content": "mimo-ok", "reasoning_content": "hidden"}}
+                ]
+            })
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handle_chat)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        sockets = site._server.sockets if site._server else []
+        port = sockets[0].getsockname()[1]
+        adapter = ModelFactory.create_from_runtime_config(
+            {
+                "provider": "mimo",
+                "api_key": "test-key",
+                "base_url": f"http://127.0.0.1:{port}/v1",
+                "model": "mimo-v2.5-pro",
+                "timeout": 5,
+            },
+            provider="mimo",
+        )
+        try:
+            response = await adapter.chat(
+                [{"role": "user", "content": "hello"}],
+                system_prompt="sys",
+                max_tokens=123,
+                temperature=0.5,
+            )
+        finally:
+            await adapter.close()
+            await runner.cleanup()
+
+        body = seen.get("body", {})
+        headers = seen.get("headers", {})
+        passed = (
+            response == "mimo-ok"
+            and seen.get("path") == "/v1/chat/completions"
+            and headers.get("api-key") == "test-key"
+            and body.get("model") == "mimo-v2.5-pro"
+            and body.get("max_completion_tokens") == 123
+            and "max_tokens" not in body
+            and body.get("messages", [])[0].get("role") == "system"
+            and body.get("messages", [])[1].get("role") == "user"
+        )
+        detail = f"response={response} path={seen.get('path')} max_completion_tokens={body.get('max_completion_tokens')}"
+        log = json.dumps(
+            {
+                "seen": seen,
+                "response": response,
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
         return passed, detail, log
 
     def case_context_compressor(self) -> tuple[bool, str, str]:
@@ -2150,6 +2220,7 @@ class SystemTestSuite:
         from ai_companion.persona_importer.pipeline import PersonaImportPipeline
         from ai_companion.persona_importer.reader import load_book
         from ai_companion.persona_importer.schema import ImportOptions, parse_character_spec
+        from ai_companion.model.factory import ModelFactory
 
         class ImporterFakeModel:
             def __init__(self):
@@ -2203,6 +2274,70 @@ class SystemTestSuite:
             async def close(self):
                 return None
 
+        class AlwaysFailModel:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages: list[dict], system_prompt: str = "", **kwargs) -> str:
+                self.calls += 1
+                raise RuntimeError("forced failure")
+
+            async def embeddings(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0] for _ in texts]
+
+            async def close(self):
+                return None
+
+        class JsonRepairModel:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages: list[dict], system_prompt: str = "", **kwargs) -> str:
+                self.calls += 1
+                if "JSON 语法修复器" in system_prompt:
+                    return json.dumps({
+                        "chunk_id": "s0000_c0000",
+                        "section_title": "第一章 初见",
+                        "characters": [{
+                            "bot_id": "lin_daiyu",
+                            "name": "林黛玉",
+                            "facts": [{"claim": "进府", "evidence_summary": "林黛玉进府", "quote": "", "confidence": 0.9}],
+                            "events": [],
+                            "traits": [],
+                            "relationships": [],
+                            "speaking_style": [],
+                            "values_boundaries": [],
+                            "uncertainties": [],
+                        }],
+                    }, ensure_ascii=False)
+                return '{"chunk_id":"s0000_c0000","section_title":"第一章 初见" "characters":[]}'
+
+            async def embeddings(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0] for _ in texts]
+
+            async def close(self):
+                return None
+
+        class BadShapeThenGoodModel:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages: list[dict], system_prompt: str = "", **kwargs) -> str:
+                self.calls += 1
+                if self.calls == 1:
+                    return json.dumps([{"not": "an object"}], ensure_ascii=False)
+                return json.dumps({
+                    "chunk_id": "s0000_c0000",
+                    "section_title": "第一章 初见",
+                    "characters": [],
+                }, ensure_ascii=False)
+
+            async def embeddings(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0] for _ in texts]
+
+            async def close(self):
+                return None
+
         with tempfile.TemporaryDirectory(prefix="sys-test-persona-importer-") as td:
             root = Path(td)
             book = root / "book.txt"
@@ -2216,10 +2351,13 @@ class SystemTestSuite:
                 ]),
                 encoding="utf-8",
             )
+            gbk_book = root / "gbk_book.txt"
+            gbk_book.write_bytes("第一章 编码\n杨思思站在门口。".encode("gbk"))
             resolved_relative = resolve_book_path("book.txt", cwd=root)
             resolved_file_url = resolve_book_path(book.as_uri())
             target = parse_character_spec("lin_daiyu:林黛玉=黛玉,林妹妹")
             document = load_book(resolved_relative)
+            gbk_document = load_book(gbk_book)
             chunks = chunk_sections(document.sections, chunk_chars=1000, overlap_chars=100)
             selected = select_character_chunks(chunks, [target], include_neighbors=False)
 
@@ -2265,11 +2403,70 @@ class SystemTestSuite:
             bots_yaml = (config_dir / "bots.yaml").read_text(encoding="utf-8")
             run_log = (out / "run.log").read_text(encoding="utf-8")
 
+            fail_out = root / "fail_draft"
+            fail_model = AlwaysFailModel()
+            failure_raised = False
+            try:
+                await PersonaImportPipeline(
+                    model=fail_model,
+                    options=ImportOptions(
+                        book_path=book,
+                        characters=[target],
+                        output_dir=fail_out,
+                        chunk_chars=1000,
+                        overlap_chars=100,
+                        retry_attempts=2,
+                        retry_base_delay_seconds=0,
+                        failure_policy="exit",
+                        include_neighbor_chunks=False,
+                    ),
+                ).run()
+            except RuntimeError:
+                failure_raised = True
+            fail_log = (fail_out / "run.log").read_text(encoding="utf-8")
+
+            repair_out = root / "repair_draft"
+            repair_model = JsonRepairModel()
+            repair_data = await PersonaImportPipeline(
+                model=repair_model,
+                options=ImportOptions(
+                    book_path=book,
+                    characters=[target],
+                    output_dir=repair_out,
+                    chunk_chars=1000,
+                    overlap_chars=100,
+                    retry_attempts=1,
+                    json_repair_attempts=1,
+                    include_neighbor_chunks=False,
+                ),
+            )._extract_chunk(selected[0][0], selected[0][1])
+            repair_log = (repair_out / "run.log").read_text(encoding="utf-8")
+            invalid_json_files = list((repair_out / "debug" / "invalid_json").glob("*.txt"))
+
+            bad_shape_out = root / "bad_shape_draft"
+            bad_shape_model = BadShapeThenGoodModel()
+            bad_shape_data = await PersonaImportPipeline(
+                model=bad_shape_model,
+                options=ImportOptions(
+                    book_path=book,
+                    characters=[target],
+                    output_dir=bad_shape_out,
+                    chunk_chars=1000,
+                    overlap_chars=100,
+                    retry_attempts=2,
+                    retry_base_delay_seconds=0,
+                    include_neighbor_chunks=False,
+                ),
+            )._extract_chunk(selected[0][0], selected[0][1])
+            bad_shape_log = (bad_shape_out / "run.log").read_text(encoding="utf-8")
+
         passed = (
             target.bot_id == "lin_daiyu"
             and target.aliases == ["黛玉", "林妹妹"]
             and resolved_relative == book.resolve()
             and resolved_file_url == book.resolve()
+            and gbk_document.encoding in {"gb18030", "gbk"}
+            and "杨思思" in gbk_document.sections[0].text
             and len(chunks) >= 2
             and len(selected) == 1
             and model.calls == 2
@@ -2279,10 +2476,46 @@ class SystemTestSuite:
             and result.applied_bot_ids == ["lin_daiyu"]
             and profile["name"] == "林黛玉"
             and "林黛玉" in bots_yaml
+            and failure_raised
+            and fail_model.calls == 2
+            and "llm_call_give_up" in fail_log
+            and repair_model.calls == 2
+            and repair_data["characters"][0]["bot_id"] == "lin_daiyu"
+            and "llm_json_repair_success" in repair_log
+            and len(invalid_json_files) == 1
+            and bad_shape_model.calls == 2
+            and bad_shape_data["chunk_id"] == "s0000_c0000"
+            and "llm_call_error" in bad_shape_log
+            and "顶层类型=list" in bad_shape_log
         )
+        timeout_adapter = ModelFactory.create_from_runtime_config(
+            {"provider": "minimax", "api_key": "fake", "timeout": 180},
+            provider="minimax",
+        )
+        try:
+            timeout_total = timeout_adapter.timeout.total
+        finally:
+            await timeout_adapter.close()
+        passed = passed and timeout_total == 180
+        from ai_companion.gateway.cmd import build_memory_config_for_provider
+
+        class _Cfg:
+            models = {
+                "memory": {"embedding": "none"},
+                "mimo": {"max_context_tokens": 1048576},
+            }
+
+            def get_provider_config(self, provider: str) -> dict:
+                return self.models.get(provider, {})
+
+        mimo_memory_cfg = build_memory_config_for_provider(_Cfg(), "mimo")
+        mimo_model_context = mimo_memory_cfg["context"]["compressor"]["model_context"]
+        passed = passed and mimo_model_context == 1048576
         detail = (
             f"chunks={len(chunks)} selected={len(selected)} calls={model.calls} "
-            f"resume={manifest['chunks'].get('resume')}"
+            f"resume={manifest['chunks'].get('resume')} failure_raised={failure_raised} "
+            f"repair_calls={repair_model.calls} bad_shape_calls={bad_shape_model.calls} "
+            f"timeout_total={timeout_total} mimo_context={mimo_model_context}"
         )
         log = json.dumps(
             {
@@ -2290,12 +2523,23 @@ class SystemTestSuite:
                 "resolved_relative": str(resolved_relative),
                 "resolved_file_url": str(resolved_file_url),
                 "document": document.to_dict(),
+                "gbk_document": gbk_document.to_dict(),
                 "selected": [{"chunk": chunk.to_dict(), "targets": [t.bot_id for t in targets]} for chunk, targets in selected],
                 "manifest": manifest,
                 "model_calls": model.calls,
                 "profile": profile,
                 "bots_yaml": bots_yaml,
                 "run_log": run_log,
+                "fail_model_calls": fail_model.calls,
+                "failure_raised": failure_raised,
+                "fail_log": fail_log,
+                "repair_model_calls": repair_model.calls,
+                "repair_log": repair_log,
+                "invalid_json_files": [str(path) for path in invalid_json_files],
+                "bad_shape_model_calls": bad_shape_model.calls,
+                "bad_shape_log": bad_shape_log,
+                "timeout_total": timeout_total,
+                "mimo_model_context": mimo_model_context,
             },
             ensure_ascii=False,
             indent=2,

@@ -15,6 +15,15 @@ from .path_resolver import discover_bots, get_memory_db_path, project_bots_dir, 
 
 MASKED_SECRET = "********"
 
+PROVIDER_DEFAULTS = {
+    "minimax": {"base_url": "https://api.minimax.chat/v1", "model": "MiniMax-M2.7"},
+    "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
+    "claude": {"base_url": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-20250514"},
+    "mimo": {"base_url": "https://token-plan-cn.xiaomimimo.com/v1", "model": "mimo-v2.5-pro"},
+    "ollama": {"base_url": "http://localhost:11434", "model": "qwen2.5:7b"},
+    "custom": {"base_url": "", "model": ""},
+}
+
 
 WEB_CONFIG_SCHEMA = {
     "sections": [
@@ -25,7 +34,7 @@ WEB_CONFIG_SCHEMA = {
             "description": "控制所有 Bot 默认使用的模型 provider、模型名和采样参数。",
             "restart": "保存后新请求生效；运行中 Gateway 不需要重启。",
             "fields": {
-                "provider": "选择 MiniMax、OpenAI、Claude、Ollama 或自定义兼容接口。",
+                "provider": "选择 MiniMax、OpenAI、Claude、MiMo、Ollama 或自定义兼容接口。",
                 "api_key": "敏感字段。留空或保留掩码表示继续使用旧值。",
                 "base_url": "Provider API 基础地址；Ollama 通常是 http://localhost:11434/v1。",
                 "model": "具体模型名称，例如 gpt-4o、qwen2.5-14b。",
@@ -128,11 +137,13 @@ def is_masked_secret(value: str | None) -> bool:
 
 
 def public_model_config(model_cfg: dict) -> dict:
+    provider = model_cfg.get("provider", "minimax")
+    defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["minimax"])
     return {
-        "provider": model_cfg.get("provider", "minimax"),
+        "provider": provider,
         "api_key": mask_secret(model_cfg.get("api_key", "")),
-        "base_url": model_cfg.get("base_url", "https://api.minimax.chat/v1"),
-        "model": model_cfg.get("model", "MiniMax-M2.7"),
+        "base_url": model_cfg.get("base_url", defaults["base_url"]),
+        "model": model_cfg.get("model", defaults["model"]),
         "temperature": model_cfg.get("temperature", 0.7),
         "max_tokens": model_cfg.get("max_tokens", 2000),
     }
@@ -607,10 +618,11 @@ class ConfigAdminService:
         incoming_api_key = model_data.get("api_key")
         if _is_masked_or_empty(incoming_api_key):
             incoming_api_key = existing_provider.get("api_key", "")
+        defaults = PROVIDER_DEFAULTS.get(provider, {})
         models_data[provider] = {
             "api_key": incoming_api_key,
-            "base_url": model_data.get("base_url", existing_provider.get("base_url", "")),
-            "model": model_data.get("model", existing_provider.get("model", "")),
+            "base_url": model_data.get("base_url") or existing_provider.get("base_url") or defaults.get("base_url", ""),
+            "model": model_data.get("model") or existing_provider.get("model") or defaults.get("model", ""),
         }
         existing_global = dict(models_data.get("model", {}) if isinstance(models_data.get("model"), dict) else {})
         existing_global.update({
@@ -620,7 +632,7 @@ class ConfigAdminService:
         })
         models_data["model"] = existing_global
         _write_yaml(self.models_path, models_data)
-        if provider in {"minimax", "openai", "claude"} and not incoming_api_key:
+        if provider in {"minimax", "openai", "claude", "mimo"} and not incoming_api_key:
             warnings.append(f"{provider} 需要 API Key，当前保存后可能无法启动模型。")
         return warnings
 

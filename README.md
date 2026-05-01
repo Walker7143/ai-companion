@@ -6,7 +6,7 @@
 
 | 特性 | 说明 |
 |------|------|
-| **多模型支持** | MiniMax / OpenAI / Claude / Ollama / 自定义 API |
+| **多模型支持** | MiniMax / OpenAI / Claude / MiMo / Ollama / 自定义 API |
 | **独立人格** | 每个 Bot 有独特的性格、背景故事和说话风格（傲娇/活泼/温柔/高冷...） |
 | **智能记忆体系** | 工作记忆 + 用户模型 + 关系状态 + 情景记忆 + 用户理解文件，按意图召回而不是机械堆上下文 |
 | **本地向量嵌入** | 支持 sentence-transformers 本地向量语义召回，中文友好 |
@@ -28,7 +28,7 @@
 - **Python 3.11+**：后端和命令行工具需要。
 - **Git**：安装脚本会拉取项目代码。
 - **网络连接**：需要下载 Python 依赖、前端依赖和项目代码。
-- **一个模型来源**：MiniMax / OpenAI / Claude / Ollama / 自定义 API 任意一种即可。云端模型需要准备 API Key；Ollama 需要本机已启动 Ollama 服务。
+- **一个模型来源**：MiniMax / OpenAI / Claude / MiMo / Ollama / 自定义 API 任意一种即可。云端模型需要准备 API Key；Ollama 需要本机已启动 Ollama 服务。
 - **Node.js + npm（推荐）**：用于启动管理后台 Web UI。如果只想用纯 CLI，可以暂时不装；需要 Web UI 时再安装。
 
 依赖包不需要用户手动逐个安装，安装脚本和 `ai-companion setup` 会尽量自动处理。
@@ -105,6 +105,7 @@ ai_companion/
 │       ├── minimax_adapter.py  # MiniMax
 │       ├── openai_adapter.py   # OpenAI GPT
 │       ├── claude_adapter.py   # Anthropic Claude
+│       ├── mimo_adapter.py     # Xiaomi MiMo
 │       ├── ollama_adapter.py   # Ollama 本地
 │       └── custom_adapter.py   # 自定义 HTTP API
 ├── gateway/          # 消息网关
@@ -292,7 +293,7 @@ LifeScheduler 会自适应轮询，间隔为 `1-10` 秒之间；单次 `tick_dai
 ```yaml
 # 默认 provider
 model:
-  provider: "minimax"          # minimax | openai | claude | ollama | custom
+  provider: "minimax"          # minimax | openai | claude | mimo | ollama | custom
   temperature: 0.8
   max_tokens: 1024
 
@@ -301,23 +302,34 @@ minimax:
   api_key: "${MINIMAX_API_KEY}"
   base_url: "https://api.minimax.chat/v1"
   model: "MiniMax-M2.7"
+  max_context_tokens: 20000
 
 # OpenAI
 openai:
   api_key: "${OPENAI_API_KEY}"
   base_url: "https://api.openai.com/v1"
   model: "gpt-4o"
+  max_context_tokens: 20000
 
 # Claude
 claude:
   api_key: "${ANTHROPIC_API_KEY}"
   base_url: "https://api.anthropic.com/v1"
   model: "claude-sonnet-4-20250514"
+  max_context_tokens: 20000
+
+# Xiaomi MiMo
+mimo:
+  api_key: "${MIMO_API_KEY}"
+  base_url: "https://token-plan-cn.xiaomimimo.com/v1"
+  model: "mimo-v2.5-pro"
+  max_context_tokens: 1048576
 
 # Ollama (本地)
 ollama:
   base_url: "http://localhost:11434"
   model: "qwen2.5:7b"
+  max_context_tokens: 20000
 
 memory:
   embedding: "local"              # 启用本地向量嵌入
@@ -331,6 +343,7 @@ memory:
 
 ```bash
 export MINIMAX_API_KEY="your_key"
+export MIMO_API_KEY="your_key"
 export FEISHU_APP_ID="your_feishu_app_id"
 export FEISHU_APP_SECRET="your_feishu_app_secret"
 ```

@@ -34,6 +34,7 @@ def add_persona_parser(subparsers) -> None:
     )
     import_book.add_argument("--out", help="草稿输出目录，默认 ~/.ai-companion/imports/<book>-<timestamp>")
     import_book.add_argument("--provider", help="覆盖 models.yaml 中的默认模型 provider")
+    import_book.add_argument("--encoding", help="手动指定文本编码，例如 utf-8、gb18030、gbk；默认自动尝试常见编码")
     import_book.add_argument("--chunk-chars", type=int, default=6000, help="每个书籍分块字符数")
     import_book.add_argument("--overlap-chars", type=int, default=600, help="分块重叠字符数")
     import_book.add_argument("--merge-batch-chars", type=int, default=24000, help="角色档案合并批次字符上限")
@@ -41,6 +42,21 @@ def add_persona_parser(subparsers) -> None:
     import_book.add_argument("--requests-per-minute", type=float, default=0, help="独立限流：每分钟最多发起多少次 LLM 请求，0 表示不额外限制")
     import_book.add_argument("--retry-attempts", type=int, default=3, help="每次 LLM JSON 调用的最大尝试次数")
     import_book.add_argument("--retry-base-delay", type=float, default=2.0, help="失败重试基础等待秒数，按指数退避")
+    import_book.add_argument("--request-timeout", type=float, default=180.0, help="单次底层模型请求总超时秒数；导书长 prompt 默认 180 秒")
+    import_book.add_argument("--json-repair-attempts", type=int, default=1, help="JSON 解析失败时，尝试让模型修复返回内容的次数")
+    import_book.add_argument(
+        "--failure-policy",
+        choices=["exit", "wait-retry"],
+        default="exit",
+        help="LLM 重试耗尽后的策略：exit=退出任务，wait-retry=等待后继续重试",
+    )
+    import_book.add_argument(
+        "--failure-retry-delay",
+        type=float,
+        default=60.0,
+        help="failure-policy=wait-retry 时，两轮重试之间等待秒数",
+    )
+    import_book.add_argument("--quiet", action="store_true", help="不在终端实时打印 LLM 请求进度，只写 run.log")
     import_book.add_argument("--no-resume", action="store_true", help="禁用断点续跑，重新抽取所有选中分块")
     import_book.add_argument("--max-chunks", type=int, help="最多处理多少个命中分块，便于试跑")
     import_book.add_argument("--skip-alias-filter", action="store_true", help="不按角色名过滤，整本书所有分块都送入抽取")
@@ -62,7 +78,11 @@ def add_persona_parser(subparsers) -> None:
 
 def handle_persona_command(command: str | None, args: argparse.Namespace) -> None:
     if command == "import-book":
-        asyncio.run(_handle_import_book(args))
+        try:
+            asyncio.run(_handle_import_book(args))
+        except KeyboardInterrupt:
+            console.print("[yellow]任务已中断。已成功写入的分块会保留在草稿目录，下次使用同一个 --out 可断点续跑。[/yellow]")
+            raise SystemExit(130)
     elif command == "review":
         console.print(print_draft_summary(Path(args.draft_dir).expanduser().resolve()))
     elif command == "apply":
@@ -94,6 +114,7 @@ async def _handle_import_book(args: argparse.Namespace) -> None:
         book_path=book_path,
         characters=characters,
         output_dir=output_dir,
+        encoding=args.encoding,
         chunk_chars=args.chunk_chars,
         overlap_chars=args.overlap_chars,
         merge_batch_chars=args.merge_batch_chars,
@@ -101,6 +122,11 @@ async def _handle_import_book(args: argparse.Namespace) -> None:
         requests_per_minute=args.requests_per_minute,
         retry_attempts=args.retry_attempts,
         retry_base_delay_seconds=args.retry_base_delay,
+        request_timeout_seconds=args.request_timeout,
+        json_repair_attempts=args.json_repair_attempts,
+        failure_policy=args.failure_policy,
+        failure_retry_delay_seconds=args.failure_retry_delay,
+        quiet=args.quiet,
         resume=not args.no_resume,
         max_chunks=args.max_chunks,
         include_neighbor_chunks=not args.no_neighbor_chunks,
@@ -109,8 +135,10 @@ async def _handle_import_book(args: argparse.Namespace) -> None:
     )
 
     model = None
+    console.print(f"草稿目录: {output_dir}")
+    console.print("中断任务: 按 Ctrl+C。保留同一个 --out 重新运行可断点续跑。")
     if not args.plan_only:
-        model = _create_model(args.provider)
+        model = _create_model(args.provider, request_timeout=args.request_timeout)
     try:
         pipeline = PersonaImportPipeline(model=model, options=options)
         manifest = await pipeline.run()
@@ -135,7 +163,7 @@ def _default_output_dir(book_path: Path) -> Path:
     return Path.home() / ".ai-companion" / "imports" / f"{safe_stem}-{timestamp}"
 
 
-def _create_model(provider: str | None):
+def _create_model(provider: str | None, request_timeout: float | None = None):
     config = Config()
     model_cfg = config.get_model_config(provider)
     selected_provider = model_cfg.get("provider", provider or config.default_provider)
@@ -143,6 +171,7 @@ def _create_model(provider: str | None):
         "minimax": "MINIMAX_API_KEY",
         "openai": "OPENAI_API_KEY",
         "claude": "ANTHROPIC_API_KEY",
+        "mimo": "MIMO_API_KEY",
     }
     env_key = env_key_map.get(selected_provider)
     api_key = os.environ.get(env_key, "") if env_key else ""
@@ -151,6 +180,9 @@ def _create_model(provider: str | None):
 
     if env_key and (not api_key or str(api_key).startswith("${")):
         raise RuntimeError(f"{selected_provider} API Key 未配置，请设置 {env_key} 或运行 ai-companion setup")
+
+    if request_timeout and selected_provider in {"minimax", "openai", "claude", "mimo", "ollama", "custom"}:
+        model_cfg = {**model_cfg, "timeout": request_timeout}
 
     return ModelFactory.create_from_runtime_config(
         model_config=model_cfg,

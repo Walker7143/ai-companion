@@ -2,7 +2,30 @@ minimax:
   api_key: "${MINIMAX_API_KEY}"
   base_url: "https://api.minimax.chat/v1"
   model: "MiniMax-M2.7"
-  max_context_chars: 8000   # 模型上下文上限（字符数），超限触发压缩
+  max_context_tokens: 20000   # 模型上下文上限（token），超限触发压缩
+
+openai:
+  api_key: "${OPENAI_API_KEY}"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
+  max_context_tokens: 20000 # 模型上下文上限（token），超限触发压缩
+
+claude:
+  api_key: "${ANTHROPIC_API_KEY}"
+  base_url: "https://api.anthropic.com/v1"
+  model: "claude-sonnet-4-20250514"
+  max_context_tokens: 20000 # 模型上下文上限（token），超限触发压缩
+
+mimo:
+  api_key: "${MIMO_API_KEY}"
+  base_url: "https://token-plan-cn.xiaomimimo.com/v1"
+  model: "mimo-v2.5-pro"
+  max_context_tokens: 1048576 # 1M 上下文上限（token），超限触发压缩
+
+ollama:
+  base_url: "http://localhost:11434"
+  model: "qwen2.5:7b"
+  max_context_tokens: 20000 # 模型上下文上限（token），超限触发压缩
 
 memory:
   embedding: "none"          # "local" | "none"

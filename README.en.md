@@ -6,7 +6,7 @@ An open-source AI companion product supporting macOS / Linux / Windows. Each bot
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Model Support** | MiniMax / OpenAI / Claude / Ollama / Custom API |
+| **Multi-Model Support** | MiniMax / OpenAI / Claude / MiMo / Ollama / Custom API |
 | **Distinct Personalities** | Each Bot has unique character, backstory, and speaking style (tsundere / lively / gentle / aloof...) |
 | **Intelligent Memory System** | Working memory + User model + Relationship state + Episodic memory + User understanding file, retrieved by intent rather than dumping context |
 | **Local Vector Embedding** | Supports sentence-transformers for local semantic retrieval, Chinese-friendly |
@@ -28,7 +28,7 @@ Before running the installation commands, ensure you have:
 - **Python 3.11+**: Required for backend and CLI tools
 - **Git**: Installation scripts pull project code
 - **Network connection**: Required to download Python dependencies, frontend dependencies, and project code
-- **A model provider**: Any one of MiniMax / OpenAI / Claude / Ollama / Custom API. Cloud models require an API Key; Ollama requires a running local Ollama service
+- **A model provider**: Any one of MiniMax / OpenAI / Claude / MiMo / Ollama / Custom API. Cloud models require an API Key; Ollama requires a running local Ollama service
 - **Node.js + npm (recommended)**: For the admin web UI. Optional if using CLI only
 
 Dependencies are installed automatically by the installation script and `ai-companion setup`.
@@ -105,6 +105,7 @@ ai_companion/
 │       ├── minimax_adapter.py  # MiniMax
 │       ├── openai_adapter.py   # OpenAI GPT
 │       ├── claude_adapter.py   # Anthropic Claude
+│       ├── mimo_adapter.py     # Xiaomi MiMo
 │       ├── ollama_adapter.py   # Ollama local
 │       └── custom_adapter.py   # Custom HTTP API
 ├── gateway/          # Message gateway
@@ -292,7 +293,7 @@ LifeScheduler adapts polling interval between 1-10 seconds; single `tick_daily` 
 ```yaml
 # Default provider
 model:
-  provider: "minimax"          # minimax | openai | claude | ollama | custom
+  provider: "minimax"          # minimax | openai | claude | mimo | ollama | custom
   temperature: 0.8
   max_tokens: 1024
 
@@ -301,23 +302,34 @@ minimax:
   api_key: "${MINIMAX_API_KEY}"
   base_url: "https://api.minimax.chat/v1"
   model: "MiniMax-M2.7"
+  max_context_tokens: 20000
 
 # OpenAI
 openai:
   api_key: "${OPENAI_API_KEY}"
   base_url: "https://api.openai.com/v1"
   model: "gpt-4o"
+  max_context_tokens: 20000
 
 # Claude
 claude:
   api_key: "${ANTHROPIC_API_KEY}"
   base_url: "https://api.anthropic.com/v1"
   model: "claude-sonnet-4-20250514"
+  max_context_tokens: 20000
+
+# Xiaomi MiMo
+mimo:
+  api_key: "${MIMO_API_KEY}"
+  base_url: "https://token-plan-cn.xiaomimimo.com/v1"
+  model: "mimo-v2.5-pro"
+  max_context_tokens: 1048576
 
 # Ollama (local)
 ollama:
   base_url: "http://localhost:11434"
   model: "qwen2.5:7b"
+  max_context_tokens: 20000
 
 memory:
   embedding: "local"              # Enable local vector embedding
@@ -331,6 +343,7 @@ memory:
 
 ```bash
 export MINIMAX_API_KEY="your_key"
+export MIMO_API_KEY="your_key"
 export FEISHU_APP_ID="your_feishu_app_id"
 export FEISHU_APP_SECRET="your_feishu_app_secret"
 ```

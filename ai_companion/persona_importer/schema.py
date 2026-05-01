@@ -65,6 +65,7 @@ class BookDocument:
     title: str
     sections: list[BookSection]
     source_format: str
+    encoding: str | None = None
 
     @property
     def char_count(self) -> int:
@@ -75,6 +76,7 @@ class BookDocument:
             "path": str(self.path),
             "title": self.title,
             "source_format": self.source_format,
+            "encoding": self.encoding,
             "sections": len(self.sections),
             "chars": self.char_count,
         }
@@ -112,6 +114,7 @@ class ImportOptions:
     book_path: Path
     characters: list[CharacterTarget]
     output_dir: Path
+    encoding: str | None = None
     chunk_chars: int = 6000
     overlap_chars: int = 600
     merge_batch_chars: int = 24000
@@ -119,6 +122,11 @@ class ImportOptions:
     requests_per_minute: float = 0
     retry_attempts: int = 3
     retry_base_delay_seconds: float = 2.0
+    request_timeout_seconds: float | None = 180.0
+    json_repair_attempts: int = 1
+    failure_policy: str = "exit"
+    failure_retry_delay_seconds: float = 60.0
+    quiet: bool = False
     resume: bool = True
     max_chunks: int | None = None
     include_neighbor_chunks: bool = True

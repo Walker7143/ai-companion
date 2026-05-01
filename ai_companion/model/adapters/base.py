@@ -16,7 +16,7 @@ class ModelAdapter(ABC):
 
     @property
     def provider(self) -> str:
-        """提供商名称：minimax / openai / claude / ollama / custom"""
+        """提供商名称：minimax / openai / claude / mimo / ollama / custom"""
         return "unknown"
 
     @abstractmethod

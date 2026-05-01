@@ -62,7 +62,7 @@ cd ai-girl-friend
 > **最低要求**：只需一个 MiniMax API Key 即可运行
 - Python 3.11+（本地安装）
 - Docker（Docker 安装模式）
-- 至少一个模型 API Key (MiniMax / OpenAI / Claude / Ollama)
+- 至少一个模型 API Key (MiniMax / OpenAI / Claude / MiMo / Ollama)
 
 ### 1.3 首次配置向导
 
@@ -135,7 +135,7 @@ bots:
 ```yaml
 # 默认 provider
 model:
-  provider: "minimax"          # minimax | openai | claude | ollama | custom
+  provider: "minimax"          # minimax | openai | claude | mimo | ollama | custom
   temperature: 0.8            # 全局默认温度
   max_tokens: 1024            # 全局默认最大 token
 
@@ -144,23 +144,34 @@ minimax:
   api_key: "${MINIMAX_API_KEY}"
   base_url: "https://api.minimax.chat/v1"
   model: "MiniMax-M2.7"
+  max_context_tokens: 20000
 
 # OpenAI
 openai:
   api_key: "${OPENAI_API_KEY}"
   base_url: "https://api.openai.com/v1"
   model: "gpt-4o"
+  max_context_tokens: 20000
 
 # Claude
 claude:
   api_key: "${ANTHROPIC_API_KEY}"
   base_url: "https://api.anthropic.com/v1"
   model: "claude-sonnet-4-20250514"
+  max_context_tokens: 20000
+
+# Xiaomi MiMo
+mimo:
+  api_key: "${MIMO_API_KEY}"
+  base_url: "https://token-plan-cn.xiaomimimo.com/v1"
+  model: "mimo-v2.5-pro"
+  max_context_tokens: 1048576
 
 # Ollama (本地)
 ollama:
   base_url: "http://localhost:11434"
   model: "qwen2.5:7b"
+  max_context_tokens: 20000
 
 # 自定义模型
 custom:
@@ -176,6 +187,7 @@ custom:
 export MINIMAX_API_KEY="your_key"
 export OPENAI_API_KEY="your_key"
 export ANTHROPIC_API_KEY="your_key"
+export MIMO_API_KEY="your_key"
 ```
 
 ### 2.3 ModelFactory - 模型工厂
@@ -192,7 +204,7 @@ adapter = ModelFactory.create("minimax", api_key="...", model="MiniMax-M2.7")
 adapter = ModelFactory.create_from_config(config, provider="minimax")
 
 # 列出支持的 provider
-providers = ModelFactory.list_providers()  # ['minimax', 'openai', 'claude', 'ollama', 'custom']
+providers = ModelFactory.list_providers()  # ['minimax', 'openai', 'claude', 'mimo', 'ollama', 'custom']
 
 # 注册自定义适配器
 ModelFactory.register("my-model", MyCustomAdapter)
@@ -203,6 +215,7 @@ ModelFactory.register("my-model", MyCustomAdapter)
 | `minimax` | MiniMax API |
 | `openai` | OpenAI GPT 系列 |
 | `claude` | Anthropic Claude |
+| `mimo` | Xiaomi MiMo 大模型 |
 | `ollama` | Ollama 本地模型 |
 | `custom` | 自定义 HTTP API |
 
@@ -256,6 +269,7 @@ data_dir: "~/.ai-companion/data"
 export MINIMAX_API_KEY="your_key"
 export OPENAI_API_KEY="your_key"
 export ANTHROPIC_API_KEY="your_key"
+export MIMO_API_KEY="your_key"
 ```
 
 **飞书配置：**
@@ -1317,7 +1331,12 @@ models:
     api_key: "${MINIMAX_API_KEY}"
     base_url: "https://api.minimax.chat/v1"
     model: "MiniMax-Text-01"
-    max_context_chars: 8000  # 上下文上限，超限触发压缩
+    max_context_tokens: 20000  # 上下文上限（token），超限触发压缩
+  mimo:
+    api_key: "${MIMO_API_KEY}"
+    base_url: "https://token-plan-cn.xiaomimimo.com/v1"
+    model: "mimo-v2.5-pro"
+    max_context_tokens: 1048576  # 1M 上下文上限（token）
 
 # 记忆配置
 memory:

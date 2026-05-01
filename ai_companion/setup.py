@@ -479,34 +479,37 @@ async def run_setup():
     console.print("  1. MiniMax       - MiniMax API（默认，适合国内用户）")
     console.print("  2. OpenAI        - GPT 系列模型")
     console.print("  3. Claude       - Anthropic Claude 模型")
-    console.print("  4. Ollama        - 本地运行的大模型（如 qwen2.5）")
-    console.print("  5. 自定义        - 接入其他 API")
+    console.print("  4. MiMo          - 小米 MiMo 大模型")
+    console.print("  5. Ollama        - 本地运行的大模型（如 qwen2.5）")
+    console.print("  6. 自定义        - 接入其他 API")
 
     provider_choice_map = {
         "minimax": "1",
         "openai": "2",
         "claude": "3",
-        "ollama": "4",
-        "custom": "5",
+        "mimo": "4",
+        "ollama": "5",
+        "custom": "6",
     }
     if existing_config:
         console.print("[dim]发现现有模型配置；本步骤只会合并更新所选 provider，其他 provider/memory 配置会保留[/dim]")
 
     model_choice = Prompt.ask(
         "\n请选择模型来源",
-        choices=["1", "2", "3", "4", "5"],
+        choices=["1", "2", "3", "4", "5", "6"],
         default=provider_choice_map.get(existing_provider, "1")
     )
 
     model_map = {
-        "1": ("minimax", "MiniMax", "abab6.5s-chat", "https://api.minimax.chat/v1"),
-        "2": ("openai", "OpenAI", "gpt-4o", "https://api.openai.com/v1"),
-        "3": ("claude", "Claude", "claude-3-opus-20240229", "https://api.anthropic.com/v1"),
-        "4": ("ollama", "Ollama (本地)", "qwen2.5-14b", "http://localhost:11434/v1"),
-        "5": ("custom", "自定义", "", ""),
+        "1": ("minimax", "MiniMax", "abab6.5s-chat", "https://api.minimax.chat/v1", 20000),
+        "2": ("openai", "OpenAI", "gpt-4o", "https://api.openai.com/v1", 20000),
+        "3": ("claude", "Claude", "claude-3-opus-20240229", "https://api.anthropic.com/v1", 20000),
+        "4": ("mimo", "MiMo", "mimo-v2.5-pro", "https://token-plan-cn.xiaomimimo.com/v1", 1048576),
+        "5": ("ollama", "Ollama (本地)", "qwen2.5-14b", "http://localhost:11434/v1", 20000),
+        "6": ("custom", "自定义", "", "", 20000),
     }
 
-    provider_key, provider_name, default_model, default_url = model_map[model_choice]
+    provider_key, provider_name, default_model, default_url, default_context_tokens = model_map[model_choice]
     console.print(f"选择: [green]{provider_name}[/green]")
 
     existing_api_key = existing_config.get(provider_key, {}).get("api_key", "") if isinstance(existing_config.get(provider_key), dict) else existing_config.get("api_key", "")
@@ -529,7 +532,7 @@ async def run_setup():
     else:
         console.print("[dim]Ollama 默认不需要 API Key[/dim]")
 
-    if model_choice == "5":
+    if model_choice == "6":
         custom_url = Prompt.ask("请输入 API URL", default=existing_base_url or "https://api.example.com/v1")
         custom_model = Prompt.ask("请输入模型名称", default=existing_model or "custom-model")
     else:
@@ -546,6 +549,12 @@ async def run_setup():
         provider_config["api_key"] = api_key
     provider_config["base_url"] = custom_url
     provider_config["model"] = custom_model
+    if "max_context_tokens" not in provider_config and "max_context_chars" in provider_config:
+        provider_config["max_context_tokens"] = provider_config.pop("max_context_chars")
+    elif "max_context_chars" in provider_config:
+        provider_config.pop("max_context_chars", None)
+    if default_context_tokens is not None:
+        provider_config.setdefault("max_context_tokens", default_context_tokens)
     models_config[provider_key] = provider_config
 
     _write_yaml_file(models_config_path, models_config)
@@ -831,6 +840,7 @@ async def run_setup():
             "minimax": "MINIMAX_API_KEY",
             "openai": "OPENAI_API_KEY",
             "claude": "ANTHROPIC_API_KEY",
+            "mimo": "MIMO_API_KEY",
         }.get(provider_key)
         if provider_env_key:
             if api_key.strip():

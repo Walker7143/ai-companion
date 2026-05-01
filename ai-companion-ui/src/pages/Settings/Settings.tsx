@@ -28,6 +28,7 @@ const providerOptions = [
   { value: 'minimax', label: 'MiniMax' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'claude', label: 'Claude' },
+  { value: 'mimo', label: 'MiMo' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'custom', label: '自定义' },
 ];

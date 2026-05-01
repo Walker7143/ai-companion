@@ -7,16 +7,30 @@ Model Factory - 模型适配器工厂
 import logging
 from typing import Optional, Type
 
+import aiohttp
+
 from .adapters import (
     ModelAdapter,
     MiniMaxAdapter,
     OpenAIAdapter,
     ClaudeAdapter,
+    MimoAdapter,
     OllamaAdapter,
     CustomAdapter,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_timeout(value) -> aiohttp.ClientTimeout:
+    """Accept config-friendly timeout values while adapters keep aiohttp types."""
+    if isinstance(value, aiohttp.ClientTimeout):
+        return value
+    if isinstance(value, dict):
+        allowed = {"total", "connect", "sock_connect", "sock_read"}
+        kwargs = {k: float(v) for k, v in value.items() if k in allowed and v is not None}
+        return aiohttp.ClientTimeout(**kwargs)
+    return aiohttp.ClientTimeout(total=float(value))
 
 
 class ModelFactory:
@@ -26,6 +40,7 @@ class ModelFactory:
         "minimax": MiniMaxAdapter,
         "openai": OpenAIAdapter,
         "claude": ClaudeAdapter,
+        "mimo": MimoAdapter,
         "ollama": OllamaAdapter,
         "custom": CustomAdapter,
     }
@@ -34,6 +49,7 @@ class ModelFactory:
         "minimax": {"api_key", "base_url", "model", "timeout"},
         "openai": {"api_key", "base_url", "model", "timeout"},
         "claude": {"api_key", "base_url", "model", "timeout"},
+        "mimo": {"api_key", "base_url", "model", "timeout", "auth_type"},
         "ollama": {"base_url", "model", "timeout"},
         "custom": {
             "api_url",
@@ -53,7 +69,7 @@ class ModelFactory:
         根据 provider 创建适配器实例
 
         Args:
-            provider: 提供商名称 (minimax / openai / claude / ollama / custom)
+            provider: 提供商名称 (minimax / openai / claude / mimo / ollama / custom)
             **kwargs: 传递给适配器的参数
 
         Returns:
@@ -113,9 +129,12 @@ class ModelFactory:
 
         # 添加 provider 特定参数
         params = dict(common_params)
+        metadata_keys = {"max_context_chars", "max_context_tokens"}
         for key, value in provider_config.items():
-            if key not in ("api_key", "base_url", "model") and value is not None:
+            if key not in ("api_key", "base_url", "model") and key not in metadata_keys and value is not None:
                 params[key] = value
+        if "timeout" in params:
+            params["timeout"] = _coerce_timeout(params["timeout"])
 
         logger.info(f"[ModelFactory] 创建 {provider} 适配器，模型: {params.get('model', 'unknown')}")
 
@@ -149,6 +168,8 @@ class ModelFactory:
 
         allowed = cls._RUNTIME_ALLOWED_KWARGS.get(provider, set(raw.keys()))
         kwargs = {k: v for k, v in raw.items() if k in allowed and v not in (None, "")}
+        if "timeout" in kwargs:
+            kwargs["timeout"] = _coerce_timeout(kwargs["timeout"])
         logger.info(f"[ModelFactory] 运行时创建 {provider} 适配器，参数: {sorted(kwargs.keys())}")
         return cls.create(provider, **kwargs)
 

@@ -21,6 +21,20 @@ def get_data_dir() -> Path:
     return Path(__file__).parent.parent.parent / "data" / "bots"
 
 
+def build_memory_config_for_provider(config: Config, provider: str) -> dict:
+    """Merge provider context metadata into memory compressor config."""
+    memory_config = dict(config.models.get("memory", {}) or {})
+    provider_config = config.get_provider_config(provider)
+    max_context_tokens = provider_config.get("max_context_tokens") or provider_config.get("max_context_chars")
+    if max_context_tokens:
+        context_cfg = dict(memory_config.get("context", {}) or {})
+        compressor_cfg = dict(context_cfg.get("compressor", {}) or {})
+        compressor_cfg.setdefault("model_context", int(max_context_tokens))
+        context_cfg["compressor"] = compressor_cfg
+        memory_config["context"] = context_cfg
+    return memory_config
+
+
 async def main(bot_filter: str = None):
     """主启动函数"""
     # 先加载配置，便于按 bot 名称分日志文件
@@ -47,6 +61,7 @@ async def main(bot_filter: str = None):
         "minimax": "MINIMAX_API_KEY",
         "openai": "OPENAI_API_KEY",
         "claude": "ANTHROPIC_API_KEY",
+        "mimo": "MIMO_API_KEY",
     }
     env_key = env_key_map.get(provider)
     api_key = os.environ.get(env_key, "") if env_key else ""
@@ -77,7 +92,7 @@ async def main(bot_filter: str = None):
     bot_manager = BotManager()
 
     # 加载 memory 配置
-    memory_config = config.models.get("memory", {})
+    memory_config = build_memory_config_for_provider(config, provider)
 
     # 加载所有启用的 Bot
     data_dir = get_data_dir()

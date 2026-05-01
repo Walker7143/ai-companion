@@ -10,6 +10,18 @@ from xml.etree import ElementTree
 from .schema import BookDocument, BookSection
 
 
+TEXT_ENCODING_CANDIDATES = (
+    "utf-8-sig",
+    "utf-8",
+    "gb18030",
+    "gbk",
+    "big5",
+    "utf-16",
+    "utf-16-le",
+    "utf-16-be",
+)
+
+
 class _HTMLTextExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -32,24 +44,25 @@ class _HTMLTextExtractor(HTMLParser):
         return normalize_text("".join(self._parts))
 
 
-def load_book(path: Path) -> BookDocument:
+def load_book(path: Path, *, encoding: str | None = None) -> BookDocument:
     path = Path(path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"找不到书籍文件: {path}")
 
     suffix = path.suffix.lower()
     if suffix in {".txt", ".md", ".markdown"}:
-        text = path.read_text(encoding="utf-8-sig")
-        return _document_from_text(path, text, suffix.lstrip("."))
+        text, used_encoding = _read_text_file(path, encoding=encoding)
+        return _document_from_text(path, text, suffix.lstrip("."), encoding=used_encoding)
     if suffix in {".html", ".htm", ".xhtml"}:
-        text = _html_to_text(path.read_text(encoding="utf-8", errors="ignore"))
-        return _document_from_text(path, text, suffix.lstrip("."))
+        raw, used_encoding = _read_text_file(path, encoding=encoding)
+        text = _html_to_text(raw)
+        return _document_from_text(path, text, suffix.lstrip("."), encoding=used_encoding)
     if suffix == ".epub":
         text = _read_epub(path)
-        return _document_from_text(path, text, "epub")
+        return _document_from_text(path, text, "epub", encoding="epub-html")
     if suffix == ".pdf":
         text = _read_pdf(path)
-        return _document_from_text(path, text, "pdf")
+        return _document_from_text(path, text, "pdf", encoding="pdf-extract")
 
     raise ValueError(f"暂不支持的书籍格式: {suffix or path.name}")
 
@@ -61,7 +74,31 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-def _document_from_text(path: Path, text: str, source_format: str) -> BookDocument:
+def _read_text_file(path: Path, *, encoding: str | None = None) -> tuple[str, str]:
+    candidates = [encoding] if encoding else list(TEXT_ENCODING_CANDIDATES)
+    errors: list[str] = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return path.read_text(encoding=candidate), candidate
+        except UnicodeDecodeError as exc:
+            errors.append(f"{candidate}: {exc}")
+        except LookupError as exc:
+            raise ValueError(f"未知文本编码: {candidate}") from exc
+
+    # Last-resort decode keeps the import usable and makes the chosen fallback
+    # visible in manifest.json for review.
+    if encoding:
+        detail = "; ".join(errors[-3:]) if errors else "no decoder details"
+        raise ValueError(f"无法按指定编码 {encoding} 读取文件: {path}。{detail}")
+    raw = path.read_bytes()
+    if not raw:
+        return "", "binary-empty"
+    return raw.decode("gb18030", errors="replace"), "gb18030-replace"
+
+
+def _document_from_text(path: Path, text: str, source_format: str, *, encoding: str | None = None) -> BookDocument:
     text = normalize_text(text)
     if not text:
         raise ValueError(f"书籍文件没有可读取文本: {path}")
@@ -71,6 +108,7 @@ def _document_from_text(path: Path, text: str, source_format: str) -> BookDocume
         title=path.stem,
         sections=sections,
         source_format=source_format,
+        encoding=encoding,
     )
 
 

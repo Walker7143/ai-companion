@@ -100,8 +100,8 @@ class MiniMaxAdapter(ModelAdapter):
                     await asyncio.sleep(wait_time)
                 continue
 
-        # 所有重试都失败后，返回错误信息由调用者处理
-        raise RuntimeError(f"网络不稳定，MiniMax 请求失败（已重试 {MAX_RETRIES} 次）")
+        # 所有重试都失败后，保留真实异常，避免长任务只能看到泛化提示。
+        raise RuntimeError(f"网络不稳定，MiniMax 请求失败（已重试 {MAX_RETRIES} 次），最后错误: {last_error!r}")
 
     async def embeddings(self, texts: list[str], type: str = "db") -> list[list[float]]:
         """
