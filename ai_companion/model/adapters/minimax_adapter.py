@@ -4,6 +4,7 @@ MiniMax 模型适配器
 
 import aiohttp
 import asyncio
+import json
 import logging
 from typing import Optional
 
@@ -14,6 +15,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
 MAX_RETRIES = 3
 RETRY_BACKOFF = [1, 2, 4]  # seconds
+
+
+def _summarize_response_payload(data: object, max_chars: int = 600) -> str:
+    """Return a compact response snippet for diagnostics without crashing."""
+    try:
+        text = json.dumps(data, ensure_ascii=False)
+    except Exception:
+        text = repr(data)
+    if len(text) > max_chars:
+        return text[:max_chars] + "...[truncated]"
+    return text
 
 
 class MiniMaxAdapter(ModelAdapter):
@@ -83,15 +95,11 @@ class MiniMaxAdapter(ModelAdapter):
                     if resp.status != 200:
                         text = await resp.text()
                         raise RuntimeError(f"MiniMax API error {resp.status}: {text}")
-                    data = await resp.json()
-                    choice = data["choices"][0]["message"]
-                    # MiniMax-M2.7:
-                    # content = 实际回复（发给用户的话）
-                    # reasoning_content = 内部推理过程（角色内心独白等）
-                    # 优先用 content，reasoning_content 仅在 content 为空时降级使用
-                    ct = choice.get("content") or ""
-                    rc = choice.get("reasoning_content") or ""
-                    return ct if ct.strip() else rc
+                    try:
+                        data = await resp.json()
+                    except Exception as exc:
+                        raise RuntimeError(f"MiniMax API returned invalid JSON: {exc}") from exc
+                    return self._parse_chat_response(data)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_error = e
                 if attempt < MAX_RETRIES - 1:
@@ -102,6 +110,45 @@ class MiniMaxAdapter(ModelAdapter):
 
         # 所有重试都失败后，保留真实异常，避免长任务只能看到泛化提示。
         raise RuntimeError(f"网络不稳定，MiniMax 请求失败（已重试 {MAX_RETRIES} 次），最后错误: {last_error!r}")
+
+    @staticmethod
+    def _parse_chat_response(data: object) -> str:
+        """Parse MiniMax chat response and convert malformed success bodies to RuntimeError."""
+        if not isinstance(data, dict):
+            raise RuntimeError(f"MiniMax API returned invalid chat response: expected object, got {type(data).__name__}")
+
+        base_resp = data.get("base_resp")
+        if isinstance(base_resp, dict):
+            status_code = base_resp.get("status_code")
+            if status_code not in (None, 0, "0"):
+                status_msg = base_resp.get("status_msg") or base_resp.get("message") or "unknown error"
+                raise RuntimeError(f"MiniMax API error {status_code}: {status_msg}")
+
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            snippet = _summarize_response_payload(data)
+            raise RuntimeError(f"MiniMax API returned invalid chat response: missing choices[0].message; payload={snippet}")
+
+        first_choice = choices[0]
+        if not isinstance(first_choice, dict):
+            raise RuntimeError(
+                "MiniMax API returned invalid chat response: choices[0] is not an object"
+            )
+
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            snippet = _summarize_response_payload(data)
+            raise RuntimeError(f"MiniMax API returned invalid chat response: missing choices[0].message; payload={snippet}")
+
+        # MiniMax-M2.7:
+        # content = 实际回复（发给用户的话）
+        # reasoning_content = 内部推理过程（角色内心独白等）
+        # 优先用 content，reasoning_content 仅在 content 为空时降级使用
+        content = message.get("content") or ""
+        reasoning_content = message.get("reasoning_content") or ""
+        content = content if isinstance(content, str) else str(content)
+        reasoning_content = reasoning_content if isinstance(reasoning_content, str) else str(reasoning_content)
+        return content if content.strip() else reasoning_content
 
     async def embeddings(self, texts: list[str], type: str = "db") -> list[list[float]]:
         """

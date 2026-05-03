@@ -538,6 +538,9 @@ class BotInstance:
         except RuntimeError as e:
             logger.error(f"[BotInstance] 对话失败: {e}")
             return None
+        except Exception as e:
+            logger.exception("[BotInstance] 对话异常: %s", e)
+            return None
 
     def _check_emotion_trigger(self, user_input: str) -> bool:
         """检查是否触发了情绪关键词"""

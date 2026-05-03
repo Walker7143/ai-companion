@@ -1461,7 +1461,7 @@ async def run_gateway(daemon: bool = True):
                     response = await bot.handle_message(event.text)
                     return response
                 except Exception as e:
-                    logger.error(f"处理消息失败: {e}")
+                    logger.exception("处理消息失败: %s", e)
                     return f"处理失败: {e}"
 
             return feishu_message_handler
