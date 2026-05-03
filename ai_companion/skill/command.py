@@ -19,6 +19,10 @@ _ENABLE_WORDS = ("enable", "启用", "开启")
 _DISABLE_WORDS = ("disable", "禁用", "关闭")
 _LIST_WORDS = ("list", "ls", "查看", "列出", "有哪些", "技能列表")
 _INFO_WORDS = ("info", "详情", "信息")
+_SENSITIVE_TOKEN_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"(?i)(?:api[_ -]?key|secret|token|密钥|令牌)\s*(?:是|=|:|：)?\s*[A-Za-z0-9][A-Za-z0-9_-]{23,}"),
+)
 
 
 def is_skill_command(text: str) -> bool:
@@ -26,8 +30,23 @@ def is_skill_command(text: str) -> bool:
     return (
         stripped == "/skills"
         or stripped.startswith("/skill ")
-        or parse_skill_management_command(stripped) is not None
+        or is_skill_management_command(stripped)
     )
+
+
+def is_skill_management_command(text: str) -> bool:
+    return parse_skill_management_command(text) is not None
+
+
+def contains_sensitive_token(text: str) -> bool:
+    return any(pattern.search(text or "") for pattern in _SENSITIVE_TOKEN_PATTERNS)
+
+
+def redact_sensitive_tokens(text: str) -> str:
+    redacted = text or ""
+    for pattern in _SENSITIVE_TOKEN_PATTERNS:
+        redacted = pattern.sub("[REDACTED_SECRET]", redacted)
+    return redacted
 
 
 def parse_skill_management_command(text: str) -> tuple[str, dict[str, Any]] | None:
@@ -47,6 +66,10 @@ def parse_skill_management_command(text: str) -> tuple[str, dict[str, Any]] | No
         parts = shlex.split(stripped)
         if len(parts) >= 2 and parts[1].lower() in {"install", "uninstall", "remove", "enable", "disable", "list", "ls", "info"}:
             return _parse_management_tokens(parts[1:])
+        rest = stripped[len("/skill"):].strip()
+        if _looks_like_bare_install_source(rest):
+            source = _extract_source(stripped)
+            return ("install", {"source": source, "force": _has_force(stripped)})
         return None
 
     if "skill" not in lowered and "技能" not in stripped:
@@ -144,6 +167,9 @@ async def execute_skill_command(
     registry: SkillRegistry | None = None,
 ) -> str:
     management = parse_skill_management_command(text)
+    if contains_sensitive_token(text):
+        source = management[1].get("source") if management else None
+        return _format_sensitive_skill_command_warning(source)
     if management:
         return execute_skill_management_command(management[0], management[1], registry, dispatcher)
 
@@ -308,10 +334,10 @@ def _parse_flags(tokens: list[str]) -> dict[str, Any]:
 
 
 def _install_source(installer: SkillInstaller, source: str, name: str | None = None, force: bool = False) -> dict | None:
+    if source.endswith(".git") or source.startswith(("git@", "ssh://")) or _is_github_repo_url(source):
+        return installer.install_from_git(source, name=name, force=force)
     if source.startswith(("http://", "https://")):
         return installer.install_from_url(source, name=name, force=force)
-    if source.endswith(".git") or source.startswith(("git@", "ssh://")):
-        return installer.install_from_git(source, name=name, force=force)
     return installer.install_from_path(source, name=name, force=force)
 
 
@@ -337,17 +363,73 @@ def _has_force(text: str) -> bool:
 
 
 def _extract_source(text: str) -> str:
+    github_shorthand = re.search(
+        r"(?i)\bgithub\s*-\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?::|\s|$)",
+        text,
+    )
+    if github_shorthand:
+        return f"https://github.com/{github_shorthand.group(1)}.git"
+
+    github_url = re.search(
+        r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?",
+        text,
+    )
+    if github_url:
+        return _normalize_github_repo_url(github_url.group(0))
+
     candidates = re.findall(r'''(?:"([^"]+)"|'([^']+)'|(\S+))''', text)
-    tokens = [next(part for part in match if part) for match in candidates]
+    tokens = [_clean_source_token(next(part for part in match if part)) for match in candidates]
     for token in tokens:
         lowered = token.lower()
-        if lowered in {"install", "skill", "skills", "安装", "装", "技能", "这个", "一个", "帮我", "请", "一下"}:
+        if lowered in {"install", "skill", "skills", "安装", "装", "技能", "这个", "一个", "帮我", "请", "一下", "github", "-"}:
             continue
+        if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", token) and "github" in text.lower():
+            return f"https://github.com/{token}.git"
         if token.startswith(("./", "../", "/", "~", "http://", "https://", "git@", "ssh://")):
-            return token
+            return _normalize_github_repo_url(token)
         if lowered.endswith((".zip", ".tar.gz", ".tgz", ".git")):
             return token
     return ""
+
+
+def _format_sensitive_skill_command_warning(source: str | None) -> str:
+    lines = [
+        "检测到消息里包含疑似 API 密钥。为了账户安全，我不会用这条消息安装或执行技能。",
+        "请先在服务商后台撤销或轮换已暴露的密钥，然后重新发送不含密钥的安装命令。",
+    ]
+    if source:
+        lines.append(f"例如：/skill install {source}")
+    return "\n".join(lines)
+
+
+def _clean_source_token(token: str) -> str:
+    cleaned = token.strip()
+    return cleaned.strip(" \t\r\n，,。；;：:）)】]>")
+
+
+def _normalize_github_repo_url(source: str) -> str:
+    cleaned = _clean_source_token(source).rstrip("/")
+    if _is_github_repo_url(cleaned) and not cleaned.endswith(".git"):
+        return f"{cleaned}.git"
+    return cleaned
+
+
+def _is_github_repo_url(source: str) -> bool:
+    return bool(re.fullmatch(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?", source or ""))
+
+
+def _looks_like_bare_install_source(rest: str) -> bool:
+    if not rest:
+        return False
+    lowered = rest.lower()
+    if lowered.startswith(("github -", "github:", "github：")):
+        return True
+    first = _clean_source_token(shlex.split(rest)[0] if rest else "")
+    if first.startswith(("./", "../", "/", "~", "git@", "ssh://")):
+        return True
+    if first.startswith(("http://", "https://")):
+        return first.endswith((".zip", ".tar.gz", ".tgz", ".git")) or _is_github_repo_url(first)
+    return first.endswith((".zip", ".tar.gz", ".tgz", ".git"))
 
 
 def _extract_name_after_action(text: str, actions: tuple[str, ...]) -> str:

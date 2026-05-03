@@ -16,7 +16,13 @@ from ..proactive.life_engine import LifeEngine
 from ..proactive.life_scheduler import LifeScheduler
 from ..skill import SkillDispatcher, SkillRegistry, ImageGenerationSkill, TTSSkill, MultimodalSender, create_channel
 from ..skill.base import SkillContext
-from ..skill.command import execute_skill_command, is_skill_command
+from ..skill.command import (
+    contains_sensitive_token,
+    execute_skill_command,
+    is_skill_command,
+    is_skill_management_command,
+    redact_sensitive_tokens,
+)
 from .response_style import ResponseStylePolisher
 
 if TYPE_CHECKING:
@@ -422,6 +428,11 @@ class BotInstance:
         # 0. 用户发消息了，通知主动唤醒系统
         self.proactive_engine.on_user_message_received()
 
+        if is_skill_management_command(user_input):
+            response = await self._handle_skill_command(user_input)
+            self._record_skill_command_history(user_input, response)
+            return response
+
         # 1. 拒绝检查（如果启用）
         relationship_state = None
         if self.memory:
@@ -450,8 +461,7 @@ class BotInstance:
 
         if is_skill_command(user_input):
             response = await self._handle_skill_command(user_input)
-            self.conversation_history.append({"role": "user", "content": user_input})
-            self.conversation_history.append({"role": "assistant", "content": response})
+            self._record_skill_command_history(user_input, response)
             return response
 
         # 3. 情绪触发检测
@@ -507,6 +517,11 @@ class BotInstance:
             personality_tags=self.persona.profile.get("personality_tags", []) if self.persona else [],
         )
         return await execute_skill_command(self.skill_dispatcher, user_input, context, self.skill_registry)
+
+    def _record_skill_command_history(self, user_input: str, response: str) -> None:
+        history_input = redact_sensitive_tokens(user_input) if contains_sensitive_token(user_input) else user_input
+        self.conversation_history.append({"role": "user", "content": history_input})
+        self.conversation_history.append({"role": "assistant", "content": response})
 
     def _polish_response(self, response: str, memory_context: dict | None, relationship_state: dict | None) -> str:
         return self.response_polisher.polish(

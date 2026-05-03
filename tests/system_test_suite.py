@@ -341,7 +341,12 @@ class SystemTestSuite:
         return passed, detail, self._fmt_cmd_output(cmd, rc, out, err, to)
 
     def case_skill_registry_and_command(self) -> tuple[bool, str, str]:
-        from ai_companion.skill.command import execute_skill_command
+        from ai_companion.skill.command import (
+            contains_sensitive_token,
+            execute_skill_command,
+            parse_skill_management_command,
+            redact_sensitive_tokens,
+        )
         from ai_companion.skill.registry import SkillRegistry
         from ai_companion.skill.dispatcher import SkillDispatcher
         from ai_companion.skill.base import SkillContext
@@ -402,14 +407,24 @@ class SystemTestSuite:
             )
             rejected = registry.register_skill(bad) is None
 
-            passed = bool(installed) and bool(skill) and command_output == "hi" and rejected
-            detail = f"installed={bool(installed)} loaded={bool(skill)} rejected_bad_entry={rejected}"
+            github_parsed = parse_skill_management_command("/skill GitHub - MiniMax-AI/cli: Generate text")
+            github_ok = github_parsed == ("install", {"source": "https://github.com/MiniMax-AI/cli.git", "force": False})
+            secret_text = "帮我安装 skill ./demo 我的密钥是 sk-cp-" + ("A" * 32)
+            secret_ok = contains_sensitive_token(secret_text) and "sk-cp-" not in redact_sensitive_tokens(secret_text)
+
+            passed = bool(installed) and bool(skill) and command_output == "hi" and rejected and github_ok and secret_ok
+            detail = (
+                f"installed={bool(installed)} loaded={bool(skill)} rejected_bad_entry={rejected} "
+                f"github_parse={github_ok} secret_redact={secret_ok}"
+            )
             log = json.dumps(
                 {
                     "installed": installed,
                     "command_output": command_output,
                     "installed_dir": str(registry.skills_dir),
                     "bad_rejected": rejected,
+                    "github_parsed": github_parsed,
+                    "secret_ok": secret_ok,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -452,13 +467,44 @@ class SystemTestSuite:
             encoding="utf-8",
         )
 
+        leaky_source = skill_root / "skill-leaky"
+        leaky_source.mkdir(parents=True, exist_ok=True)
+        (leaky_source / "skill.json").write_text(
+            json.dumps(
+                {
+                    "name": "leaky",
+                    "version": "1.0.0",
+                    "description": "Leaky install test",
+                    "entry": "leaky_skill.py",
+                    "enabled": True,
+                    "requirements": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (leaky_source / "leaky_skill.py").write_text(
+            "\n".join(
+                [
+                    "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
+                    "class LeakySkill(Skill):",
+                    "    name = 'leaky'",
+                    "    description = 'Leaky install test'",
+                    "    capabilities = ['leaky']",
+                    "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
+                    "        return SkillResult(success=True, content='leaky-ok')",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
         old_home = os.environ.get("AI_COMPANION_HOME")
         os.environ["AI_COMPANION_HOME"] = str(skill_home)
         bot = BotInstance(
             {"id": "aiyue", "name": "爱月", "description": "", "data_dir": str(self.root / "data" / "bots")},
             model=FakeModel(),
             memory_config=None,
-            refusal_enabled=False,
+            refusal_enabled=True,
         )
         try:
             await bot.init(start_schedulers=False)
@@ -466,19 +512,31 @@ class SystemTestSuite:
             install_reply = await bot.handle_message(f"帮我安装 skill {source}")
             run_reply = await bot.handle_message("/skill natural")
             list_reply = await bot.handle_message("查看技能列表")
+            leaky_reply = await bot.handle_message(f"帮我安装 skill {leaky_source} 我的密钥是 sk-cp-{'A' * 32}")
+            leaky_run = await bot.handle_message("/skill leaky")
+            history_text = "\n".join(item.get("content", "") for item in bot.conversation_history)
             passed = (
                 "Skill Error" in before
                 and "技能已安装：natural" in install_reply
                 and run_reply == "natural-ok"
                 and "natural" in list_reply
+                and "疑似 API 密钥" in leaky_reply
+                and "Skill Error" in leaky_run
+                and "sk-cp-" not in history_text
             )
-            detail = f"installed={'技能已安装：natural' in install_reply} run={run_reply}"
+            detail = (
+                f"installed={'技能已安装：natural' in install_reply} run={run_reply} "
+                f"secret_blocked={'疑似 API 密钥' in leaky_reply}"
+            )
             log = json.dumps(
                 {
                     "before": before,
                     "install_reply": install_reply,
                     "run_reply": run_reply,
                     "list_reply": list_reply,
+                    "leaky_reply": leaky_reply,
+                    "leaky_run": leaky_run,
+                    "history_contains_secret": "sk-cp-" in history_text,
                     "home": str(skill_home),
                 },
                 ensure_ascii=False,
