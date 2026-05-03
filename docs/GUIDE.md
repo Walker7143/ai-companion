@@ -1585,6 +1585,7 @@ platforms:
 
 ```bash
 ai-companion skill list
+ai-companion skill list --json
 ```
 
 ### 8.2 安装技能
@@ -1595,6 +1596,9 @@ ai-companion skill install ./my-skill
 
 # 从 URL 安装
 ai-companion skill install https://example.com/skill.zip
+
+# 覆盖同名技能
+ai-companion skill install ./my-skill --force
 ```
 
 ### 8.3 卸载技能
@@ -1603,7 +1607,26 @@ ai-companion skill install https://example.com/skill.zip
 ai-companion skill uninstall my-skill
 ```
 
-### 8.4 技能包结构
+### 8.4 执行技能
+
+命令行直接执行：
+
+```bash
+ai-companion skill run my-skill '{"text":"你好"}'
+ai-companion skill run my-skill text=你好
+```
+
+对话中显式执行：
+
+```text
+/skills
+/skill my-skill {"text":"你好"}
+/skill my-skill 你好
+帮我安装 skill ./my-skill
+查看技能列表
+```
+
+### 8.5 技能包结构
 
 ```
 skill-my-skill/
@@ -1621,6 +1644,8 @@ skill-my-skill/
   "commands": ["/mycommand"]
 }
 ```
+
+默认技能目录位于 `~/.ai-companion/data/bots/_skills/`。旧版项目目录 `data/bots/_skills/` 中的技能会在默认运行时迁移到用户目录；设置 `AI_COMPANION_HOME` 时只使用该 home 下的数据，便于测试和多实例隔离。
 
 ---
 

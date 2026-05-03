@@ -32,6 +32,7 @@ def main():
     from ai_companion.main import show_status
     from ai_companion.bot.cli import handle_bot_command
     from ai_companion.persona_importer.cli import add_persona_parser, handle_persona_command
+    from ai_companion.cli.skill_cmd import create_skill_parser, run_skill_command
     from ai_companion.gateway import control
 
     parser = argparse.ArgumentParser(
@@ -91,6 +92,9 @@ def main():
     # persona 子命令
     add_persona_parser(subparsers)
 
+    # skill 子命令
+    create_skill_parser(subparsers)
+
     # model 子命令
     model_parser = subparsers.add_parser("model", help="模型管理")
     model_subparsers = model_parser.add_subparsers(dest="model_command")
@@ -126,6 +130,8 @@ def main():
         handle_bot_command(args.bot_command, args)
     elif args.command == "persona":
         handle_persona_command(args.persona_command, args)
+    elif args.command == "skill":
+        run_skill_command(sys.argv[2:])
     elif args.command == "model":
         if args.model_command == "test":
             print("测试模型连接...")

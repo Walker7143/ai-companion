@@ -4,22 +4,22 @@ SkillInstaller - 技能安装器
 负责从各种来源安装新的 Skills
 """
 
-import hashlib
 import json
 import logging
 import re
-import shutil
 import tempfile
+import tarfile
 import zipfile
 from pathlib import Path
 from typing import Optional
 
 import httpx
 
-from .base import Skill, SkillContext, SkillResult
 from .registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
+
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 
 
 class SkillInstaller:
@@ -28,7 +28,7 @@ class SkillInstaller:
     def __init__(self, registry: SkillRegistry = None):
         self.registry = registry or SkillRegistry()
 
-    def install_from_path(self, skill_path: Path, name: str = None) -> Optional[dict]:
+    def install_from_path(self, skill_path: Path, name: str = None, force: bool = False) -> Optional[dict]:
         """
         从本地路径安装 Skill
 
@@ -46,35 +46,32 @@ class SkillInstaller:
             return None
 
         # 处理压缩包
-        if skill_path.suffix in (".zip", ".tar.gz", ".tgz"):
-            return self._install_from_archive(skill_path)
+        if self._is_archive(skill_path):
+            return self._install_from_archive(skill_path, name=name, force=force)
 
         # 处理目录
         if skill_path.is_dir():
-            return self._install_from_dir(skill_path, name)
+            return self._install_from_dir(skill_path, force_name=name, force=force)
 
         logger.error(f"[SkillInstaller] 不支持的路径类型: {skill_path}")
         return None
 
-    def _install_from_archive(self, archive_path: Path) -> Optional[dict]:
+    def _install_from_archive(self, archive_path: Path, name: str = None, force: bool = False) -> Optional[dict]:
         """从压缩包安装"""
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmp_path = Path(tmpdir)
 
                 # 解压
-                if archive_path.suffix == ".zip":
-                    with zipfile.ZipFile(archive_path, 'r') as zf:
-                        zf.extractall(tmp_path)
-                else:
-                    import tarfile
-                    with tarfile.open(archive_path, 'r:gz') as tf:
-                        tf.extractall(tmp_path)
+                self._extract_archive_safely(archive_path, tmp_path)
 
                 # 查找 skill-* 目录
                 for item in tmp_path.iterdir():
                     if item.is_dir() and item.name.startswith("skill-"):
-                        return self._install_from_dir(item)
+                        return self._install_from_dir(item, force_name=name, force=force)
+
+                if (tmp_path / "skill.json").exists():
+                    return self._install_from_dir(tmp_path, force_name=name, force=force)
 
                 # 如果压缩包内容没有 skill- 前缀，尝试用父目录名
                 for item in tmp_path.iterdir():
@@ -83,7 +80,7 @@ class SkillInstaller:
                         new_name = f"skill-{item.name}"
                         new_path = tmp_path / new_name
                         item.rename(new_path)
-                        return self._install_from_dir(new_path)
+                        return self._install_from_dir(new_path, force_name=name, force=force)
 
                 logger.error(f"[SkillInstaller] 压缩包中未找到技能目录: {archive_path}")
                 return None
@@ -92,7 +89,7 @@ class SkillInstaller:
             logger.error(f"[SkillInstaller] 解压失败 {archive_path}: {e}")
             return None
 
-    def _install_from_dir(self, skill_dir: Path, force_name: str = None) -> Optional[dict]:
+    def _install_from_dir(self, skill_dir: Path, force_name: str = None, force: bool = False) -> Optional[dict]:
         """从目录安装"""
         skill_json = skill_dir / "skill.json"
 
@@ -109,9 +106,7 @@ class SkillInstaller:
                 name = skill_dir.name
                 metadata["name"] = name
 
-            # 验证名称格式
-            if not name.startswith("skill-"):
-                name = f"skill-{name}"
+            if force_name:
                 metadata["name"] = name
 
             # 检查依赖
@@ -121,7 +116,7 @@ class SkillInstaller:
                     logger.warning(f"[SkillInstaller] 依赖未满足: {requirements}")
 
             # 使用 registry 注册
-            result = self.registry.register_skill(skill_dir)
+            result = self.registry.register_skill(skill_dir, force=force, name=force_name)
             if result:
                 logger.info(f"[SkillInstaller] 安装成功: {name}")
                 return result
@@ -132,7 +127,7 @@ class SkillInstaller:
             logger.error(f"[SkillInstaller] 读取元数据失败 {skill_dir}: {e}")
             return None
 
-    def install_from_url(self, url: str, name: str = None) -> Optional[dict]:
+    def install_from_url(self, url: str, name: str = None, force: bool = False) -> Optional[dict]:
         """
         从 URL 安装 Skill
 
@@ -163,9 +158,14 @@ class SkillInstaller:
                     content_disposition = resp.headers.get("content-disposition", "")
                     filename = self._extract_filename(content_disposition, url) or "skill.zip"
 
-                    archive_path = tmp_path / filename
+                    archive_path = tmp_path / Path(filename).name
+                    total = 0
                     with open(archive_path, "wb") as f:
                         for chunk in resp.iter_bytes(chunk_size=8192):
+                            total += len(chunk)
+                            if total > MAX_DOWNLOAD_BYTES:
+                                logger.error("[SkillInstaller] 下载文件超过大小限制")
+                                return None
                             f.write(chunk)
 
                 # 验证文件
@@ -174,7 +174,7 @@ class SkillInstaller:
                     return None
 
                 # 安装
-                return self.install_from_path(archive_path, name)
+                return self.install_from_path(archive_path, name, force=force)
 
         except Exception as e:
             logger.error(f"[SkillInstaller] 下载失败 {url}: {e}")
@@ -203,8 +203,8 @@ class SkillInstaller:
                 with zipfile.ZipFile(archive_path, 'r') as zf:
                     return zf.testzip() is None
             else:
-                import tarfile
                 with tarfile.open(archive_path, 'r:gz') as tf:
+                    tf.getmembers()
                     return True
         except Exception as e:
             logger.error(f"[SkillInstaller] 验证失败: {e}")
@@ -229,7 +229,7 @@ class SkillInstaller:
             return False
         return True
 
-    def install_from_git(self, git_url: str, name: str = None) -> Optional[dict]:
+    def install_from_git(self, git_url: str, name: str = None, force: bool = False) -> Optional[dict]:
         """
         从 Git 仓库安装 Skill
 
@@ -268,10 +268,10 @@ class SkillInstaller:
                 # 查找 skill-* 目录
                 for item in tmp_path.iterdir():
                     if item.is_dir() and item.name.startswith("skill-"):
-                        return self._install_from_dir(item, name)
+                        return self._install_from_dir(item, force_name=name, force=force)
 
                 # 尝试直接安装
-                return self._install_from_dir(tmp_path, name)
+                return self._install_from_dir(tmp_path, force_name=name, force=force)
 
         except Exception as e:
             logger.error(f"[SkillInstaller] git 安装失败: {e}")
@@ -290,3 +290,30 @@ class SkillInstaller:
             技能目录路径或 None
         """
         return self.registry.create_skill_package(name, description, author)
+
+    def _is_archive(self, path: Path) -> bool:
+        return path.suffix == ".zip" or path.name.endswith((".tar.gz", ".tgz"))
+
+    def _extract_archive_safely(self, archive_path: Path, dest_dir: Path):
+        dest_root = dest_dir.resolve()
+
+        def validate_target(member_name: str):
+            target = (dest_dir / member_name).resolve()
+            try:
+                target.relative_to(dest_root)
+            except ValueError as exc:
+                raise ValueError(f"压缩包包含越界路径: {member_name}") from exc
+
+        if archive_path.suffix == ".zip":
+            with zipfile.ZipFile(archive_path, 'r') as zf:
+                for member in zf.infolist():
+                    validate_target(member.filename)
+                zf.extractall(dest_dir)
+            return
+
+        with tarfile.open(archive_path, 'r:gz') as tf:
+            for member in tf.getmembers():
+                validate_target(member.name)
+                if member.issym() or member.islnk():
+                    raise ValueError(f"压缩包不允许包含链接: {member.name}")
+            tf.extractall(dest_dir)

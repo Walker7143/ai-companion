@@ -72,7 +72,7 @@ class SkillDispatcher:
             result = await skill.execute(params, context)
             return result
         except Exception as e:
-            logger.error(f"[SkillDispatcher] 技能执行失败: {skill_name}, error={e}")
+            logger.exception(f"[SkillDispatcher] 技能执行失败: {skill_name}, error={e}")
             return SkillResult(success=False, content=str(e), content_type="error")
 
     async def execute_by_capability(

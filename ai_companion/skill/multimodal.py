@@ -98,7 +98,10 @@ class MultimodalSender:
 
         result = await self.skill_dispatcher.execute(
             skill_name,
-            {"prompt": prompt_or_description},
+            {
+                "prompt": prompt_or_description,
+                **{k: v for k, v in kwargs.items() if k not in {"user_id", "personality_tags", "caption", "image_path"}},
+            },
             context
         )
 
@@ -135,7 +138,11 @@ class MultimodalSender:
 
         result = await self.skill_dispatcher.execute(
             skill_name,
-            {"text": text, "model": kwargs.get("tts_model", "edge_tts")},
+            {
+                "text": text,
+                "model": kwargs.get("tts_model", kwargs.get("model", "edge_tts")),
+                **{k: v for k, v in kwargs.items() if k not in {"user_id", "personality_tags", "caption", "audio_path", "tts_model"}},
+            },
             context
         )
 

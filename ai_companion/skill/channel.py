@@ -134,7 +134,7 @@ class FeishuChannel(Channel):
 
     name = "feishu"
     capability = ChannelCapability(
-        supported_types=["text", "image", "voice", "card"],
+        supported_types=["text", "card"],
         max_message_length=4000,
     )
 

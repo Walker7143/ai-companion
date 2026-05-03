@@ -6,26 +6,35 @@ SkillRegistry - 技能注册中心
 
 import json
 import logging
+import re
+import shutil
+import tarfile
+import zipfile
 from pathlib import Path
 from typing import Optional
 import importlib.util
+import os
 import sys
 
-from .base import Skill, SkillInfo
+from ..paths import get_user_skills_dir
+from .base import Skill
 
 logger = logging.getLogger(__name__)
+
+_VALID_SKILL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 class SkillRegistry:
     """技能注册中心"""
 
     def __init__(self, skills_dir: Path = None):
+        default_dir = skills_dir is None
         if skills_dir is None:
-            # 默认使用 data/bots/_skills 目录
-            skills_dir = Path(__file__).parent.parent.parent / "data" / "bots" / "_skills"
+            skills_dir = get_user_skills_dir()
 
-        self.skills_dir = skills_dir
+        self.skills_dir = Path(skills_dir).expanduser()
         self.skills_dir.mkdir(parents=True, exist_ok=True)
+        self._legacy_dirs = self._get_legacy_skill_dirs() if default_dir and not os.environ.get("AI_COMPANION_HOME") else []
 
         # 已安装的 Skills 元数据缓存
         self._installed: dict[str, dict] = {}
@@ -37,37 +46,61 @@ class SkillRegistry:
 
     def _load_installed(self):
         """从 skills_dir 加载已安装的 Skills 元数据"""
-        if not self.skills_dir.exists():
-            return
+        for root in self._iter_discovery_dirs():
+            if not root.exists():
+                continue
+            for skill_path in root.iterdir():
+                self._load_skill_metadata(skill_path, migrate_to_user=(root != self.skills_dir))
 
-        for skill_path in self.skills_dir.iterdir():
+    def _iter_discovery_dirs(self) -> list[Path]:
+        """Return discovery dirs, with user dir scanned last so it wins."""
+        dirs: list[Path] = []
+        seen: set[Path] = set()
+        for path in [*self._legacy_dirs, self.skills_dir]:
+            resolved = path.expanduser().resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                dirs.append(path)
+        return dirs
+
+    def _get_legacy_skill_dirs(self) -> list[Path]:
+        project_root = Path(__file__).resolve().parents[2]
+        package_root = Path(__file__).resolve().parents[1]
+        return [
+            project_root / "data" / "bots" / "_skills",
+            package_root / "data" / "bots" / "_skills",
+        ]
+
+    def _load_skill_metadata(self, skill_path: Path, migrate_to_user: bool = False):
+        """Load one skill directory into the installed index."""
+        try:
             if not skill_path.is_dir():
-                continue
+                return
             if not skill_path.name.startswith("skill-"):
-                continue
+                return
 
             skill_json = skill_path / "skill.json"
             if not skill_json.exists():
-                continue
+                return
 
-            try:
-                with open(skill_json, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
+            with open(skill_json, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
 
-                name = metadata.get("name", skill_path.name)
-                self._installed[name] = {
-                    "name": name,
-                    "version": metadata.get("version", "1.0.0"),
-                    "description": metadata.get("description", ""),
-                    "author": metadata.get("author", ""),
-                    "path": str(skill_path),
-                    "entry": metadata.get("entry", ""),
-                    "enabled": metadata.get("enabled", True),
-                    "requirements": metadata.get("requirements", []),
-                }
-                logger.info(f"[SkillRegistry] 加载技能: {name}")
-            except Exception as e:
-                logger.warning(f"[SkillRegistry] 加载技能失败 {skill_path}: {e}")
+            normalized = self._normalize_metadata(metadata, skill_path)
+            if not normalized:
+                return
+            name = normalized["name"]
+            if migrate_to_user:
+                dest_dir = self.skills_dir / self._directory_name_for(name)
+                if not dest_dir.exists():
+                    shutil.copytree(skill_path, dest_dir, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                    self._write_metadata(dest_dir / "skill.json", normalized)
+                skill_path = dest_dir
+            normalized["path"] = str(skill_path)
+            self._installed[name] = normalized
+            logger.info(f"[SkillRegistry] 加载技能: {name}")
+        except Exception as e:
+            logger.warning(f"[SkillRegistry] 加载技能失败 {skill_path}: {e}")
 
     def list_installed(self) -> list[dict]:
         """列出所有已安装的 Skills"""
@@ -75,15 +108,16 @@ class SkillRegistry:
 
     def get_info(self, name: str) -> Optional[dict]:
         """获取指定 Skill 的元数据"""
-        return self._installed.get(name)
+        return self._installed.get(self._resolve_name(name))
 
     def is_enabled(self, name: str) -> bool:
         """检查 Skill 是否启用"""
-        info = self._installed.get(name)
+        info = self._installed.get(self._resolve_name(name))
         return info.get("enabled", True) if info else False
 
     def enable(self, name: str):
         """启用指定 Skill"""
+        name = self._resolve_name(name)
         if name not in self._installed:
             return False
 
@@ -94,6 +128,7 @@ class SkillRegistry:
 
     def disable(self, name: str):
         """禁用指定 Skill"""
+        name = self._resolve_name(name)
         if name not in self._installed:
             return False
 
@@ -102,31 +137,9 @@ class SkillRegistry:
         logger.info(f"[SkillRegistry] 禁用技能: {name}")
         return True
 
-    def _save_skill_json(self, name: str):
-        """保存 Skill 元数据到 skill.json"""
-        info = self._installed.get(name)
-        if not info:
-            return
-
-        skill_path = Path(info["path"])
-        skill_json = skill_path / "skill.json"
-
-        try:
-            with open(skill_json, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "name": info["name"],
-                    "version": info["version"],
-                    "description": info["description"],
-                    "author": info["author"],
-                    "entry": info["entry"],
-                    "enabled": info["enabled"],
-                    "requirements": info.get("requirements", []),
-                }, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"[SkillRegistry] 保存技能元数据失败 {name}: {e}")
-
     def load_skill(self, name: str) -> Optional[Skill]:
         """加载 Skill 实例"""
+        name = self._resolve_name(name)
         if name in self._cache:
             return self._cache[name]
 
@@ -135,14 +148,17 @@ class SkillRegistry:
             return None
 
         skill_path = Path(info["path"])
-        entry_file = skill_path / info.get("entry", "")
+        entry_file = self._resolve_entry_file(skill_path, info.get("entry", ""))
+        if entry_file is None:
+            logger.error(f"[SkillRegistry] 技能入口文件非法: {name}")
+            return None
         if not entry_file.exists():
             logger.error(f"[SkillRegistry] 技能入口文件不存在: {entry_file}")
             return None
 
         try:
             # 动态导入模块
-            module_name = f"skill_{name}"
+            module_name = f"ai_companion_skill_{self._module_safe_name(name)}"
             spec = importlib.util.spec_from_file_location(module_name, entry_file)
             if not spec or not spec.loader:
                 logger.error(f"[SkillRegistry] 无法加载模块: {entry_file}")
@@ -165,7 +181,7 @@ class SkillRegistry:
                 return None
 
             # 创建实例
-            skill_instance = skill_class()
+            skill_instance = skill_class(info.get("config", {}))
             self._cache[name] = skill_instance
             logger.info(f"[SkillRegistry] 加载技能实例: {name}")
             return skill_instance
@@ -174,30 +190,32 @@ class SkillRegistry:
             logger.error(f"[SkillRegistry] 加载技能失败 {name}: {e}")
             return None
 
-    def register_skill(self, skill_path: Path) -> Optional[dict]:
+    def register_skill(self, skill_path: Path, force: bool = False, name: str = None) -> Optional[dict]:
         """注册一个新 Skill（从路径）"""
+        skill_path = Path(skill_path).expanduser()
         if not skill_path.exists():
             return None
 
         # 如果是压缩包，先解压
-        if skill_path.suffix in (".zip", ".tar.gz", ".tgz"):
+        if self._is_archive(skill_path):
             import tempfile
             with tempfile.TemporaryDirectory() as tmpdir:
-                import shutil
-                shutil.extractall(tmpdir, skill_path)
+                self._extract_archive_safely(skill_path, Path(tmpdir))
                 # 假设解压后是 skill-name 目录
                 extracted = Path(tmpdir)
                 for item in extracted.iterdir():
                     if item.is_dir() and item.name.startswith("skill-"):
-                        return self._register_from_dir(item)
+                        return self._register_from_dir(item, force=force, force_name=name)
+                if (extracted / "skill.json").exists():
+                    return self._register_from_dir(extracted, force=force, force_name=name)
 
         # 如果是目录，直接注册
         if skill_path.is_dir():
-            return self._register_from_dir(skill_path)
+            return self._register_from_dir(skill_path, force=force, force_name=name)
 
         return None
 
-    def _register_from_dir(self, skill_dir: Path) -> Optional[dict]:
+    def _register_from_dir(self, skill_dir: Path, force: bool = False, force_name: str = None) -> Optional[dict]:
         """从目录注册 Skill"""
         skill_json = skill_dir / "skill.json"
         if not skill_json.exists():
@@ -208,27 +226,33 @@ class SkillRegistry:
             with open(skill_json, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
 
-            name = metadata.get("name")
-            if not name:
-                name = skill_dir.name
-                metadata["name"] = name
+            if force_name:
+                metadata["name"] = force_name
 
-            # 复制到 skills_dir
-            dest_dir = self.skills_dir / skill_dir.name
-            if dest_dir.exists():
-                logger.warning(f"[SkillRegistry] 技能已存在: {name}")
+            normalized = self._normalize_metadata(metadata, skill_dir)
+            if not normalized:
+                return None
 
-            import shutil
+            name = normalized["name"]
+            dest_dir = self.skills_dir / self._directory_name_for(name)
             if dest_dir.exists():
+                if not force and skill_dir.resolve() != dest_dir.resolve():
+                    logger.warning(f"[SkillRegistry] 技能已存在: {name}")
+                    return None
+
+            if dest_dir.exists() and skill_dir.resolve() != dest_dir.resolve():
                 shutil.rmtree(dest_dir)
-            shutil.copytree(skill_dir, dest_dir)
+            if skill_dir.resolve() != dest_dir.resolve():
+                shutil.copytree(skill_dir, dest_dir)
 
             # 更新元数据
-            metadata["path"] = str(dest_dir)
-            self._installed[name] = metadata
+            normalized["path"] = str(dest_dir)
+            self._write_metadata(dest_dir / "skill.json", normalized)
+            self._installed[name] = normalized
+            self._cache.pop(name, None)
 
             logger.info(f"[SkillRegistry] 注册技能: {name}")
-            return metadata
+            return normalized
 
         except Exception as e:
             logger.error(f"[SkillRegistry] 注册技能失败 {skill_dir}: {e}")
@@ -236,6 +260,7 @@ class SkillRegistry:
 
     def uninstall(self, name: str) -> bool:
         """卸载指定 Skill"""
+        name = self._resolve_name(name)
         if name not in self._installed:
             return False
 
@@ -249,7 +274,6 @@ class SkillRegistry:
 
             # 删除目录
             if skill_path.exists():
-                import shutil
                 shutil.rmtree(skill_path)
 
             # 从元数据移除
@@ -263,6 +287,10 @@ class SkillRegistry:
 
     def create_skill_package(self, name: str, description: str = "", author: str = "", version: str = "1.0.0") -> Path:
         """创建一个新的 Skill 包骨架"""
+        name = name.strip().removeprefix("skill-")
+        if not _VALID_SKILL_NAME.match(name):
+            raise ValueError(f"技能名称非法: {name!r}")
+
         skill_dir = self.skills_dir / f"skill-{name}"
         skill_dir.mkdir(parents=True, exist_ok=True)
 
@@ -315,3 +343,117 @@ def create_skill():
 
         logger.info(f"[SkillRegistry] 创建技能包: {skill_dir}")
         return skill_dir
+
+    def _resolve_name(self, name: str) -> str:
+        if name in self._installed:
+            return name
+        if name.startswith("skill-"):
+            stripped = name[len("skill-"):]
+            if stripped in self._installed:
+                return stripped
+        prefixed = f"skill-{name}"
+        if prefixed in self._installed:
+            return prefixed
+        return name
+
+    def _normalize_metadata(self, metadata: dict, skill_dir: Path) -> Optional[dict]:
+        if not isinstance(metadata, dict):
+            logger.error(f"[SkillRegistry] skill.json 必须是对象: {skill_dir}")
+            return None
+
+        name = str(metadata.get("name") or skill_dir.name.removeprefix("skill-")).strip()
+        if not name or not _VALID_SKILL_NAME.match(name):
+            logger.error(f"[SkillRegistry] 技能名称非法: {name!r}")
+            return None
+
+        entry = str(metadata.get("entry") or "").strip()
+        if not entry:
+            logger.error(f"[SkillRegistry] 技能缺少 entry: {name}")
+            return None
+
+        if self._resolve_entry_file(skill_dir, entry) is None:
+            logger.error(f"[SkillRegistry] 技能 entry 越界: {name} -> {entry}")
+            return None
+
+        requirements = metadata.get("requirements", [])
+        if requirements is None:
+            requirements = []
+        if not isinstance(requirements, list) or not all(isinstance(x, str) for x in requirements):
+            logger.error(f"[SkillRegistry] requirements 必须是字符串数组: {name}")
+            return None
+
+        normalized = dict(metadata)
+        normalized.update({
+            "name": name,
+            "version": str(metadata.get("version", "1.0.0")),
+            "description": str(metadata.get("description", "")),
+            "author": str(metadata.get("author", "")),
+            "entry": entry,
+            "enabled": bool(metadata.get("enabled", True)),
+            "requirements": requirements,
+        })
+        return normalized
+
+    def _write_metadata(self, skill_json: Path, metadata: dict):
+        data = dict(metadata)
+        data.pop("path", None)
+        with open(skill_json, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def _save_skill_json(self, name: str):
+        """保存 Skill 元数据到 skill.json"""
+        info = self._installed.get(name)
+        if not info:
+            return
+
+        skill_path = Path(info["path"])
+        skill_json = skill_path / "skill.json"
+
+        try:
+            self._write_metadata(skill_json, info)
+        except Exception as e:
+            logger.error(f"[SkillRegistry] 保存技能元数据失败 {name}: {e}")
+
+    def _resolve_entry_file(self, skill_path: Path, entry: str) -> Optional[Path]:
+        if not entry:
+            return None
+        root = skill_path.resolve()
+        try:
+            target = (skill_path / entry).resolve()
+            target.relative_to(root)
+        except ValueError:
+            return None
+        return target
+
+    def _directory_name_for(self, name: str) -> str:
+        return name if name.startswith("skill-") else f"skill-{name}"
+
+    def _module_safe_name(self, name: str) -> str:
+        return re.sub(r"\W+", "_", name)
+
+    def _is_archive(self, path: Path) -> bool:
+        return path.suffix == ".zip" or path.name.endswith((".tar.gz", ".tgz"))
+
+    def _extract_archive_safely(self, archive_path: Path, dest_dir: Path):
+        dest_root = dest_dir.resolve()
+
+        def validate_target(member_name: str):
+            target = (dest_dir / member_name).resolve()
+            try:
+                target.relative_to(dest_root)
+            except ValueError as exc:
+                raise ValueError(f"压缩包包含越界路径: {member_name}") from exc
+
+        if archive_path.suffix == ".zip":
+            with zipfile.ZipFile(archive_path, 'r') as zf:
+                for member in zf.infolist():
+                    validate_target(member.filename)
+                zf.extractall(dest_dir)
+            return
+
+        with tarfile.open(archive_path, 'r:gz') as tf:
+            for member in tf.getmembers():
+                validate_target(member.name)
+                if member.issym() or member.islnk():
+                    raise ValueError(f"压缩包不允许包含链接: {member.name}")
+            tf.extractall(dest_dir)

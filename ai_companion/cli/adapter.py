@@ -175,8 +175,8 @@ class CLIAdapter:
                     await self._safe_print("[dim]记忆引擎未启用[/dim]\n")
                 continue
 
-            bot = self.bot_manager.get_bot(self.current_bot_id)
             try:
+                bot = self.bot_manager.get_bot(self.current_bot_id)
                 response = await bot.handle_message(user_input)
                 sentences = SentenceSplitter.split(response)
                 if sentences:

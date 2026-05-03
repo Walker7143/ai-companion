@@ -5,6 +5,7 @@ Skill CLI Commands - 技能命令行接口
 """
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 from typing import Optional
@@ -14,6 +15,9 @@ from rich.table import Table
 
 from ..skill.registry import SkillRegistry
 from ..skill.installer import SkillInstaller
+from ..skill.base import SkillContext
+from ..skill.dispatcher import SkillDispatcher
+from ..skill.command import format_skill_result, parse_cli_params
 
 
 console = Console()
@@ -21,11 +25,14 @@ console = Console()
 
 def create_skill_parser(subparsers: argparse.Action = None) -> Optional[argparse.ArgumentParser]:
     """创建 skill 命令解析器"""
-    parser = argparse.ArgumentParser(
-        prog="skill",
-        description="技能管理命令",
-        add_help=False
-    )
+    if subparsers is not None:
+        parser = subparsers.add_parser("skill", help="技能管理")
+    else:
+        parser = argparse.ArgumentParser(
+            prog="skill",
+            description="技能管理命令",
+            add_help=False
+        )
 
     sub = parser.add_subparsers(dest="skill_action", help="技能操作")
 
@@ -65,6 +72,11 @@ def create_skill_parser(subparsers: argparse.Action = None) -> Optional[argparse
     # skill registry
     registry_parser = sub.add_parser("registry", help="显示技能注册表路径")
 
+    # skill run
+    run_parser = sub.add_parser("run", help="执行技能")
+    run_parser.add_argument("name", help="技能名称")
+    run_parser.add_argument("params", nargs=argparse.REMAINDER, help="JSON 对象或 key=value/text 参数")
+
     return parser
 
 
@@ -75,7 +87,7 @@ def cmd_skill_list(json_output: bool = False):
 
     if json_output:
         import json
-        console.print(json.dumps(skills, indent=2, ensure_ascii=False))
+        print(json.dumps(skills, indent=2, ensure_ascii=False))
         return
 
     if not skills:
@@ -138,13 +150,13 @@ def cmd_skill_install(source: str, name: str = None, force: bool = False):
     # 判断来源类型
     if source.startswith(("http://", "https://")):
         console.print(f"[cyan]从 URL 安装: {source}[/cyan]")
-        result = installer.install_from_url(source, name)
+        result = installer.install_from_url(source, name, force=force)
     elif source.endswith((".zip", ".tar.gz", ".tgz")):
         console.print(f"[cyan]从压缩包安装: {source}[/cyan]")
-        result = installer.install_from_path(Path(source), name)
+        result = installer.install_from_path(Path(source), name, force=force)
     elif Path(source).is_dir():
         console.print(f"[cyan]从目录安装: {source}[/cyan]")
-        result = installer.install_from_path(Path(source), name)
+        result = installer.install_from_path(Path(source), name, force=force)
     else:
         console.print(f"[red]不支持的来源类型: {source}[/red]")
         return
@@ -221,6 +233,44 @@ def cmd_skill_registry():
         console.print("[dim]目录不存在[/dim]")
 
 
+async def cmd_skill_run(name: str, raw_params: list[str]):
+    """执行技能"""
+    registry = SkillRegistry()
+    dispatcher = SkillDispatcher()
+
+    for info in registry.list_installed():
+        if not info.get("enabled", True):
+            continue
+        skill = registry.load_skill(info["name"])
+        if skill:
+            dispatcher.register(skill)
+
+    skill = dispatcher.get(name)
+    if not skill:
+        console.print(f"[red]技能不存在或未启用: {name}[/red]")
+        sys.exit(1)
+
+    try:
+        params = parse_cli_params(raw_params)
+    except Exception as exc:
+        console.print(f"[red]参数解析失败: {exc}[/red]")
+        sys.exit(1)
+
+    context = SkillContext(
+        bot_id="cli",
+        user_id="cli",
+        conversation_history=[],
+        personality_tags=[],
+    )
+    result = await dispatcher.execute(name, params, context)
+    output = format_skill_result(result)
+    if result.success:
+        console.print(output)
+    else:
+        console.print(f"[red]{output}[/red]")
+        sys.exit(1)
+
+
 def run_skill_command(args: list = None):
     """运行技能命令"""
     if args is None:
@@ -243,6 +293,7 @@ def run_skill_command(args: list = None):
             "disable": lambda: cmd_skill_disable(parsed.name),
             "create": lambda: cmd_skill_create(parsed.name, parsed.description, parsed.author),
             "registry": lambda: cmd_skill_registry(),
+            "run": lambda: asyncio.run(cmd_skill_run(parsed.name, parsed.params)),
         }[parsed.skill_action]()
     except KeyboardInterrupt:
         console.print("\n[dim]已取消[/dim]")

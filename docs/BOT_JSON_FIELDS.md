@@ -470,7 +470,7 @@ data/bots/{bot_id}/
 
 ## skill.json
 
-技能元数据，示例位置：`data/bots/_skills/{skill_name}/skill.json`。
+技能元数据，默认位置：`~/.ai-companion/data/bots/_skills/skill-{skill_name}/skill.json`。
 
 
 | 字段             | 类型            | 必填  | 说明           |

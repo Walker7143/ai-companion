@@ -189,6 +189,9 @@ class SystemTestSuite:
         self._run_case("T01", "CLI help", self.case_cli_help)
         self._run_case("T02", "CLI status", self.case_cli_status)
         self._run_case("T03", "CLI bot list", self.case_cli_bot_list)
+        self._run_case("T03b", "Skill CLI mounted", self.case_skill_cli_mounted)
+        self._run_case("T03c", "Skill registry install and command execution", self.case_skill_registry_and_command)
+        self._run_case("T03d", "Bot natural-language skill management", self.case_bot_natural_language_skill_management)
         self._run_case("T04", "Config loader", self.case_config_loader)
         self._run_case("T05", "ModelFactory provider registry", self.case_model_factory_registry)
         self._run_case("T05b", "MiMo adapter OpenAI-compatible request", self.case_mimo_adapter_request_contract)
@@ -324,6 +327,170 @@ class SystemTestSuite:
         passed = (rc == 0) and ("Bot" in out)
         detail = "bot list available" if passed else "bot list unavailable"
         return passed, detail, self._fmt_cmd_output(cmd, rc, out, err, to)
+
+    def case_skill_cli_mounted(self) -> tuple[bool, str, str]:
+        cmd = [str(self.python_bin), "-m", "ai_companion", "skill", "list", "--json"]
+        with tempfile.TemporaryDirectory(prefix="sys-test-skill-home-") as td:
+            rc, out, err, to = self._run_cmd(
+                cmd,
+                timeout=40,
+                env={"AI_COMPANION_HOME": td},
+            )
+        passed = (rc == 0) and out.strip().startswith("[")
+        detail = "skill CLI mounted" if passed else "skill CLI unavailable"
+        return passed, detail, self._fmt_cmd_output(cmd, rc, out, err, to)
+
+    def case_skill_registry_and_command(self) -> tuple[bool, str, str]:
+        from ai_companion.skill.command import execute_skill_command
+        from ai_companion.skill.registry import SkillRegistry
+        from ai_companion.skill.dispatcher import SkillDispatcher
+        from ai_companion.skill.base import SkillContext
+
+        async def run_command(dispatcher: SkillDispatcher) -> str:
+            return await execute_skill_command(
+                dispatcher,
+                "/skill echo {\"message\":\"hi\"}",
+                SkillContext(bot_id="test", user_id="user", conversation_history=[], personality_tags=[]),
+            )
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-skill-") as td:
+            root = Path(td)
+            registry = SkillRegistry(root / "installed")
+            source = root / "skill-echo"
+            source.mkdir()
+            (source / "skill.json").write_text(
+                json.dumps(
+                    {
+                        "name": "echo",
+                        "version": "1.0.0",
+                        "description": "Echo test",
+                        "entry": "echo_skill.py",
+                        "enabled": True,
+                        "requirements": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (source / "echo_skill.py").write_text(
+                "\n".join(
+                    [
+                        "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
+                        "class EchoSkill(Skill):",
+                        "    name = 'echo'",
+                        "    description = 'Echo test'",
+                        "    capabilities = ['echo']",
+                        "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
+                        "        return SkillResult(success=True, content=params.get('message') or params.get('input') or 'empty')",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            installed = registry.register_skill(source)
+            skill = registry.load_skill("echo")
+            dispatcher = SkillDispatcher()
+            if skill:
+                dispatcher.register(skill)
+            command_output = asyncio.run(run_command(dispatcher)) if skill else ""
+
+            bad = root / "skill-bad"
+            bad.mkdir()
+            (bad / "skill.json").write_text(
+                json.dumps({"name": "bad", "version": "1.0.0", "entry": "../escape.py"}),
+                encoding="utf-8",
+            )
+            rejected = registry.register_skill(bad) is None
+
+            passed = bool(installed) and bool(skill) and command_output == "hi" and rejected
+            detail = f"installed={bool(installed)} loaded={bool(skill)} rejected_bad_entry={rejected}"
+            log = json.dumps(
+                {
+                    "installed": installed,
+                    "command_output": command_output,
+                    "installed_dir": str(registry.skills_dir),
+                    "bad_rejected": rejected,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            return passed, detail, log
+
+    async def case_bot_natural_language_skill_management(self) -> tuple[bool, str, str]:
+        from ai_companion.bot.instance import BotInstance
+
+        skill_root = self.artifacts_dir / "skill-natural"
+        skill_home = self.artifacts_dir / "skill-natural-home"
+        source = skill_root / "skill-natural"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "skill.json").write_text(
+            json.dumps(
+                {
+                    "name": "natural",
+                    "version": "1.0.0",
+                    "description": "Natural install test",
+                    "entry": "natural_skill.py",
+                    "enabled": True,
+                    "requirements": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (source / "natural_skill.py").write_text(
+            "\n".join(
+                [
+                    "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
+                    "class NaturalSkill(Skill):",
+                    "    name = 'natural'",
+                    "    description = 'Natural install test'",
+                    "    capabilities = ['natural']",
+                    "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
+                    "        return SkillResult(success=True, content='natural-ok')",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        old_home = os.environ.get("AI_COMPANION_HOME")
+        os.environ["AI_COMPANION_HOME"] = str(skill_home)
+        bot = BotInstance(
+            {"id": "aiyue", "name": "爱月", "description": "", "data_dir": str(self.root / "data" / "bots")},
+            model=FakeModel(),
+            memory_config=None,
+            refusal_enabled=False,
+        )
+        try:
+            await bot.init(start_schedulers=False)
+            before = await bot.handle_message("/skill natural")
+            install_reply = await bot.handle_message(f"帮我安装 skill {source}")
+            run_reply = await bot.handle_message("/skill natural")
+            list_reply = await bot.handle_message("查看技能列表")
+            passed = (
+                "Skill Error" in before
+                and "技能已安装：natural" in install_reply
+                and run_reply == "natural-ok"
+                and "natural" in list_reply
+            )
+            detail = f"installed={'技能已安装：natural' in install_reply} run={run_reply}"
+            log = json.dumps(
+                {
+                    "before": before,
+                    "install_reply": install_reply,
+                    "run_reply": run_reply,
+                    "list_reply": list_reply,
+                    "home": str(skill_home),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            return passed, detail, log
+        finally:
+            await bot.close()
+            if old_home is None:
+                os.environ.pop("AI_COMPANION_HOME", None)
+            else:
+                os.environ["AI_COMPANION_HOME"] = old_home
 
     def case_config_loader(self) -> tuple[bool, str, str]:
         from ai_companion.config.loader import Config
@@ -526,6 +693,7 @@ class SystemTestSuite:
             try:
                 await bot.init()
                 reply = await bot.handle_message("system test ping")
+                skill_reply = await bot.handle_message("/skill hello")
                 await asyncio.sleep(0.6)
                 memory_status = await bot.memory.get_memory_status() if bot.memory else {}
                 life_loader_ok = getattr(bot.life_engine, "_persona_loader", None) is not None
@@ -558,7 +726,8 @@ class SystemTestSuite:
                 log = json.dumps(
                     {
                         "bot_id": bot.id,
-                        "reply": reply,
+                    "reply": reply,
+                    "skill_reply": skill_reply,
                         "memory_status": memory_status,
                         "proactive_running": proactive_running,
                         "life_running": life_running,

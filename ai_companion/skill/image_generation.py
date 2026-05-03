@@ -26,6 +26,8 @@ class ImageGenerationSkill(Skill):
         super().__init__(config)
         self.output_dir = Path(self.config.get("output_dir", "data/bots/_images"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        if not self.default_model:
+            self.default_model = self.config.get("model", "minimax")
 
     def _check_config(self) -> bool:
         """检查配置是否完整"""
@@ -40,7 +42,7 @@ class ImageGenerationSkill(Skill):
         if not prompt:
             return SkillResult(success=False, content="缺少 prompt 参数")
 
-        model = params.get("model", self.default_model)
+        model = params.get("model") or self.default_model or self.config.get("model", "minimax")
         if not model:
             return SkillResult(success=False, content="未指定模型且未配置默认模型")
 
@@ -110,10 +112,11 @@ class ImageGenerationSkill(Skill):
 
                     # 下载图片
                     async with session.get(image_url) as img_resp:
-                        if img_resp.status == 200:
-                            content = await img_resp.read()
-                            with open(output_file, 'wb') as f:
-                                f.write(content)
+                        if img_resp.status != 200:
+                            return SkillResult(success=False, content=f"下载图片失败: {img_resp.status}")
+                        content = await img_resp.read()
+                        with open(output_file, 'wb') as f:
+                            f.write(content)
 
                     logger.info(f"[ImageGenerationSkill] MiniMax 生成成功: {output_file}")
                     return SkillResult(

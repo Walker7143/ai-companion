@@ -27,6 +27,8 @@ class TTSSkill(Skill):
         super().__init__(config)
         self.output_dir = Path(self.config.get("output_dir", "data/bots/_audio"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        if not self.default_model:
+            self.default_model = self.config.get("model", "edge_tts")
 
     def _check_config(self) -> bool:
         model_type = self.default_model or self.config.get("model", "edge_tts")
@@ -303,18 +305,27 @@ class TTSSkill(Skill):
             output_file = self.output_dir / f"tts_{uuid.uuid4().hex[:8]}.mp3"
 
             async with aiohttp.ClientSession() as session:
+                raw_response = None
                 if method == "POST":
                     async with session.post(api_url, headers=headers, json=body) as resp:
                         if resp.status != 200:
                             error_text = await resp.text()
                             raise RuntimeError(f"{model_type} TTS API error {resp.status}: {error_text}")
-                        data = await resp.json()
+                        if response_type == "binary":
+                            raw_response = await resp.read()
+                            data = {}
+                        else:
+                            data = await resp.json()
                 else:
                     async with session.get(api_url, headers=headers) as resp:
                         if resp.status != 200:
                             error_text = await resp.text()
                             raise RuntimeError(f"{model_type} TTS API error {resp.status}: {error_text}")
-                        data = await resp.json()
+                        if response_type == "binary":
+                            raw_response = await resp.read()
+                            data = {}
+                        else:
+                            data = await resp.json()
 
                 # 解析音频数据
                 audio_data = None
@@ -336,7 +347,7 @@ class TTSSkill(Skill):
                         import base64
                         audio_data = base64.b64decode(audio_b64)
                 elif response_type == "binary":
-                    audio_data = await resp.read()
+                    audio_data = raw_response
 
                 if not audio_data:
                     return SkillResult(success=False, content=f"未获取到音频数据，response_type={response_type}")

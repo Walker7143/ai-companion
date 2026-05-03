@@ -15,6 +15,8 @@ from ..proactive.life_state import LifeState
 from ..proactive.life_engine import LifeEngine
 from ..proactive.life_scheduler import LifeScheduler
 from ..skill import SkillDispatcher, SkillRegistry, ImageGenerationSkill, TTSSkill, MultimodalSender, create_channel
+from ..skill.base import SkillContext
+from ..skill.command import execute_skill_command, is_skill_command
 from .response_style import ResponseStylePolisher
 
 if TYPE_CHECKING:
@@ -32,6 +34,7 @@ class BotInstance:
         self.id = config["id"]
         self.name = config["name"]
         self.description = config.get("description", "")
+        self.skill_config = config.get("skills", {}) if isinstance(config.get("skills", {}), dict) else {}
 
         # 解析 data_dir：优先使用参数，其次使用 config 中的值
         if data_dir is None and "data_dir" in config:
@@ -128,10 +131,13 @@ class BotInstance:
 
     def _register_skills(self):
         """注册可用技能（内置 + 已安装的）"""
+        image_config = dict(self.skill_config.get("image_generation", {}) or {})
+        tts_config = dict(self.skill_config.get("tts", {}) or {})
+
         # 图片生成技能
-        self.skill_dispatcher.register(ImageGenerationSkill())
+        self.skill_dispatcher.register(ImageGenerationSkill(image_config))
         # TTS 技能
-        self.skill_dispatcher.register(TTSSkill())
+        self.skill_dispatcher.register(TTSSkill(tts_config))
 
         # 从注册中心加载已安装的 Skills
         self.skill_registry = SkillRegistry()
@@ -442,6 +448,12 @@ class BotInstance:
         else:
             adjustment_note = ""
 
+        if is_skill_command(user_input):
+            response = await self._handle_skill_command(user_input)
+            self.conversation_history.append({"role": "user", "content": user_input})
+            self.conversation_history.append({"role": "assistant", "content": response})
+            return response
+
         # 3. 情绪触发检测
         emotion_triggered = self._check_emotion_trigger(user_input)
         if emotion_triggered:
@@ -486,6 +498,15 @@ class BotInstance:
         self.conversation_history.append({"role": "assistant", "content": response})
 
         return response
+
+    async def _handle_skill_command(self, user_input: str) -> str:
+        context = SkillContext(
+            bot_id=self.id,
+            user_id=getattr(self.memory, "user_id", "default_user") if self.memory else "default_user",
+            conversation_history=list(self.conversation_history),
+            personality_tags=self.persona.profile.get("personality_tags", []) if self.persona else [],
+        )
+        return await execute_skill_command(self.skill_dispatcher, user_input, context, self.skill_registry)
 
     def _polish_response(self, response: str, memory_context: dict | None, relationship_state: dict | None) -> str:
         return self.response_polisher.polish(
