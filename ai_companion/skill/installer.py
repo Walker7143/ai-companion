@@ -51,7 +51,7 @@ class SkillInstaller:
 
         # 处理目录
         if skill_path.is_dir():
-            return self._install_from_dir(skill_path, force_name=name, force=force)
+            return self._install_from_dir_or_nested(skill_path, force_name=name, force=force)
 
         logger.error(f"[SkillInstaller] 不支持的路径类型: {skill_path}")
         return None
@@ -65,13 +65,9 @@ class SkillInstaller:
                 # 解压
                 self._extract_archive_safely(archive_path, tmp_path)
 
-                # 查找 skill-* 目录
-                for item in tmp_path.iterdir():
-                    if item.is_dir() and item.name.startswith("skill-"):
-                        return self._install_from_dir(item, force_name=name, force=force)
-
-                if (tmp_path / "skill.json").exists():
-                    return self._install_from_dir(tmp_path, force_name=name, force=force)
+                result = self._install_from_dir_or_nested(tmp_path, force_name=name, force=force)
+                if result:
+                    return result
 
                 # 如果压缩包内容没有 skill- 前缀，尝试用父目录名
                 for item in tmp_path.iterdir():
@@ -93,17 +89,20 @@ class SkillInstaller:
         """从目录安装"""
         skill_json = skill_dir / "skill.json"
 
-        if not skill_json.exists():
-            logger.error(f"[SkillInstaller] skill.json 不存在: {skill_dir}")
+        if not skill_json.exists() and not (skill_dir / "SKILL.md").exists():
+            logger.error(f"[SkillInstaller] skill.json 或 SKILL.md 不存在: {skill_dir}")
             return None
 
         try:
-            with open(skill_json, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
+            if skill_json.exists():
+                with open(skill_json, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            else:
+                metadata = {}
 
             name = force_name or metadata.get("name")
             if not name:
-                name = skill_dir.name
+                name = self._name_from_skill_md(skill_dir) or skill_dir.name
                 metadata["name"] = name
 
             if force_name:
@@ -126,6 +125,52 @@ class SkillInstaller:
         except Exception as e:
             logger.error(f"[SkillInstaller] 读取元数据失败 {skill_dir}: {e}")
             return None
+
+    def _install_from_dir_or_nested(self, skill_dir: Path, force_name: str = None, force: bool = False) -> Optional[dict]:
+        if self._has_skill_manifest(skill_dir):
+            return self._install_from_dir(skill_dir, force_name=force_name, force=force)
+        nested = self._find_nested_skill_dir(skill_dir)
+        if nested:
+            return self._install_from_dir(nested, force_name=force_name, force=force)
+        logger.error(f"[SkillInstaller] skill.json 或 SKILL.md 不存在: {skill_dir}")
+        return None
+
+    def _has_skill_manifest(self, skill_dir: Path) -> bool:
+        return (skill_dir / "skill.json").exists() or (skill_dir / "SKILL.md").exists()
+
+    def _find_nested_skill_dir(self, root: Path) -> Optional[Path]:
+        direct = [item for item in root.iterdir() if item.is_dir()]
+        for item in direct:
+            if item.name.startswith("skill-") and self._has_skill_manifest(item):
+                return item
+        for item in direct:
+            if self._has_skill_manifest(item):
+                return item
+        skip = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
+        for manifest in [*root.rglob("skill.json"), *root.rglob("SKILL.md")]:
+            if any(part in skip for part in manifest.parts):
+                continue
+            return manifest.parent
+        return None
+
+    def _name_from_skill_md(self, skill_dir: Path) -> str:
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            return ""
+        try:
+            content = skill_md.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        if not content.startswith("---"):
+            return ""
+        match = re.search(r"\n---\s*\n", content[3:])
+        if not match:
+            return ""
+        block = content[3:match.start() + 3]
+        for line in block.splitlines():
+            if line.strip().startswith("name:"):
+                return line.split(":", 1)[1].strip().strip("\"'")
+        return ""
 
     def install_from_url(self, url: str, name: str = None, force: bool = False) -> Optional[dict]:
         """
@@ -265,13 +310,7 @@ class SkillInstaller:
                     logger.error(f"[SkillInstaller] git clone 失败: {result.stderr}")
                     return None
 
-                # 查找 skill-* 目录
-                for item in tmp_path.iterdir():
-                    if item.is_dir() and item.name.startswith("skill-"):
-                        return self._install_from_dir(item, force_name=name, force=force)
-
-                # 尝试直接安装
-                return self._install_from_dir(tmp_path, force_name=name, force=force)
+                return self._install_from_dir_or_nested(tmp_path, force_name=name, force=force)
 
         except Exception as e:
             logger.error(f"[SkillInstaller] git 安装失败: {e}")

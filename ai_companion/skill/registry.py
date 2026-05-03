@@ -18,6 +18,7 @@ import sys
 
 from ..paths import get_user_skills_dir
 from .base import Skill
+from .instruction import InstructionSkill
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,11 @@ class SkillRegistry:
         if entry_file is None:
             logger.error(f"[SkillRegistry] 技能入口文件非法: {name}")
             return None
+        if info.get("type") == "instruction" and entry_file.name == "SKILL.md":
+            skill_instance = InstructionSkill(self._runtime_config_for(name, info))
+            self._cache[name] = skill_instance
+            logger.info(f"[SkillRegistry] 加载指令型技能实例: {name}")
+            return skill_instance
         if not entry_file.exists():
             logger.error(f"[SkillRegistry] 技能入口文件不存在: {entry_file}")
             return None
@@ -181,7 +187,7 @@ class SkillRegistry:
                 return None
 
             # 创建实例
-            skill_instance = skill_class(info.get("config", {}))
+            skill_instance = skill_class(self._runtime_config_for(name, info))
             self._cache[name] = skill_instance
             logger.info(f"[SkillRegistry] 加载技能实例: {name}")
             return skill_instance
@@ -218,13 +224,16 @@ class SkillRegistry:
     def _register_from_dir(self, skill_dir: Path, force: bool = False, force_name: str = None) -> Optional[dict]:
         """从目录注册 Skill"""
         skill_json = skill_dir / "skill.json"
-        if not skill_json.exists():
-            logger.error(f"[SkillRegistry] skill.json 不存在: {skill_dir}")
-            return None
 
         try:
-            with open(skill_json, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
+            if skill_json.exists():
+                with open(skill_json, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+            else:
+                metadata = self._metadata_from_skill_md(skill_dir)
+                if metadata is None:
+                    logger.error(f"[SkillRegistry] skill.json 或 SKILL.md 不存在: {skill_dir}")
+                    return None
 
             if force_name:
                 metadata["name"] = force_name
@@ -256,7 +265,49 @@ class SkillRegistry:
 
         except Exception as e:
             logger.error(f"[SkillRegistry] 注册技能失败 {skill_dir}: {e}")
+        return None
+
+    def _metadata_from_skill_md(self, skill_dir: Path) -> Optional[dict]:
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
             return None
+        try:
+            content = skill_md.read_text(encoding="utf-8")
+        except OSError as e:
+            logger.error(f"[SkillRegistry] 读取 SKILL.md 失败 {skill_md}: {e}")
+            return None
+        frontmatter = self._parse_skill_md_frontmatter(content)
+        name = str(frontmatter.get("name") or skill_dir.name.removeprefix("skill-")).strip()
+        description = str(frontmatter.get("description") or "").strip()
+        return {
+            "name": name,
+            "version": str(frontmatter.get("version", "1.0.0")),
+            "description": description,
+            "author": str(frontmatter.get("author", "")),
+            "entry": "SKILL.md",
+            "enabled": True,
+            "requirements": [],
+            "type": "instruction",
+            "config": {"instruction_file": "SKILL.md"},
+        }
+
+    def _parse_skill_md_frontmatter(self, content: str) -> dict:
+        if not content.startswith("---"):
+            return {}
+        match = re.search(r"\n---\s*\n", content[3:])
+        if not match:
+            return {}
+        block = content[3:match.start() + 3]
+        data: dict[str, str] = {}
+        for line in block.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip().strip("\"'")
+            if key:
+                data[key] = value
+        return data
 
     def uninstall(self, name: str) -> bool:
         """卸载指定 Skill"""
@@ -283,6 +334,35 @@ class SkillRegistry:
 
         except Exception as e:
             logger.error(f"[SkillRegistry] 卸载技能失败 {name}: {e}")
+            return False
+
+    def save_skill_secrets(self, name: str, secrets: dict) -> bool:
+        """Save per-skill sensitive config outside skill.json."""
+        name = self._resolve_name(name or "")
+        if name not in self._installed:
+            return False
+        cleaned = {str(k): str(v) for k, v in (secrets or {}).items() if k and v}
+        if not cleaned:
+            return False
+
+        info = self._installed[name]
+        existing = self._load_secret_config(info)
+        existing.update(cleaned)
+        path = self._secret_config_path(info)
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(existing, f, indent=2, ensure_ascii=False)
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+            self._cache.pop(name, None)
+            logger.info(f"[SkillRegistry] 保存技能敏感配置: {name}")
+            return True
+        except Exception as e:
+            logger.error(f"[SkillRegistry] 保存技能敏感配置失败 {name}: {e}")
             return False
 
     def create_skill_package(self, name: str, description: str = "", author: str = "", version: str = "1.0.0") -> Path:
@@ -413,6 +493,33 @@ def create_skill():
             self._write_metadata(skill_json, info)
         except Exception as e:
             logger.error(f"[SkillRegistry] 保存技能元数据失败 {name}: {e}")
+
+    def _runtime_config_for(self, name: str, info: dict) -> dict:
+        config = dict(info.get("config", {}) or {})
+        config["_metadata"] = {
+            key: value
+            for key, value in info.items()
+            if key not in {"config"}
+        }
+        secrets = self._load_secret_config(info)
+        if secrets:
+            config.update(secrets)
+        return config
+
+    def _secret_config_path(self, info: dict) -> Path:
+        return Path(info["path"]) / ".skill-secrets.json"
+
+    def _load_secret_config(self, info: dict) -> dict:
+        path = self._secret_config_path(info)
+        if not path.exists():
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning(f"[SkillRegistry] 读取技能敏感配置失败 {path}: {e}")
+            return {}
 
     def _resolve_entry_file(self, skill_path: Path, entry: str) -> Optional[Path]:
         if not entry:

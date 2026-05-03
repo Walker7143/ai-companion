@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
+import shutil
+from pathlib import Path
 from typing import Any
 
 from .base import SkillContext, SkillResult
@@ -19,8 +22,12 @@ _ENABLE_WORDS = ("enable", "启用", "开启")
 _DISABLE_WORDS = ("disable", "禁用", "关闭")
 _LIST_WORDS = ("list", "ls", "查看", "列出", "有哪些", "技能列表")
 _INFO_WORDS = ("info", "详情", "信息")
+_SK_TOKEN_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b")
+_NAMED_SECRET_PATTERN = re.compile(
+    r"(?i)(?:api[_ -]?key|secret|token|密钥|令牌)\s*(?:是|=|:|：)?\s*([A-Za-z0-9][A-Za-z0-9_-]{23,})"
+)
 _SENSITIVE_TOKEN_PATTERNS = (
-    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
+    _SK_TOKEN_PATTERN,
     re.compile(r"(?i)(?:api[_ -]?key|secret|token|密钥|令牌)\s*(?:是|=|:|：)?\s*[A-Za-z0-9][A-Za-z0-9_-]{23,}"),
 )
 
@@ -47,6 +54,19 @@ def redact_sensitive_tokens(text: str) -> str:
     for pattern in _SENSITIVE_TOKEN_PATTERNS:
         redacted = pattern.sub("[REDACTED_SECRET]", redacted)
     return redacted
+
+
+def extract_sensitive_config(text: str) -> dict[str, str]:
+    raw = text or ""
+    key = ""
+    sk_matches = _SK_TOKEN_PATTERN.findall(raw)
+    if sk_matches:
+        key = sk_matches[-1]
+    else:
+        named_matches = [match.group(1) for match in _NAMED_SECRET_PATTERN.finditer(raw)]
+        if named_matches:
+            key = named_matches[-1]
+    return {"api_key": key} if key else {}
 
 
 def parse_skill_management_command(text: str) -> tuple[str, dict[str, Any]] | None:
@@ -167,11 +187,14 @@ async def execute_skill_command(
     registry: SkillRegistry | None = None,
 ) -> str:
     management = parse_skill_management_command(text)
-    if contains_sensitive_token(text):
-        source = management[1].get("source") if management else None
-        return _format_sensitive_skill_command_warning(source)
     if management:
-        return execute_skill_management_command(management[0], management[1], registry, dispatcher)
+        return execute_skill_management_command(
+            management[0],
+            management[1],
+            registry,
+            dispatcher,
+            secret_config=extract_sensitive_config(text),
+        )
 
     skill_name, params = parse_skill_command(text)
     if skill_name in {"help", "list"}:
@@ -195,6 +218,7 @@ def execute_skill_management_command(
     params: dict[str, Any],
     registry: SkillRegistry | None = None,
     dispatcher: SkillDispatcher | None = None,
+    secret_config: dict[str, str] | None = None,
 ) -> str:
     registry = registry or SkillRegistry()
     action = action.lower()
@@ -210,8 +234,17 @@ def execute_skill_management_command(
         result = _install_source(installer, source, name=params.get("name"), force=bool(params.get("force")))
         if not result:
             return f"技能安装失败：{source}"
+        saved_secret = False
+        if secret_config:
+            saved_secret = registry.save_skill_secrets(result.get("name"), secret_config)
         _register_loaded_skill(dispatcher, registry, result.get("name"))
-        return f"技能已安装：{result.get('name')}，目录：{result.get('path')}"
+        setup_notes = _run_post_install_setup(result, secret_config)
+        reply = f"技能已安装：{result.get('name')}，目录：{result.get('path')}"
+        if saved_secret:
+            reply += "\n已保存该技能需要的密钥配置。"
+        if setup_notes:
+            reply += "\n" + "\n".join(setup_notes)
+        return reply
 
     if action in {"uninstall", "remove"}:
         name = params.get("name")
@@ -353,6 +386,58 @@ def _register_loaded_skill(
         dispatcher.register(skill)
 
 
+def _run_post_install_setup(result: dict, secret_config: dict[str, str] | None) -> list[str]:
+    name = str((result or {}).get("name") or "")
+    description = str((result or {}).get("description") or "")
+    api_key = (secret_config or {}).get("api_key", "")
+    if not api_key or not _looks_like_minimax_skill(name, description):
+        return []
+
+    notes: list[str] = []
+    if _write_minimax_cli_config(api_key):
+        notes.append("MiniMax CLI 本地认证配置已写入。")
+        if not shutil.which("mmx"):
+            notes.append("未检测到 mmx 命令；安装 mmx-cli 后会使用这份认证配置。")
+    else:
+        notes.append("MiniMax CLI 本地认证配置写入失败；密钥已保存在该技能配置中。")
+    return notes
+
+
+def _looks_like_minimax_skill(name: str, description: str) -> bool:
+    text = f"{name} {description}".lower()
+    return "mmx" in text or "minimax" in text
+
+
+def _write_minimax_cli_config(api_key: str) -> bool:
+    try:
+        config_dir = Path(os.environ.get("MMX_CONFIG_HOME") or Path.home() / ".mmx").expanduser()
+        config_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(config_dir, 0o700)
+        except OSError:
+            pass
+        config_path = config_dir / "config.json"
+        data: dict[str, Any] = {}
+        if config_path.exists():
+            try:
+                loaded = json.loads(config_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            except json.JSONDecodeError:
+                data = {}
+        data["api_key"] = api_key
+        tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp_path, config_path)
+        try:
+            os.chmod(config_path, 0o600)
+        except OSError:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 def _contains_any(lowered: str, original: str, words: tuple[str, ...]) -> bool:
     return any((word in lowered if word.isascii() else word in original) for word in words)
 
@@ -390,16 +475,6 @@ def _extract_source(text: str) -> str:
         if lowered.endswith((".zip", ".tar.gz", ".tgz", ".git")):
             return token
     return ""
-
-
-def _format_sensitive_skill_command_warning(source: str | None) -> str:
-    lines = [
-        "检测到消息里包含疑似 API 密钥。为了账户安全，我不会用这条消息安装或执行技能。",
-        "请先在服务商后台撤销或轮换已暴露的密钥，然后重新发送不含密钥的安装命令。",
-    ]
-    if source:
-        lines.append(f"例如：/skill install {source}")
-    return "\n".join(lines)
 
 
 def _clean_source_token(token: str) -> str:

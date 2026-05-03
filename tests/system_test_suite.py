@@ -347,6 +347,7 @@ class SystemTestSuite:
             parse_skill_management_command,
             redact_sensitive_tokens,
         )
+        from ai_companion.skill.installer import SkillInstaller
         from ai_companion.skill.registry import SkillRegistry
         from ai_companion.skill.dispatcher import SkillDispatcher
         from ai_companion.skill.base import SkillContext
@@ -407,14 +408,60 @@ class SystemTestSuite:
             )
             rejected = registry.register_skill(bad) is None
 
+            instruction_source = root / "skill-mmx-cli"
+            instruction_source.mkdir()
+            (instruction_source / "SKILL.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "name: mmx-cli",
+                        "description: Use mmx via MiniMax.",
+                        "---",
+                        "# MiniMax CLI",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            instruction_installed = registry.register_skill(instruction_source)
+            instruction_skill = registry.load_skill("mmx-cli")
+            nested_source = root / "repo-with-nested-skill"
+            nested_skill = nested_source / "skill"
+            nested_skill.mkdir(parents=True)
+            (nested_skill / "SKILL.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        "name: nested-md",
+                        "description: Nested SKILL.md import.",
+                        "---",
+                        "# Nested",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            nested_registry = SkillRegistry(root / "nested-installed")
+            nested_installed = SkillInstaller(nested_registry).install_from_path(nested_source)
+
             github_parsed = parse_skill_management_command("/skill GitHub - MiniMax-AI/cli: Generate text")
             github_ok = github_parsed == ("install", {"source": "https://github.com/MiniMax-AI/cli.git", "force": False})
             secret_text = "帮我安装 skill ./demo 我的密钥是 sk-cp-" + ("A" * 32)
             secret_ok = contains_sensitive_token(secret_text) and "sk-cp-" not in redact_sensitive_tokens(secret_text)
 
-            passed = bool(installed) and bool(skill) and command_output == "hi" and rejected and github_ok and secret_ok
+            passed = (
+                bool(installed)
+                and bool(skill)
+                and command_output == "hi"
+                and rejected
+                and bool(instruction_installed)
+                and bool(instruction_skill)
+                and instruction_skill.get_capabilities() == ["instruction"]
+                and bool(nested_installed)
+                and github_ok
+                and secret_ok
+            )
             detail = (
                 f"installed={bool(installed)} loaded={bool(skill)} rejected_bad_entry={rejected} "
+                f"instruction={bool(instruction_skill)} nested={bool(nested_installed)} "
                 f"github_parse={github_ok} secret_redact={secret_ok}"
             )
             log = json.dumps(
@@ -423,6 +470,9 @@ class SystemTestSuite:
                     "command_output": command_output,
                     "installed_dir": str(registry.skills_dir),
                     "bad_rejected": rejected,
+                    "instruction_installed": instruction_installed,
+                    "instruction_skill_name": getattr(instruction_skill, "name", None),
+                    "nested_installed": nested_installed,
                     "github_parsed": github_parsed,
                     "secret_ok": secret_ok,
                 },
@@ -498,8 +548,56 @@ class SystemTestSuite:
             encoding="utf-8",
         )
 
+        configured_source = skill_root / "skill-configured"
+        configured_source.mkdir(parents=True, exist_ok=True)
+        (configured_source / "skill.json").write_text(
+            json.dumps(
+                {
+                    "name": "configured",
+                    "version": "1.0.0",
+                    "description": "Configured install test",
+                    "entry": "configured_skill.py",
+                    "enabled": True,
+                    "requirements": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (configured_source / "configured_skill.py").write_text(
+            "\n".join(
+                [
+                    "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
+                    "class ConfiguredSkill(Skill):",
+                    "    name = 'configured'",
+                    "    description = 'Configured install test'",
+                    "    capabilities = ['configured']",
+                    "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
+                    "        return SkillResult(success=True, content='has-key' if self.config.get('api_key') else 'missing-key')",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        minimax_source = skill_root / "skill-mmx-cli"
+        minimax_source.mkdir(parents=True, exist_ok=True)
+        (minimax_source / "SKILL.md").write_text(
+            "\n".join(
+                [
+                    "---",
+                    "name: mmx-cli",
+                    "description: Use mmx via MiniMax.",
+                    "---",
+                    "# MiniMax CLI",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
         old_home = os.environ.get("AI_COMPANION_HOME")
+        old_mmx_home = os.environ.get("MMX_CONFIG_HOME")
         os.environ["AI_COMPANION_HOME"] = str(skill_home)
+        os.environ["MMX_CONFIG_HOME"] = str(skill_home / "mmx")
         bot = BotInstance(
             {"id": "aiyue", "name": "爱月", "description": "", "data_dir": str(self.root / "data" / "bots")},
             model=FakeModel(),
@@ -514,19 +612,33 @@ class SystemTestSuite:
             list_reply = await bot.handle_message("查看技能列表")
             leaky_reply = await bot.handle_message(f"帮我安装 skill {leaky_source} 我的密钥是 sk-cp-{'A' * 32}")
             leaky_run = await bot.handle_message("/skill leaky")
+            configured_reply = await bot.handle_message(f"帮我安装 skill {configured_source} 我的密钥是 sk-cp-{'B' * 32}")
+            configured_run = await bot.handle_message("/skill configured")
+            minimax_reply = await bot.handle_message(f"/skill install {minimax_source} --force 我的密钥是 sk-cp-{'C' * 32}")
+            minimax_run = await bot.handle_message("/skill mmx-cli")
             history_text = "\n".join(item.get("content", "") for item in bot.conversation_history)
+            configured_secrets = skill_home / "data" / "bots" / "_skills" / "skill-configured" / ".skill-secrets.json"
+            minimax_secrets = skill_home / "data" / "bots" / "_skills" / "skill-mmx-cli" / ".skill-secrets.json"
+            minimax_cli_config = skill_home / "mmx" / "config.json"
             passed = (
                 "Skill Error" in before
                 and "技能已安装：natural" in install_reply
                 and run_reply == "natural-ok"
                 and "natural" in list_reply
-                and "疑似 API 密钥" in leaky_reply
-                and "Skill Error" in leaky_run
+                and "技能已安装：leaky" in leaky_reply
+                and leaky_run == "leaky-ok"
+                and "已保存该技能需要的密钥配置" in configured_reply
+                and configured_run == "has-key"
+                and configured_secrets.exists()
+                and "技能已安装：mmx-cli" in minimax_reply
+                and "指令型技能已安装：mmx-cli" in minimax_run
+                and minimax_secrets.exists()
+                and minimax_cli_config.exists()
                 and "sk-cp-" not in history_text
             )
             detail = (
                 f"installed={'技能已安装：natural' in install_reply} run={run_reply} "
-                f"secret_blocked={'疑似 API 密钥' in leaky_reply}"
+                f"secret_install={'技能已安装：leaky' in leaky_reply} configured={configured_run}"
             )
             log = json.dumps(
                 {
@@ -536,6 +648,13 @@ class SystemTestSuite:
                     "list_reply": list_reply,
                     "leaky_reply": leaky_reply,
                     "leaky_run": leaky_run,
+                    "configured_reply": configured_reply,
+                    "configured_run": configured_run,
+                    "configured_secrets_exists": configured_secrets.exists(),
+                    "minimax_reply": minimax_reply,
+                    "minimax_run": minimax_run,
+                    "minimax_secrets_exists": minimax_secrets.exists(),
+                    "minimax_cli_config_exists": minimax_cli_config.exists(),
                     "history_contains_secret": "sk-cp-" in history_text,
                     "home": str(skill_home),
                 },
@@ -549,6 +668,10 @@ class SystemTestSuite:
                 os.environ.pop("AI_COMPANION_HOME", None)
             else:
                 os.environ["AI_COMPANION_HOME"] = old_home
+            if old_mmx_home is None:
+                os.environ.pop("MMX_CONFIG_HOME", None)
+            else:
+                os.environ["MMX_CONFIG_HOME"] = old_mmx_home
 
     def case_config_loader(self) -> tuple[bool, str, str]:
         from ai_companion.config.loader import Config
