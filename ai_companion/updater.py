@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import locale
 import os
 from pathlib import Path
 import shutil
@@ -125,21 +126,18 @@ def _find_git_root(root: Path) -> Path | None:
         return None
 
     try:
-        result = subprocess.run(
-            [git, "rev-parse", "--show-toplevel"],
-            cwd=str(root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
+        result = _run_capture([git, "rev-parse", "--show-toplevel"], cwd=root)
     except OSError:
         return None
 
     if result.returncode != 0:
         return None
 
-    git_root = Path(result.stdout.strip()).resolve()
+    stdout = _decode_process_output(result.stdout).strip()
+    if not stdout:
+        return None
+
+    git_root = Path(stdout).resolve()
     if _looks_like_project_root(git_root):
         return git_root
     return None
@@ -346,17 +344,43 @@ def _run(command: Iterable[str], cwd: Path, step: str) -> None:
 
 def _capture(command: Iterable[str], cwd: Path) -> str:
     try:
-        result = subprocess.run(
-            list(command),
-            cwd=str(cwd),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
+        result = _run_capture(command, cwd=cwd)
     except OSError as exc:
         raise UpdateError(str(exc)) from exc
+    stdout = _decode_process_output(result.stdout)
+    stderr = _decode_process_output(result.stderr)
     if result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or f"退出码 {result.returncode}"
+        message = stderr.strip() or stdout.strip() or f"退出码 {result.returncode}"
         raise UpdateError(message)
-    return result.stdout
+    return stdout
+
+
+def _run_capture(command: Iterable[str], cwd: Path) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        list(command),
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def _decode_process_output(data: bytes | None) -> str:
+    if not data:
+        return ""
+
+    encodings = ["utf-8-sig", locale.getpreferredencoding(False), sys.getfilesystemencoding()]
+    if sys.platform == "win32":
+        encodings.extend(["mbcs", "gbk"])
+
+    seen: set[str] = set()
+    for encoding in encodings:
+        if not encoding or encoding in seen:
+            continue
+        seen.add(encoding)
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return data.decode("utf-8", errors="replace")
