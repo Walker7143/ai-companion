@@ -56,6 +56,22 @@ ai-companion setup
 
 重复运行 `setup` 时会合并更新配置：没有选择重新配置或覆盖的部分会保留旧值，例如只改模型时不会重写已有 Bot、人生轨迹或主动唤醒配置。
 
+### 更新
+
+以后更新代码不需要卸载重装，直接运行：
+
+```bash
+ai-companion update
+```
+
+国内网络可使用清华 PyPI 镜像同步依赖：
+
+```bash
+ai-companion update --cn
+```
+
+更新命令会保留 `~/.ai-companion/` 下的 Bot 配置、记忆和日志；如果 Gateway 正在运行，会先停止，更新完成后自动重新启动。
+
 ---
 
 ## 项目架构
@@ -376,6 +392,13 @@ ai-companion gateway start
 ```
 
 如需禁用自动 UI，可设置 `START_UI=false` 或 `AI_COMPANION_START_UI=false`。
+
+### 一键更新
+
+```bash
+ai-companion update       # 更新代码和依赖，保留本地数据
+ai-companion update --cn  # 使用清华 PyPI 镜像
+```
 
 ### 内置命令
 

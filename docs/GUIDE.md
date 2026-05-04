@@ -77,7 +77,23 @@ ai-companion setup
 
 重复运行 `setup` 时，向导会读取现有配置并默认保留旧值。没有选择重新配置或覆盖的部分不会被清空；例如只重新设置模型时，已有 `bots.yaml`、Bot persona、`proactive.json`、`life.json` 和飞书配置都会保留。
 
-### 1.4 快速配置
+### 1.4 一键更新
+
+以后更新最新代码不需要卸载重装：
+
+```bash
+ai-companion update
+```
+
+国内网络可使用清华 PyPI 镜像同步依赖：
+
+```bash
+ai-companion update --cn
+```
+
+更新命令会保留 `~/.ai-companion/` 下的配置、Bot 人格、记忆和日志。如果 Gateway 正在运行，默认会先停止，更新完成后自动重新启动。
+
+### 1.5 快速配置
 
 如果你已有 API Key，只需创建配置文件：
 
@@ -101,7 +117,7 @@ bots:
     enabled: true
 ```
 
-### 1.5 注意事项
+### 1.6 注意事项
 
 | 项目 | 说明 |
 |------|------|
