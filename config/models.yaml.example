@@ -33,6 +33,7 @@ memory:
   max_working_turns: 20       # 工作记忆保留轮数
   hard_limit_chars: 5000      # 硬上限，超限同步压缩
   soft_limit_chars: 3000      # 软上限，异步压缩
+  prompt_char_limit: 12000    # 注入 system prompt 的记忆文本上限；手动用户理解很多时可调大
 
 fallback:
   enabled: false

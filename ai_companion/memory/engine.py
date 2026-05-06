@@ -101,6 +101,7 @@ class MemoryEngine:
         embedding_mode = emb_cfg.get("embedding", "none")
         embedding_model = emb_cfg.get("embedding_model", "all-MiniLM-L6-v2")
         self.semantic_char_limit = emb_cfg.get("semantic_char_limit", 4400)
+        self.prompt_char_limit = emb_cfg.get("prompt_char_limit", max(12000, self.semantic_char_limit))
 
         self.working = WorkingMemoryStore(
             self.memory_dir / "working.db",
@@ -142,7 +143,7 @@ class MemoryEngine:
             user_understanding=self.user_understanding,
             max_working_turns=self.max_working_turns,
         )
-        self.prompt_builder = MemoryPromptBuilder(max_chars=self.semantic_char_limit)
+        self.prompt_builder = MemoryPromptBuilder(max_chars=self.prompt_char_limit)
         self.maintenance = MemoryMaintenance(
             semantic_store=self.semantic,
             episodic_store=self.episodic,
@@ -184,6 +185,7 @@ class MemoryEngine:
         await self.working.init()
         await self.episodic.init()
         await self.user_understanding.init()
+        self._seed_user_understanding_from_builtin()
         await self.semantic.init()
         await self.relationship.init()
         await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id)
@@ -337,6 +339,14 @@ class MemoryEngine:
         await self.relationship.close()
 
     # ── 内部方法 ─────────────────────────────────────────────
+
+    def _seed_user_understanding_from_builtin(self):
+        project_root = Path(__file__).resolve().parents[2]
+        seed_path = project_root / "ai_companion" / "data" / "bots" / self.bot_id / "memory" / "user_understanding.json"
+        if not seed_path.exists():
+            return
+        if self.user_understanding.seed_manual_from(seed_path):
+            logger.info("[Memory]  已从内置模板补充 user_understanding.manual: %s", seed_path)
 
     async def _do_compress(self):
         """执行压缩"""

@@ -160,6 +160,46 @@ class UserUnderstandingStore:
         if normalized != data:
             self._write(normalized)
 
+    def seed_manual_from(self, seed_path: str | Path) -> bool:
+        """Seed an empty manual profile from bundled bot defaults."""
+        seed_path = Path(seed_path)
+        if not seed_path.exists():
+            return False
+        try:
+            if seed_path.resolve() == self.path.resolve():
+                return False
+        except Exception:
+            pass
+
+        try:
+            seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+
+        seed = self._normalize(seed_data)
+        data = self.load()
+        changed = False
+
+        manual = data.get("manual") if isinstance(data.get("manual"), dict) else {}
+        seed_manual = seed.get("manual") if isinstance(seed.get("manual"), dict) else {}
+        if not self._section_has_content(manual) and self._section_has_content(seed_manual):
+            data["manual"] = deepcopy(seed_manual)
+            changed = True
+
+        relationship = data.get("relationship_memory") if isinstance(data.get("relationship_memory"), dict) else {}
+        seed_relationship = seed.get("relationship_memory") if isinstance(seed.get("relationship_memory"), dict) else {}
+        if (
+            not self._relationship_has_content(relationship)
+            and self._relationship_has_content(seed_relationship)
+        ):
+            data["relationship_memory"] = deepcopy(seed_relationship)
+            changed = True
+
+        if changed:
+            data["updated_at"] = datetime.now().isoformat()
+            self._write(self._with_compat_aliases(data))
+        return changed
+
     def load(self) -> dict[str, Any]:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -241,7 +281,7 @@ class UserUnderstandingStore:
         data = self.load()
         manual = data.setdefault("manual", self._empty_section())
         auto = self._empty_section(include_refresh=True)
-        relationship_memory = self._empty_relationship_memory()
+        relationship_memory = self._normalize_relationship_memory(data.get("relationship_memory"))
         meta = self._empty_meta()
 
         manual_fact_keys = set(self._clean_dict(manual.get("facts")).keys())
@@ -393,9 +433,47 @@ class UserUnderstandingStore:
                 lines.append(f"{title}：")
                 lines.extend([f"  - {item}" for item in items])
 
+        for key, title in [
+            ("personality_observations", "用户手动设定的性格观察"),
+            ("emotional_patterns", "用户手动设定的情绪模式"),
+            ("stressors", "用户手动设定的压力源"),
+            ("comfort_strategies", "用户手动设定的有效陪伴方式"),
+            ("attachment_and_distance", "用户手动设定的亲近与距离模式"),
+            ("values_and_principles", "用户手动设定的价值观和原则"),
+            ("life_context", "用户手动设定的生活背景"),
+            ("goals_and_projects", "用户手动设定的目标和项目"),
+            ("routines", "用户手动设定的作息和习惯"),
+            ("recent_changes", "用户手动设定的近期变化"),
+        ]:
+            items = self._clean_list(manual.get(key))
+            if items:
+                lines.append(f"{title}：")
+                lines.extend([f"  - {item}" for item in items])
+
+        manual_extra = self._format_custom_fields(
+            manual,
+            known_keys=self._section_prompt_keys(),
+            title="用户手动补充的自定义字段",
+        )
+        if manual_extra:
+            lines.extend(manual_extra)
+
+        top_extra = self._format_custom_fields(
+            data,
+            known_keys=self._top_level_prompt_keys(),
+            title="用户理解文件中的自定义字段",
+        )
+        if top_extra:
+            lines.extend(top_extra)
+
         auto_summary = str(auto.get("profile_summary") or auto.get("summary") or "").strip()
         if auto_summary:
             lines.append(f"Bot 在相处中逐渐形成的理解：{auto_summary}")
+
+        auto_identity = self._clean_dict(auto.get("identity"))
+        if auto_identity:
+            lines.append("自动补充的身份信息：")
+            lines.extend([f"  - {k}: {v}" for k, v in auto_identity.items()])
 
         auto_interaction = self._normalize_interaction_style(auto.get("interaction_style"))
         if any(auto_interaction.values()):
@@ -419,6 +497,7 @@ class UserUnderstandingStore:
             ("comfort_strategies", "有效的安慰/陪伴方式"),
             ("attachment_and_distance", "亲近与距离模式"),
             ("values_and_principles", "价值观和原则"),
+            ("life_context", "自动补充的生活背景"),
             ("goals_and_projects", "目标和项目"),
             ("routines", "作息和习惯"),
             ("recent_changes", "近期变化"),
@@ -427,6 +506,14 @@ class UserUnderstandingStore:
             if items:
                 lines.append(f"{title}：")
                 lines.extend([f"  - {item}" for item in items])
+
+        auto_extra = self._format_custom_fields(
+            auto,
+            known_keys=self._section_prompt_keys() | {"last_refresh_at"},
+            title="自动理解中的自定义字段",
+        )
+        if auto_extra:
+            lines.extend(auto_extra)
 
         relationship_memory = data.get("relationship_memory") if isinstance(data.get("relationship_memory"), dict) else {}
         for key, title in [
@@ -496,6 +583,9 @@ class UserUnderstandingStore:
             section["interaction_style"] = self._normalize_interaction_style(value.get("interaction_style"))
             for key in (*self.SECTIONS, "relationship_expectations", "notes", *self.AUTO_DEEP_SECTIONS):
                 section[key] = self._clean_list(value.get(key))
+            for key, raw in value.items():
+                if key not in section and (include_refresh or key != "last_refresh_at"):
+                    section[key] = self._normalize_custom_value(raw)
             if include_refresh:
                 section["last_refresh_at"] = value.get("last_refresh_at")
         return section
@@ -553,6 +643,79 @@ class UserUnderstandingStore:
             result["last_reflection_at"] = value.get("last_reflection_at")
         return result
 
+    def _normalize_custom_value(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            result = {}
+            for key, item in value.items():
+                clean_key = str(key).strip()
+                normalized = self._normalize_custom_value(item)
+                if clean_key and self._custom_has_value(normalized):
+                    result[clean_key] = normalized
+            return result
+        if isinstance(value, list):
+            result = []
+            for item in value:
+                normalized = self._normalize_custom_value(item)
+                if self._custom_has_value(normalized):
+                    result.append(normalized)
+            return result
+        if isinstance(value, str):
+            return self._trim(value.strip())
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+        return self._trim(str(value).strip())
+
+    def _custom_has_value(self, value: Any) -> bool:
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, dict):
+            return any(self._custom_has_value(item) for item in value.values())
+        if isinstance(value, list):
+            return any(self._custom_has_value(item) for item in value)
+        return value is not None
+
+    def _section_has_content(self, section: Any) -> bool:
+        if not isinstance(section, dict):
+            return False
+        if str(section.get("summary") or section.get("profile_summary") or "").strip():
+            return True
+        if self._clean_dict(section.get("identity")) or self._clean_dict(section.get("facts")):
+            return True
+        interaction = self._normalize_interaction_style(section.get("interaction_style"))
+        if str(interaction.get("preferred_reply_length") or "").strip():
+            return True
+        for key in ("accepted_humor", "disliked_phrases", "natural_openings", "avoid_patterns"):
+            if interaction.get(key):
+                return True
+        for key in (*self.SECTIONS, "relationship_expectations", "notes", *self.AUTO_DEEP_SECTIONS):
+            if self._clean_list(section.get(key)):
+                return True
+        known = {
+            "summary",
+            "profile_summary",
+            "identity",
+            "facts",
+            "preferences",
+            "communication_style",
+            "boundaries",
+            "relationship_expectations",
+            "interaction_style",
+            "important_people",
+            "current_context",
+            "open_threads",
+            "notes",
+            *self.AUTO_DEEP_SECTIONS,
+            "last_refresh_at",
+        }
+        if any(self._custom_has_value(value) for key, value in section.items() if key not in known):
+            return True
+        return False
+
+    def _relationship_has_content(self, relationship: Any) -> bool:
+        if not isinstance(relationship, dict):
+            return False
+        return any(self._clean_list(relationship.get(key)) for key in self.RELATIONSHIP_SECTIONS)
+
     def _normalize_interaction_style(self, value: Any) -> dict[str, Any]:
         result = {
             "preferred_reply_length": "",
@@ -582,6 +745,77 @@ class UserUnderstandingStore:
             if isinstance(values, list) and values:
                 lines.append(f"  - {title}：" + "；".join(str(v) for v in values[:5]))
         return lines
+
+    def _section_prompt_keys(self) -> set[str]:
+        return {
+            "summary",
+            "profile_summary",
+            "identity",
+            "facts",
+            "preferences",
+            "communication_style",
+            "boundaries",
+            "relationship_expectations",
+            "interaction_style",
+            "important_people",
+            "current_context",
+            "open_threads",
+            "notes",
+            *self.AUTO_DEEP_SECTIONS,
+        }
+
+    def _top_level_prompt_keys(self) -> set[str]:
+        return {
+            "version",
+            "updated_at",
+            "manual",
+            "auto",
+            "relationship_memory",
+            "meta",
+            "summary",
+            "facts",
+            "preferences",
+            "communication_style",
+            "boundaries",
+            "important_people",
+            "current_context",
+            "open_threads",
+            "auto_facts",
+        }
+
+    def _format_custom_fields(self, container: Any, *, known_keys: set[str], title: str) -> list[str]:
+        if not isinstance(container, dict):
+            return []
+        lines = [f"{title}："]
+        for key, value in container.items():
+            clean_key = str(key).strip()
+            if not clean_key or clean_key in known_keys or not self._custom_has_value(value):
+                continue
+            rendered = self._render_custom_value(value)
+            if rendered:
+                lines.append(f"  - {clean_key}: {rendered}")
+        return lines if len(lines) > 1 else []
+
+    def _render_custom_value(self, value: Any, max_chars: int = 800) -> str:
+        if isinstance(value, str):
+            rendered = value.strip()
+        elif isinstance(value, (int, float, bool)):
+            rendered = str(value)
+        elif isinstance(value, list):
+            parts = [
+                self._render_custom_value(item, max_chars=240)
+                for item in value
+                if self._custom_has_value(item)
+            ]
+            rendered = "；".join(part for part in parts if part)
+        elif isinstance(value, dict):
+            rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        else:
+            rendered = str(value).strip()
+
+        if len(rendered) > max_chars:
+            return rendered[: max_chars - 3] + "..."
+        return rendered
 
     def _with_compat_aliases(self, data: dict[str, Any]) -> dict[str, Any]:
         data = deepcopy(data)

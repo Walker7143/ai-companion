@@ -69,6 +69,11 @@ class MemoryPromptBuilder:
         if summary:
             lines.append(f"用户手动设定的整体理解：{summary}")
 
+        manual_identity = _clean_dict(manual.get("identity"))
+        if manual_identity:
+            lines.append("用户手动设定的身份信息：")
+            lines.extend([f"  - {k}: {v}" for k, v in manual_identity.items()])
+
         manual_facts = _clean_dict(manual.get("facts"))
         if manual_facts:
             lines.append("用户手动设定的事实：")
@@ -94,9 +99,47 @@ class MemoryPromptBuilder:
                 lines.append(f"{title}：")
                 lines.extend([f"  - {item}" for item in items])
 
+        for key, title in [
+            ("personality_observations", "用户手动设定的性格观察"),
+            ("emotional_patterns", "用户手动设定的情绪模式"),
+            ("stressors", "用户手动设定的压力源"),
+            ("comfort_strategies", "用户手动设定的有效陪伴方式"),
+            ("attachment_and_distance", "用户手动设定的亲近与距离模式"),
+            ("values_and_principles", "用户手动设定的价值观和原则"),
+            ("life_context", "用户手动设定的生活背景"),
+            ("goals_and_projects", "用户手动设定的目标和项目"),
+            ("routines", "用户手动设定的作息和习惯"),
+            ("recent_changes", "用户手动设定的近期变化"),
+        ]:
+            items = _clean_list(manual.get(key))
+            if items:
+                lines.append(f"{title}：")
+                lines.extend([f"  - {item}" for item in items])
+
+        manual_extra = _format_extra_fields(
+            manual,
+            known_keys=_SECTION_KEYS,
+            title="用户手动补充的自定义字段",
+        )
+        if manual_extra:
+            lines.extend(manual_extra)
+
+        top_extra = _format_extra_fields(
+            data,
+            known_keys=_TOP_LEVEL_KEYS,
+            title="用户理解文件中的自定义字段",
+        )
+        if top_extra:
+            lines.extend(top_extra)
+
         auto_summary = str(auto.get("profile_summary") or auto.get("summary") or "").strip()
         if auto_summary:
             lines.append(f"Bot 在相处中逐渐形成的理解：{auto_summary}")
+
+        auto_identity = _clean_dict(auto.get("identity"))
+        if auto_identity:
+            lines.append("自动补充的身份信息：")
+            lines.extend([f"  - {k}: {v}" for k, v in auto_identity.items()])
 
         auto_interaction = _clean_interaction_style(auto.get("interaction_style"))
         if any(auto_interaction.values()):
@@ -129,6 +172,14 @@ class MemoryPromptBuilder:
             if items:
                 lines.append(f"{title}：")
                 lines.extend([f"  - {item}" for item in items])
+
+        auto_extra = _format_extra_fields(
+            auto,
+            known_keys=_SECTION_KEYS | {"last_refresh_at"},
+            title="自动理解中的自定义字段",
+        )
+        if auto_extra:
+            lines.extend(auto_extra)
 
         relationship_memory = data.get("relationship_memory") if isinstance(data.get("relationship_memory"), dict) else {}
         for key, title in [
@@ -167,16 +218,23 @@ class MemoryPromptBuilder:
             manual = understanding.get("manual") if isinstance(understanding.get("manual"), dict) else {}
             auto = understanding.get("auto") if isinstance(understanding.get("auto"), dict) else {}
             for section in (manual, auto):
+                identity = _clean_dict(section.get("identity"))
+                known_keys.update(identity.keys())
+                known_values.update(identity.values())
                 facts = _clean_dict(section.get("facts"))
                 known_keys.update(facts.keys())
                 known_values.update(facts.values())
                 for list_key in (
                     "preferences", "communication_style", "boundaries", "important_people",
-                    "current_context", "open_threads", "emotional_patterns", "stressors",
+                    "relationship_expectations", "current_context", "open_threads", "notes",
+                    "emotional_patterns", "stressors",
                     "comfort_strategies", "attachment_and_distance", "values_and_principles",
                     "life_context", "goals_and_projects", "routines", "recent_changes",
                 ):
                     known_values.update(_clean_list(section.get(list_key)))
+                for extra_key, extra_value in _extra_items(section, _SECTION_KEYS):
+                    known_keys.add(extra_key)
+                    known_values.update(_value_tokens(extra_value))
                 interaction = _clean_interaction_style(section.get("interaction_style"))
                 for key, value in interaction.items():
                     if isinstance(value, list):
@@ -194,6 +252,9 @@ class MemoryPromptBuilder:
             legacy_auto = _clean_dict(understanding.get("auto_facts"))
             known_keys.update(legacy_auto.keys())
             known_values.update(legacy_auto.values())
+            for extra_key, extra_value in _extra_items(understanding, _TOP_LEVEL_KEYS):
+                known_keys.add(extra_key)
+                known_values.update(_value_tokens(extra_value))
         lines = []
         for item in retrieved.semantic_items:
             key = item.get("key")
@@ -259,3 +320,118 @@ def _format_interaction_style(style: dict[str, object]) -> list[str]:
         if isinstance(values, list) and values:
             lines.append(f"  - {title}：" + "；".join(str(v) for v in values[:5]))
     return lines
+
+
+_SECTION_KEYS = {
+    "summary",
+    "profile_summary",
+    "identity",
+    "facts",
+    "preferences",
+    "communication_style",
+    "boundaries",
+    "relationship_expectations",
+    "interaction_style",
+    "important_people",
+    "current_context",
+    "open_threads",
+    "notes",
+    "personality_observations",
+    "emotional_patterns",
+    "stressors",
+    "comfort_strategies",
+    "attachment_and_distance",
+    "values_and_principles",
+    "life_context",
+    "goals_and_projects",
+    "routines",
+    "recent_changes",
+}
+
+_TOP_LEVEL_KEYS = {
+    "version",
+    "updated_at",
+    "manual",
+    "auto",
+    "relationship_memory",
+    "meta",
+    "summary",
+    "facts",
+    "preferences",
+    "communication_style",
+    "boundaries",
+    "important_people",
+    "current_context",
+    "open_threads",
+    "auto_facts",
+}
+
+
+def _extra_items(container: object, known_keys: set[str]):
+    if not isinstance(container, dict):
+        return []
+    return [
+        (str(key).strip(), value)
+        for key, value in container.items()
+        if str(key).strip() and str(key).strip() not in known_keys and _has_prompt_value(value)
+    ]
+
+
+def _format_extra_fields(container: object, *, known_keys: set[str], title: str) -> list[str]:
+    items = _extra_items(container, known_keys)
+    if not items:
+        return []
+    lines = [f"{title}："]
+    for key, value in items:
+        rendered = _render_value(value)
+        if rendered:
+            lines.append(f"  - {key}: {rendered}")
+    return lines if len(lines) > 1 else []
+
+
+def _has_prompt_value(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_has_prompt_value(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_prompt_value(v) for v in value)
+    return value is not None
+
+
+def _render_value(value: object, max_chars: int = 800) -> str:
+    import json
+
+    if isinstance(value, str):
+        rendered = value.strip()
+    elif isinstance(value, (int, float, bool)):
+        rendered = str(value)
+    elif isinstance(value, list):
+        parts = [_render_value(item, max_chars=240) for item in value if _has_prompt_value(item)]
+        rendered = "；".join(part for part in parts if part)
+    elif isinstance(value, dict):
+        rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        rendered = str(value).strip()
+
+    if len(rendered) > max_chars:
+        return rendered[: max_chars - 3] + "..."
+    return rendered
+
+
+def _value_tokens(value: object) -> set[str]:
+    if isinstance(value, dict):
+        tokens = set()
+        for key, val in value.items():
+            key = str(key).strip()
+            if key:
+                tokens.add(key)
+            tokens.update(_value_tokens(val))
+        return tokens
+    if isinstance(value, list):
+        tokens = set()
+        for item in value:
+            tokens.update(_value_tokens(item))
+        return tokens
+    rendered = _render_value(value)
+    return {rendered} if rendered else set()

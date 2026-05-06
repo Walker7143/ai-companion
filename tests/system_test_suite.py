@@ -236,7 +236,11 @@ class SystemTestSuite:
         self._run_case("T44", "User understanding v3 captures deep relationship insight", self.case_user_understanding_v3_deep_projection)
         self._run_case("T45", "Response style polisher removes AI tone", self.case_response_style_polisher)
         self._run_case("T46", "Built-in bots include style and understanding seeds", self.case_builtin_bot_style_and_understanding_seeds)
-        self._run_case("T47", "Persona importer plans, applies, and resumes drafts", self.case_persona_importer_plan_apply_resume)
+        self._run_case("T47", "Manual identity enters memory prompt", self.case_user_understanding_manual_identity_prompt)
+        self._run_case("T48", "Runtime understanding seeds from bundled defaults", self.case_user_understanding_runtime_seed)
+        self._run_case("T49", "Manual custom fields enter memory prompt", self.case_user_understanding_manual_custom_fields_prompt)
+        self._run_case("T50", "Memory prompt limit handles large user understanding", self.case_memory_prompt_limit_large_understanding)
+        self._run_case("T51", "Persona importer plans, applies, and resumes drafts", self.case_persona_importer_plan_apply_resume)
 
         return self._finalize()
 
@@ -2562,6 +2566,140 @@ class SystemTestSuite:
         }
         passed = all(all(item.values()) for item in checks.values())
         return passed, f"bots={len(bot_ids)} template={checks['_template']['style_exists']}", json.dumps(checks, ensure_ascii=False, indent=2)
+
+    async def case_user_understanding_manual_identity_prompt(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-understanding-identity-") as td:
+            root = Path(td)
+            engine = MemoryEngine("identity_bot", root, config={"embedding": "none"})
+            await engine.init()
+            data = engine.user_understanding.load()
+            data["manual"]["identity"]["称呼"] = "小王"
+            data["manual"]["identity"]["城市"] = "杭州"
+            engine.user_understanding._write(data)
+            context = await engine.load_context("你知道我怎么称呼吗？")
+            await engine.close()
+
+        suffix = context.get("system_suffix", "")
+        passed = (
+            "用户手动设定的身份信息" in suffix
+            and "称呼: 小王" in suffix
+            and "城市: 杭州" in suffix
+        )
+        return passed, f"identity_in_suffix={passed}", json.dumps({"system_suffix": suffix}, ensure_ascii=False, indent=2)
+
+    async def case_user_understanding_runtime_seed(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-understanding-seed-") as td:
+            root = Path(td)
+
+            seeded_engine = MemoryEngine("shen_nian", root, config={"embedding": "none"})
+            await seeded_engine.init()
+            seeded = seeded_engine.user_understanding.load()
+            seeded_context = await seeded_engine.load_context("随便聊聊")
+            await seeded_engine.close()
+
+            existing_engine = MemoryEngine("shen_nian", root / "existing", config={"embedding": "none"})
+            await existing_engine.init()
+            existing = existing_engine.user_understanding.load()
+            existing["manual"]["summary"] = "用户自己写的理解，不应被内置种子覆盖。"
+            existing_engine.user_understanding._write(existing)
+            await existing_engine.close()
+
+            existing_engine = MemoryEngine("shen_nian", root / "existing", config={"embedding": "none"})
+            await existing_engine.init()
+            existing_after = existing_engine.user_understanding.load()
+            await existing_engine.close()
+
+        seeded_manual = seeded.get("manual", {})
+        relationship_memory = seeded.get("relationship_memory", {})
+        seeded_suffix = seeded_context.get("system_suffix", "")
+        passed = (
+            "轻快、有创作感" in seeded_manual.get("summary", "")
+            and any("脑暴" in item for item in seeded_manual.get("communication_style", []))
+            and any(
+                "关键时刻认真" in item
+                for item in relationship_memory.get("what_user_seems_to_need_from_bot", [])
+            )
+            and "轻快、有创作感" in seeded_suffix
+            and existing_after.get("manual", {}).get("summary") == "用户自己写的理解，不应被内置种子覆盖。"
+        )
+        log = json.dumps(
+            {
+                "seeded_manual": seeded_manual,
+                "seeded_relationship_memory": relationship_memory,
+                "seeded_suffix": seeded_suffix,
+                "existing_after": existing_after.get("manual", {}),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, f"seeded_summary={bool(seeded_manual.get('summary'))}", log
+
+    async def case_user_understanding_manual_custom_fields_prompt(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-understanding-custom-") as td:
+            root = Path(td)
+            engine = MemoryEngine("custom_bot", root, config={"embedding": "none"})
+            await engine.init()
+            data = engine.user_understanding.load()
+            data["manual"]["life_context"] = ["最近在准备长期项目，容易被上下文切换打断。"]
+            data["manual"]["自定义观察"] = {
+                "工作方式": "喜欢先给结论，再给必要依据",
+                "雷区": ["不要重复确认已经说清楚的背景"],
+            }
+            data["长期提醒"] = "用户希望 Bot 主动沿用 user_understanding 里的背景。"
+            engine.user_understanding._write(data)
+
+            loaded = engine.user_understanding.load()
+            context = await engine.load_context("继续")
+            proactive_text = engine.user_understanding.format_for_prompt()
+            await engine.close()
+
+        suffix = context.get("system_suffix", "")
+        passed = (
+            loaded.get("manual", {}).get("自定义观察", {}).get("工作方式") == "喜欢先给结论，再给必要依据"
+            and loaded.get("长期提醒") == "用户希望 Bot 主动沿用 user_understanding 里的背景。"
+            and "用户手动设定的生活背景" in suffix
+            and "自定义观察" in suffix
+            and "喜欢先给结论" in suffix
+            and "长期提醒" in suffix
+            and "用户手动设定的生活背景" in proactive_text
+            and "自定义观察" in proactive_text
+        )
+        log = json.dumps(
+            {"loaded": loaded, "system_suffix": suffix},
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, f"custom_in_suffix={passed}", log
+
+    async def case_memory_prompt_limit_large_understanding(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        tail_marker = "TAIL_MARKER_用户理解末尾仍应进入提示"
+        with tempfile.TemporaryDirectory(prefix="sys-test-understanding-large-") as td:
+            root = Path(td)
+            engine = MemoryEngine("large_bot", root, config={"embedding": "none"})
+            await engine.init()
+            data = engine.user_understanding.load()
+            data["manual"]["summary"] = "用户手动写入了很长的背景。"
+            data["manual"]["notes"] = [f"背景片段{i}: " + ("重要上下文" * 18) for i in range(75)]
+            data["manual"]["notes"].append(tail_marker)
+            engine.user_understanding._write(data)
+            context = await engine.load_context("继续")
+            await engine.close()
+
+        suffix = context.get("system_suffix", "")
+        passed = (
+            len(suffix) > 4400
+            and len(suffix) <= 12000
+            and tail_marker in suffix
+        )
+        return passed, f"suffix_len={len(suffix)} tail={tail_marker in suffix}", json.dumps({"system_suffix_len": len(suffix), "tail_present": tail_marker in suffix}, ensure_ascii=False, indent=2)
 
     async def case_persona_importer_plan_apply_resume(self) -> tuple[bool, str, str]:
         from ai_companion.persona_importer.apply import apply_draft
