@@ -2007,8 +2007,9 @@ class BasePlatformAdapter(ABC):
             # (see PR #4926).
             cmd = event.get_command()
             from ai_companion._vendor.gw_cli.commands import should_bypass_active_session
+            from ai_companion.gateway.commands import is_gateway_command_name
 
-            if should_bypass_active_session(cmd):
+            if should_bypass_active_session(cmd) or is_gateway_command_name(cmd):
                 # /stop, /new, /reset must cancel the in-flight adapter task
                 # and preserve ordering of queued follow-ups.  Route those
                 # through the dedicated handoff path that serializes

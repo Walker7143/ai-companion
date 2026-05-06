@@ -84,7 +84,7 @@ class OllamaAdapter(ModelAdapter):
                     await asyncio.sleep(wait_time)
                 continue
 
-        raise RuntimeError(f"网络不稳定，Ollama 请求失败（已重试 {MAX_RETRIES} 次）")
+        raise RuntimeError(f"网络不稳定，Ollama 请求失败（已重试 {MAX_RETRIES} 次），最后错误: {last_error!r}")
 
     async def embeddings(self, texts: list[str]) -> list[list[float]]:
         """调用 Ollama Embeddings API"""

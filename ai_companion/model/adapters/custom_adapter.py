@@ -200,7 +200,7 @@ class CustomAdapter(ModelAdapter):
             except (ValueError, KeyError, IndexError) as e:
                 raise ValueError(f"Custom API 响应解析失败: {e}")
 
-        raise RuntimeError(f"网络不稳定，Custom API 请求失败（已重试 {MAX_RETRIES} 次）")
+        raise RuntimeError(f"网络不稳定，Custom API 请求失败（已重试 {MAX_RETRIES} 次），最后错误: {last_error!r}")
 
     async def embeddings(self, texts: list[str]) -> list[list[float]]:
         """默认不支持 embeddings"""

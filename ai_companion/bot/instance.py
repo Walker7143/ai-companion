@@ -73,6 +73,7 @@ class BotInstance:
         # 模型（由 BotManager 注入）
         self.model: "ModelAdapter" = model
         self._initialized = False
+        self._last_model_error: str | None = None
 
         # 如果模型已注入，立即设置到拒绝引擎
         if model is not None:
@@ -273,6 +274,9 @@ class BotInstance:
         self.model = model
         self.refusal_engine.set_model(model)
         self.proactive_engine.set_model(model)
+        self.life_engine.set_model(model)
+        if self.memory:
+            self.memory.set_summarizer(model)
 
     def set_proactive_platform(self, platform_type: str = None, feishu_adapter=None, **kwargs):
         """设置主动消息发送平台"""
@@ -490,7 +494,7 @@ class BotInstance:
             # 5. 对话
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
-                return f"抱歉，网络不稳定，请稍后再试。"
+                return self._format_model_failure_message()
             response = self._polish_response(response, ctx, relationship_state)
 
             # 6. 异步写入记忆
@@ -500,7 +504,7 @@ class BotInstance:
             messages = [{"role": "user", "content": user_input}]
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
-                return f"抱歉，网络不稳定，请稍后再试。"
+                return self._format_model_failure_message()
             response = self._polish_response(response, {}, relationship_state)
 
         # 记录历史
@@ -534,13 +538,37 @@ class BotInstance:
     async def _chat_with_fallback(self, messages: list[dict], system_prompt: str = "") -> Optional[str]:
         """调用模型聊天，失败时返回 None（由调用者处理友好提示）"""
         try:
+            self._last_model_error = None
             return await self.model.chat(messages, system_prompt)
         except RuntimeError as e:
-            logger.error(f"[BotInstance] 对话失败: {e}")
+            self._last_model_error = self._sanitize_model_error(e)
+            logger.error(f"[BotInstance] 对话失败: {self._last_model_error}")
             return None
         except Exception as e:
+            self._last_model_error = self._sanitize_model_error(e)
             logger.exception("[BotInstance] 对话异常: %s", e)
             return None
+
+    def _sanitize_model_error(self, error: Exception) -> str:
+        detail = str(error) or type(error).__name__
+        api_key = getattr(self.model, "api_key", "") if self.model else ""
+        if api_key:
+            detail = detail.replace(str(api_key), "[REDACTED_SECRET]")
+        detail = redact_sensitive_tokens(detail)
+        if len(detail) > 500:
+            detail = detail[:500] + "...[truncated]"
+        return detail
+
+    def _format_model_failure_message(self) -> str:
+        provider = getattr(self.model, "provider", "unknown") if self.model else "unknown"
+        model_name = getattr(self.model, "model", "unknown") if self.model else "unknown"
+        detail = self._last_model_error or "未知错误"
+        return (
+            "抱歉，模型请求失败，不一定是网络问题。\n"
+            f"当前模型: {provider} / {model_name}\n"
+            f"错误信息: {detail}\n"
+            "请检查 API Key、base_url、模型名和代理配置；在飞书中可用 /status 或 /models 查看当前配置。"
+        )
 
     def _check_emotion_trigger(self, user_input: str) -> bool:
         """检查是否触发了情绪关键词"""

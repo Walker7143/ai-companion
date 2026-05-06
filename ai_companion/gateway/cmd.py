@@ -26,6 +26,7 @@ from ai_companion.config.loader import Config
 from ai_companion.model.factory import ModelFactory
 from ai_companion.bot.manager import BotManager
 from ai_companion.bot.instance import BotInstance
+from ai_companion.gateway.commands import GatewayCommandHandler
 from ai_companion.gateway.config import Platform, PlatformConfig
 from ai_companion.gateway.platforms.feishu import FeishuAdapter
 from ai_companion.gateway.router import PlatformRouter
@@ -1438,6 +1439,7 @@ async def run_gateway(daemon: bool = True):
     connected_feishu_adapters = []
     if feishu_profiles:
         print(f"[OK] 飞书配置已加载 ({len(feishu_profiles)} 个应用)")
+        command_handler = GatewayCommandHandler(config)
 
         def _make_feishu_message_handler(router: PlatformRouter):
             async def feishu_message_handler(event):
@@ -1458,6 +1460,9 @@ async def run_gateway(daemon: bool = True):
                     bot._feishu_chat_id = event.source.chat_id
 
                 try:
+                    command_response = await command_handler.handle(event.text, bot, event)
+                    if command_response is not None:
+                        return command_response
                     response = await bot.handle_message(event.text)
                     return response
                 except Exception as e:
