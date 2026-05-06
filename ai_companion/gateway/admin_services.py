@@ -52,7 +52,7 @@ WEB_CONFIG_SCHEMA = {
                 "soft_limit_chars": "超过后可能后台压缩，推荐 3000-80000。",
                 "hard_limit_chars": "超过后同步压缩，必须大于 soft limit。",
                 "max_working_turns": "保留最近多少轮原文，越大上下文越长。",
-                "embedding": "none 为纯 SQLite 检索；local 会启用 sentence-transformers。",
+                "embedding": "local 会启用 sentence-transformers；none 为纯 SQLite 检索。",
                 "embedding_model": "本地向量模型名，默认 all-MiniLM-L6-v2。",
             },
         },
@@ -464,7 +464,7 @@ class ConfigAdminService:
             "max_working_turns": _as_int(memory.get("max_working_turns"), 20, 1, 200),
             "max_summaries": _as_int(memory.get("max_summaries"), 5, 1, 50),
             "semantic_char_limit": _as_int(memory.get("semantic_char_limit"), 4400, 500),
-            "embedding": memory.get("embedding", "none"),
+            "embedding": memory.get("embedding", "local"),
             "embedding_model": memory.get("embedding_model", "all-MiniLM-L6-v2"),
         }
 
@@ -645,7 +645,7 @@ class ConfigAdminService:
             "max_working_turns": _as_int(memory_data.get("max_working_turns"), existing.get("max_working_turns", 20), 1, 200),
             "max_summaries": _as_int(memory_data.get("max_summaries"), existing.get("max_summaries", 5), 1, 50),
             "semantic_char_limit": _as_int(memory_data.get("semantic_char_limit"), existing.get("semantic_char_limit", 4400), 500),
-            "embedding": memory_data.get("embedding", existing.get("embedding", "none")),
+            "embedding": memory_data.get("embedding", existing.get("embedding", "local")),
             "embedding_model": memory_data.get("embedding_model", existing.get("embedding_model", "all-MiniLM-L6-v2")),
         })
         if existing["soft_limit_chars"] >= existing["hard_limit_chars"]:

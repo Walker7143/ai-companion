@@ -238,7 +238,14 @@ class GatewayCommandHandler:
         try:
             proactive = bot.get_proactive_status()
             proactive_cfg = proactive.get("config", {}) if isinstance(proactive, dict) else {}
+            scheduler_lock = proactive.get("scheduler_lock", {}) if isinstance(proactive, dict) else {}
             lines.append(f"- 主动唤醒: {'开启' if proactive_cfg.get('enabled') else '关闭'}")
+            for label, key in (("主动唤醒", "proactive"), ("人生轨迹", "life")):
+                lock_info = scheduler_lock.get(key, {}) if isinstance(scheduler_lock, dict) else {}
+                if lock_info.get("held") is False and lock_info.get("owner"):
+                    owner = lock_info["owner"]
+                    owner_pid = owner.get("pid") or "unknown"
+                    lines.append(f"- {label}轮询: 已由其他进程持有 (PID {owner_pid})")
         except Exception:
             pass
 

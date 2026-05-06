@@ -3,7 +3,7 @@
 # 用法: bash scripts/setup-embeddings.sh
 #
 # 功能：
-# 1. 安装 sentence-transformers
+# 1. 安装 sentence-transformers 和 Chroma
 # 2. 下载 all-MiniLM-L6-v2 模型（约 90MB）
 # 3. 自动将 config/models.yaml 的 embedding 设为 "local"
 #
@@ -23,9 +23,9 @@ echo "━━━ AI Companion — Embedding 安装脚本 ━━━"
 echo ""
 
 # 1. 安装依赖
-echo "[1/4] 安装 sentence-transformers..."
-if ! pip show sentence-transformers > /dev/null 2>&1; then
-    pip install sentence-transformers -q
+echo "[1/4] 安装 sentence-transformers 和 Chroma..."
+if ! python -m pip show sentence-transformers chromadb > /dev/null 2>&1; then
+    python -m pip install sentence-transformers chromadb -q
     echo "      ✓ 安装完成"
 else
     echo "      ✓ 已安装（跳过）"

@@ -14,6 +14,7 @@ from ..proactive.life_config import LifeConfig
 from ..proactive.life_state import LifeState
 from ..proactive.life_engine import LifeEngine
 from ..proactive.life_scheduler import LifeScheduler
+from ..proactive.runtime_lock import BotSchedulerRuntimeLock
 from ..skill import SkillDispatcher, SkillRegistry, ImageGenerationSkill, TTSSkill, MultimodalSender, create_channel
 from ..skill.base import SkillContext
 from ..skill.command import (
@@ -108,6 +109,11 @@ class BotInstance:
         self.proactive_scheduler: Optional[ProactiveScheduler] = None
         self._proactive_platform = None
         self._schedulers_started = False
+        self._proactive_scheduler_lock: Optional[BotSchedulerRuntimeLock] = None
+        self._proactive_scheduler_lock_owner: Optional[dict] = None
+        self._life_scheduler_lock: Optional[BotSchedulerRuntimeLock] = None
+        self._life_scheduler_lock_owner: Optional[dict] = None
+        self._allowed_proactive_scheduler_platforms: Optional[set[str]] = None
         self._background_tasks: set[asyncio.Task] = set()
 
         # ── 人生轨迹系统 ─────────────────────────────────────
@@ -291,6 +297,13 @@ class BotInstance:
         # 设置回调
         self.proactive_engine._platform_sender = lambda msg: self._proactive_platform.send(self.id, msg)
 
+    def set_allowed_proactive_scheduler_platforms(self, platforms: Optional[set[str] | list[str] | tuple[str, ...]]):
+        """限制当前运行入口允许启动哪些平台的主动唤醒调度器。"""
+        if platforms is None:
+            self._allowed_proactive_scheduler_platforms = None
+            return
+        self._allowed_proactive_scheduler_platforms = {str(item).lower() for item in platforms}
+
     def _ensure_proactive_platform_sender(self):
         """确保主动唤醒有发送通道；CLI 默认打印到终端。"""
         if self.proactive_engine._platform_sender:
@@ -375,33 +388,122 @@ class BotInstance:
 
     async def _ensure_schedulers_started(self):
         """按需启动后台调度器（只启动一次）。"""
-        if self._schedulers_started:
+        if self.proactive_scheduler and self.life_scheduler:
             return
 
-        # 启动主动唤醒调度器（发送消息，受黄金时段限制）
-        if self.proactive_config.is_active:
-            self._ensure_proactive_platform_sender()
+        await self._ensure_proactive_scheduler_started()
+        await self._ensure_life_scheduler_started()
+        self._schedulers_started = bool(self.proactive_scheduler or self.life_scheduler)
+
+    async def _ensure_proactive_scheduler_started(self):
+        if self.proactive_scheduler:
+            return
+
+        if not self.proactive_config.is_active:
+            logger.info(f"[BotInstance] {self.name} 处于静默模式，跳过主动唤醒调度器")
+            return
+
+        platform_type = (self.proactive_config.platform_type or "cli").lower()
+        allowed = self._allowed_proactive_scheduler_platforms
+        if allowed is not None and platform_type not in allowed:
+            logger.info(
+                "[BotInstance] 当前入口不接管 %s 平台的主动唤醒调度器，跳过 %s",
+                platform_type,
+                self.name,
+            )
+            return
+
+        self._ensure_proactive_platform_sender()
+        if not self.proactive_engine._platform_sender:
+            logger.info(f"[BotInstance] {self.name} 未配置可用主动消息发送通道，跳过主动唤醒调度器")
+            return
+
+        if not self._acquire_scheduler_runtime_lock("proactive"):
+            self._log_scheduler_lock_skip("主动唤醒", self._proactive_scheduler_lock_owner)
+            return
+
+        try:
             self.proactive_scheduler = ProactiveScheduler(self.proactive_engine)
             self.proactive_scheduler.set_dependencies(self.model, self.memory)
             await self.proactive_scheduler.start()
             logger.info(f"[BotInstance] 主动唤醒配置: idle_threshold={self.proactive_config.idle_threshold_hours}h, max_daily={self.proactive_config.max_daily}, 黄金时段={self.proactive_config.preferred_contact_times}")
-        else:
-            logger.info(f"[BotInstance] {self.name} 处于静默模式，跳过主动唤醒调度器")
+        except Exception:
+            self._release_scheduler_runtime_lock("proactive")
+            self.proactive_scheduler = None
+            raise
 
-        # 启动人生轨迹调度器（独立周期，不受黄金时段限制）
-        self.life_scheduler = LifeScheduler(
-            life_engine=self.life_engine,
-            life_config=self.life_config,
-            life_state=self.life_state,
+    async def _ensure_life_scheduler_started(self):
+        if self.life_scheduler:
+            return
+
+        if not self._acquire_scheduler_runtime_lock("life"):
+            self._log_scheduler_lock_skip("人生轨迹", self._life_scheduler_lock_owner)
+            return
+
+        try:
+            self.life_scheduler = LifeScheduler(
+                life_engine=self.life_engine,
+                life_config=self.life_config,
+                life_state=self.life_state,
+            )
+            self.life_engine.set_model(self.model)
+            if self.memory:
+                self.life_engine.set_memory(self.memory)
+            self.life_engine.set_persona_loader(self.persona_loader)
+            await self.life_scheduler.start()
+            print(f"[OK] {self.name} 人生轨迹已启动")
+            print(f"     日常事件间隔: {self.life_config.daily_interval}s, 人生大事间隔: {self.life_config.major_interval}s")
+        except Exception:
+            self._release_scheduler_runtime_lock("life")
+            self.life_scheduler = None
+            raise
+
+    def _acquire_scheduler_runtime_lock(self, kind: str) -> bool:
+        attr = f"_{kind}_scheduler_lock"
+        owner_attr = f"_{kind}_scheduler_lock_owner"
+        current_lock = getattr(self, attr)
+        if current_lock and current_lock.acquired:
+            return True
+
+        lock_path = Path(self._data_dir) / self.id / "runtime" / f"{kind}_scheduler.lock"
+        lock = BotSchedulerRuntimeLock(
+            lock_path,
+            bot_id=self.id,
+            metadata={"bot_name": self.name, "scheduler": kind},
         )
-        self.life_engine.set_model(self.model)
-        if self.memory:
-            self.life_engine.set_memory(self.memory)
-        self.life_engine.set_persona_loader(self.persona_loader)
-        await self.life_scheduler.start()
-        print(f"[OK] {self.name} 人生轨迹已启动")
-        print(f"     日常事件间隔: {self.life_config.daily_interval}s, 人生大事间隔: {self.life_config.major_interval}s")
-        self._schedulers_started = True
+        if lock.acquire():
+            setattr(self, attr, lock)
+            setattr(self, owner_attr, None)
+            logger.info("[BotInstance] 已获得 %s 的 %s 调度器锁: %s", self.name, kind, lock_path)
+            return True
+
+        setattr(self, attr, None)
+        setattr(self, owner_attr, lock.read_owner())
+        return False
+
+    def _release_scheduler_runtime_lock(self, kind: str) -> None:
+        attr = f"_{kind}_scheduler_lock"
+        owner_attr = f"_{kind}_scheduler_lock_owner"
+        current_lock = getattr(self, attr)
+        if current_lock:
+            current_lock.release()
+        setattr(self, attr, None)
+        setattr(self, owner_attr, None)
+
+    def _release_scheduler_runtime_locks(self) -> None:
+        self._release_scheduler_runtime_lock("proactive")
+        self._release_scheduler_runtime_lock("life")
+
+    def _log_scheduler_lock_skip(self, label: str, owner: Optional[dict]) -> None:
+        owner = owner or {}
+        owner_pid = owner.get("pid")
+        owner_text = f"PID {owner_pid}" if owner_pid else "其他进程"
+        logger.info(
+            "[BotInstance] %s 的%s调度器已由 %s 持有，当前进程跳过",
+            self.name,
+            label,
+            owner_text,
+        )
 
     async def ensure_schedulers_started(self):
         """公开方法：确保后台调度器已启动。"""
@@ -596,6 +698,16 @@ class BotInstance:
             },
             "state": self.proactive_engine.get_status(),
             "scheduler": self.proactive_scheduler.get_status() if self.proactive_scheduler else None,
+            "scheduler_lock": {
+                "proactive": {
+                    "held": bool(self._proactive_scheduler_lock and self._proactive_scheduler_lock.acquired),
+                    "owner": self._proactive_scheduler_lock_owner,
+                },
+                "life": {
+                    "held": bool(self._life_scheduler_lock and self._life_scheduler_lock.acquired),
+                    "owner": self._life_scheduler_lock_owner,
+                },
+            },
         }
 
     def get_skill_capabilities(self) -> dict:
@@ -664,6 +776,7 @@ class BotInstance:
         if self.life_scheduler:
             await self.life_scheduler.stop()
         self._schedulers_started = False
+        self._release_scheduler_runtime_locks()
         await self._drain_background_tasks()
         if self.memory:
             await self.memory.close()

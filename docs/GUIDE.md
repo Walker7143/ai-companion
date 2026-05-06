@@ -1356,7 +1356,7 @@ models:
 
 # 记忆配置
 memory:
-  embedding: "none"           # 向量嵌入模式: local/none（sentence-transformers 已默认安装）
+  embedding: "local"          # 向量嵌入模式: local/none（sentence-transformers 已默认安装）
   embedding_model: "all-MiniLM-L6-v2"  # sentence-transformers 模型
   max_working_turns: 20       # 工作记忆保留轮数
   hard_limit_chars: 5000      # 硬上限，超限同步压缩
@@ -1416,7 +1416,7 @@ skills:
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `embedding` | "none" | 向量嵌入模式，`local` 启用 sentence-transformers |
+| `embedding` | "local" | 向量嵌入模式，`local` 启用 sentence-transformers，`none` 关闭向量召回 |
 | `embedding_model` | "all-MiniLM-L6-v2" | 向量模型名称 |
 | `max_working_turns` | 20 | 工作记忆保留的对话轮数 |
 | `hard_limit_chars` | 5000 | 硬上限，超限立即压缩 |

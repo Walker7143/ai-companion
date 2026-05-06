@@ -186,7 +186,7 @@ minimax:
   max_context_tokens: 20000
 
 memory:
-  embedding: "none"          # "local" | "none"
+  embedding: "local"         # "local" | "none"
   embedding_model: "all-MiniLM-L6-v2"
   max_working_turns: 20
   hard_limit_chars: 5000

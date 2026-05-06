@@ -557,6 +557,11 @@ async def run_setup():
         provider_config.setdefault("max_context_tokens", default_context_tokens)
     models_config[provider_key] = provider_config
 
+    memory_config = dict(models_config.get("memory", {}) if isinstance(models_config.get("memory"), dict) else {})
+    memory_config.setdefault("embedding", "local")
+    memory_config.setdefault("embedding_model", "all-MiniLM-L6-v2")
+    models_config["memory"] = memory_config
+
     _write_yaml_file(models_config_path, models_config)
     console.print("✓ 模型配置已保存（已保留其他模型和 memory 配置）\n")
 

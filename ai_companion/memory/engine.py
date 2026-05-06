@@ -98,7 +98,7 @@ class MemoryEngine:
 
         # embedding 配置
         emb_cfg = self.config
-        embedding_mode = emb_cfg.get("embedding", "none")
+        embedding_mode = emb_cfg.get("embedding", "local")
         embedding_model = emb_cfg.get("embedding_model", "all-MiniLM-L6-v2")
         self.semantic_char_limit = emb_cfg.get("semantic_char_limit", 4400)
         self.prompt_char_limit = emb_cfg.get("prompt_char_limit", max(12000, self.semantic_char_limit))

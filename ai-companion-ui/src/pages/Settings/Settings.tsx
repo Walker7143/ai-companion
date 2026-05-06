@@ -150,7 +150,7 @@ const defaultMemory: BotConfig['memory'] = {
   max_working_turns: 20,
   max_summaries: 5,
   semantic_char_limit: 4400,
-  embedding: 'none',
+  embedding: 'local',
   embedding_model: 'all-MiniLM-L6-v2',
 };
 

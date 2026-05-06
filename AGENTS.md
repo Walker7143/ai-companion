@@ -72,7 +72,7 @@ Storage Layer（SQLite + Chroma 向量）
 2. **Episodic Memory** - SQLite + Chroma 向量，情景片段语义召回
 3. **Semantic Memory** - SQLite，关键事实（用户画像）提取
 
-向量嵌入默认关闭（`embedding: "none"`），启用需安装 sentence-transformers。
+向量嵌入默认开启（`embedding: "local"`），安装项目时会安装 sentence-transformers 和 Chroma；如需关闭可设为 `embedding: "none"`。
 
 ### 人格配置
 

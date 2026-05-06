@@ -191,25 +191,9 @@ function Install-Local {
     $originalDir = Get-Location
     try {
         Set-Location $ProjectDir
-        # Install without chroma-hnswlib first (it needs C++ compiler on Windows)
-        Write-Host "  Installing core dependencies..." -ForegroundColor Gray
-        & python -m pip install aiohttp httpx lark-oapi pyyaml pydantic rich jieba python-dotenv -q
-
-        # Try chroma-hnswlib with binary only (skip if no precompiled wheel available)
-        Write-Host "  Installing chroma (optional, for vector search)..." -ForegroundColor Gray
-        $chromaOk = $false
-        try {
-            $ErrorActionPreference = "SilentlyContinue"
-            & python -m pip install chroma-hnswlib aiosqlite --only-binary :all: -i https://pypi.tuna.tsinghua.edu.cn/simple | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                $chromaOk = $true
-                Write-Host "    [OK] chroma-hnswlib installed" -ForegroundColor Green
-            }
-        } catch {}
-
-        if (-not $chromaOk) {
-            Write-Host "    [WARN] chroma-hnswlib skipped (vector search disabled)" -ForegroundColor Yellow
-        }
+        # Install runtime dependencies, including local embedding support.
+        Write-Host "  Installing runtime dependencies..." -ForegroundColor Gray
+        & python -m pip install aiohttp httpx lark-oapi pyyaml pydantic rich jieba python-dotenv aiosqlite chromadb sentence-transformers -q
 
         Write-Host "[OK] Dependencies installed" -ForegroundColor Green
 

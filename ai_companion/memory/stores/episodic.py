@@ -36,7 +36,7 @@ class EpisodicStore:
 只输出摘要文字，不要解释。"""
 
     def __init__(self, db_path: str, chroma_dir: str,
-                 embedding_mode: str = "none",
+                 embedding_mode: str = "local",
                  encoder_model: str = "all-MiniLM-L6-v2"):
         self.db_path = db_path
         self.chroma_dir = Path(chroma_dir)

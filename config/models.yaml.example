@@ -28,7 +28,7 @@ ollama:
   max_context_tokens: 20000 # 模型上下文上限（token），超限触发压缩
 
 memory:
-  embedding: "none"          # "local" | "none"
+  embedding: "local"         # "local" | "none"
   embedding_model: "all-MiniLM-L6-v2"  # sentence-transformers 模型名
   max_working_turns: 20       # 工作记忆保留轮数
   hard_limit_chars: 5000      # 硬上限，超限同步压缩

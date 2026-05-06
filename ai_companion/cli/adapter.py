@@ -61,6 +61,9 @@ class CLIAdapter:
     def _install_cli_proactive_queue(self, bot):
         if not bot:
             return
+        platform_type = (bot.proactive_config.platform_type or "cli").lower()
+        if platform_type != "cli":
+            return
         bot.proactive_engine._platform_sender = (
             lambda msg, bot_name=bot.name: self._queue_proactive_message(bot_name, msg)
         )

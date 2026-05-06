@@ -258,6 +258,7 @@ class ProactiveEngine:
             return "未启用人生轨迹"
 
         try:
+            life_engine.state.load()
             status = life_engine.get_status()
         except Exception as e:
             logger.debug(f"[ProactiveEngine] 获取 Bot 时间线失败: {e}")
@@ -547,6 +548,10 @@ class ProactiveEngine:
         # 获取 Bot 可分享的生活事件
         bot_life_context = ""
         if hasattr(self, 'life_engine') and self.life_engine:
+            try:
+                self.life_engine.state.load()
+            except Exception:
+                pass
             shareable_events = self.life_engine.state.get_recent_shareable_events(limit=2)
             if shareable_events:
                 event = shareable_events[0]

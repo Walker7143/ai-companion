@@ -24,6 +24,8 @@ def get_data_dir() -> Path:
 def build_memory_config_for_provider(config: Config, provider: str) -> dict:
     """Merge provider context metadata into memory compressor config."""
     memory_config = dict(config.models.get("memory", {}) or {})
+    memory_config.setdefault("embedding", "local")
+    memory_config.setdefault("embedding_model", "all-MiniLM-L6-v2")
     provider_config = config.get_provider_config(provider)
     max_context_tokens = provider_config.get("max_context_tokens") or provider_config.get("max_context_chars")
     if max_context_tokens:
@@ -102,6 +104,7 @@ async def main(bot_filter: str = None):
 
         bot_config = {**bot_config, "data_dir": str(data_dir)}
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
+        bot.set_allowed_proactive_scheduler_platforms({"cli", "webhook"})
         # CLI 模式下延迟启动后台调度器：
         # 仅在用户真正与该 Bot 开始对话后再启动人生轨迹/主动唤醒。
         await bot.init(start_schedulers=False)

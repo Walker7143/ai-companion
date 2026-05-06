@@ -57,6 +57,8 @@ logger = logging.getLogger(__name__)
 def build_memory_config_for_provider(config: Config, provider: str) -> dict:
     """Merge provider context metadata into memory compressor config."""
     memory_config = dict(config.models.get("memory", {}) or {})
+    memory_config.setdefault("embedding", "local")
+    memory_config.setdefault("embedding_model", "all-MiniLM-L6-v2")
     provider_config = config.get_provider_config(provider)
     max_context_tokens = provider_config.get("max_context_tokens") or provider_config.get("max_context_chars")
     if max_context_tokens:
@@ -224,6 +226,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
     host = admin_host(config.config)
     port = admin_port(config.config)
+    memory_config = build_memory_config_for_provider(config, config.default_provider)
+    embedding_enabled = memory_config.get("embedding", "local") == "local"
     if _admin_runner is not None:
         print(f"[OK] 管理 API 已在运行，复用现有实例 (http://{host}:{port})")
         print()
@@ -357,7 +361,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "semantic_size_kb": 0,
                 "user_understanding_path": understanding_path,
                 "user_understanding_auto_facts": _understanding_auto_count(understanding),
-                "embedding_enabled": False,
+                "embedding_enabled": embedding_enabled,
             },
         })
 
@@ -587,7 +591,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             "semantic_size_kb": 0,
             "user_understanding_path": understanding_path,
             "user_understanding_auto_facts": _understanding_auto_count(understanding),
-            "embedding_enabled": False,
+            "embedding_enabled": embedding_enabled,
         })
 
     async def handle_memory_working(request):
@@ -908,13 +912,12 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             service = ConfigAdminService(config, bot_manager)
             result = service.update_bot_config(bot_id, body)
             bot = bot_manager.get_bot(bot_id)
-            if bot and "proactive" in body and bot.proactive_scheduler:
-                await bot.proactive_scheduler.stop()
-                bot.proactive_scheduler = None
-                from ai_companion.proactive.scheduler import ProactiveScheduler
-                bot.proactive_scheduler = ProactiveScheduler(bot.proactive_engine)
-                bot.proactive_scheduler.set_dependencies(bot.model, bot.memory)
-                await bot.proactive_scheduler.start()
+            if bot and "proactive" in body:
+                if bot.proactive_scheduler:
+                    await bot.proactive_scheduler.stop()
+                    bot.proactive_scheduler = None
+                    bot._release_scheduler_runtime_lock("proactive")
+                await bot.ensure_schedulers_started()
             return web.json_response(result)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
@@ -1398,6 +1401,7 @@ async def run_gateway(daemon: bool = True):
     for bot_config in config.get_enabled_bots():
         bot_config = {**bot_config, "data_dir": str(data_dir)}
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
+        bot.set_allowed_proactive_scheduler_platforms({"feishu"})
 
         # 设置主动消息发送平台（需要飞书适配器在 init 之前设置）。
         # 必须复用后续 connect() 的同一个 adapter，否则主动发送会命中未连接实例。
