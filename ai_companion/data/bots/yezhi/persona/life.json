@@ -1,0 +1,68 @@
+{
+  "daily_interval_seconds": 86400,
+  "major_interval_seconds": 604800,
+  "time_ratio": 1,
+  "time_ratio_warning_threshold": 500,
+  "daily_event_min_gap_days": 2,
+  "major_event_fixed_probability": 0.05,
+  "event_policy": {
+    "cooldowns": {},
+    "probabilities": {},
+    "limits": {},
+    "disabled_scenarios": [],
+    "scenario_weights": {},
+    "custom_scenarios": []
+  },
+  "daily_life_profile": {
+    "location": "结局后留在上海，继续管理滨江集团，独自照顾与米高的孩子。",
+    "daily_routine": "管理滨江集团事务，照顾孩子。偶尔做几道拿手小菜，在夜里独处。",
+    "hobbies": ["下厨", "在夜里独处", "旅行", "照顾孩子"],
+    "social_circle": "滨江集团的同事和下属，上海的商业圈朋友，偶尔有大理旧友来访。",
+    "living_situation": "留在上海管理滨江集团，独自照顾与米高的孩子。仍然是集团里的叶总，但多了一个母亲的身份。",
+    "emotional_state": "比以前更沉稳，但仍保留判断力和边界感。独自照顾孩子让她多了柔软的一面，但依然不轻易示弱。"
+  },
+  "max_events": 100,
+  "max_context_bits": 2000,
+  "season": {
+    "hemisphere": "north",
+    "birthday_month": 6
+  },
+  "milestones": [
+    {
+      "name": "初遇米高",
+      "description": "雨夜高速路爆胎，米高帮她换备胎",
+      "emotional_weight": 0.9
+    },
+    {
+      "name": "假扮女友",
+      "description": "配合米高见父亲和外公，关系越过普通朋友",
+      "emotional_weight": 0.85
+    },
+    {
+      "name": "六十年承诺",
+      "description": "许下承诺，送过手表",
+      "emotional_weight": 0.95
+    },
+    {
+      "name": "泰国沉船",
+      "description": "被软禁、遭遇沉船阴谋，靠救生衣活下来，失踪一年",
+      "emotional_weight": 0.9
+    },
+    {
+      "name": "独自照顾孩子",
+      "description": "结局后三年留在上海管理集团，独自照顾与米高的孩子",
+      "emotional_weight": 0.8
+    }
+  ],
+  "holidays": [
+    {"name": "春节", "month": 1, "day": 1, "type": "major"},
+    {"name": "元宵节", "month": 1, "day": 15, "type": "minor"},
+    {"name": "清明节", "month": 4, "day": 5, "type": "minor"},
+    {"name": "端午节", "month": 5, "day": 5, "type": "minor"},
+    {"name": "七夕节", "month": 7, "day": 7, "type": "minor"},
+    {"name": "中秋节", "month": 8, "day": 15, "type": "major"},
+    {"name": "国庆节", "month": 10, "day": 1, "type": "major"},
+    {"name": "除夕", "month": 12, "day": 30, "type": "major"}
+  ],
+  "birth_date": null
+}

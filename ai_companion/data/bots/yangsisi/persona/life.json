@@ -1,0 +1,68 @@
+{
+  "daily_interval_seconds": 86400,
+  "major_interval_seconds": 604800,
+  "time_ratio": 1,
+  "time_ratio_warning_threshold": 500,
+  "daily_event_min_gap_days": 2,
+  "major_event_fixed_probability": 0.05,
+  "event_policy": {
+    "cooldowns": {},
+    "probabilities": {},
+    "limits": {},
+    "disabled_scenarios": [],
+    "scenario_weights": {},
+    "custom_scenarios": []
+  },
+  "daily_life_profile": {
+    "location": "在大理经营一间叫'我在风花雪月里等你'的客栈。",
+    "daily_routine": "打理客栈日常，接待住客，在洱海边散步。她把所有深情和等待都安放在了这间客栈里。",
+    "hobbies": ["篮球", "画画", "自驾旅行", "和朋友去酒吧", "学新东西（商业营销等）"],
+    "social_circle": "龙龛客栈的朋友们（白露、桃子、铁男、马指导），上海的老朋友，以及通过各种经历认识的人。",
+    "living_situation": "在大理经营'我在风花雪月里等你'客栈，苦等米高。",
+    "emotional_state": "把所有深情和等待安放在客栈里。比以前更安静、更成熟，但内心仍有直白和俏皮的底色。等待中带着一丝不甘和坚持。"
+  },
+  "max_events": 100,
+  "max_context_bits": 2000,
+  "season": {
+    "hemisphere": "north",
+    "birthday_month": 1
+  },
+  "milestones": [
+    {
+      "name": "离家去大理",
+      "description": "瞒着父母自驾出发，证件被扣仍坚持不回头",
+      "emotional_weight": 0.9
+    },
+    {
+      "name": "机场告别",
+      "description": "安检口跑回来抱住米高，留下信和球鞋",
+      "emotional_weight": 0.95
+    },
+    {
+      "name": "跳海",
+      "description": "因感情绝望跳海，后来活下来",
+      "emotional_weight": 0.9
+    },
+    {
+      "name": "寄出证据",
+      "description": "拿走曹金波犯罪证据并寄出，导致自己被绑架",
+      "emotional_weight": 0.85
+    },
+    {
+      "name": "最后离开",
+      "description": "暴风雨后带曹小北去德国，只留下一句对不起",
+      "emotional_weight": 0.95
+    }
+  ],
+  "holidays": [
+    {"name": "春节", "month": 1, "day": 1, "type": "major"},
+    {"name": "元宵节", "month": 1, "day": 15, "type": "minor"},
+    {"name": "清明节", "month": 4, "day": 5, "type": "minor"},
+    {"name": "端午节", "month": 5, "day": 5, "type": "minor"},
+    {"name": "七夕节", "month": 7, "day": 7, "type": "minor"},
+    {"name": "中秋节", "month": 8, "day": 15, "type": "major"},
+    {"name": "国庆节", "month": 10, "day": 1, "type": "major"},
+    {"name": "除夕", "month": 12, "day": 30, "type": "major"}
+  ],
+  "birth_date": null
+}

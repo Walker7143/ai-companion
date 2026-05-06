@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "mode": "active",
+  "scheduler": {
+    "check_interval_seconds": 600,
+    "idle_threshold_hours": 12,
+    "max_daily": 6,
+    "min_interval_hours": 3,
+    "max_idle_days": 5,
+    "contact_probability": 0.4,
+    "force_contact": false
+  },
+  "triggers": {
+    "idle_reminder": {
+      "enabled": true,
+      "idle_hours": 12
+    },
+    "emotion_trigger": {
+      "enabled": true,
+      "keywords": ["不开心", "难过", "累", "生气", "烦", "郁闷", "沮丧", "孤独", "想哭", "崩溃"],
+      "response_delay_minutes": 3
+    }
+  },
+  "platform": {
+    "type": "cli",
+    "webhook_url": null
+  },
+  "preferred_contact_times": ["09:00-01:00"],
+  "timezone": "Asia/Shanghai",
+  "random_trigger_prob": 0.08,
+  "random_trigger_min_ratio": 0.4
+}
