@@ -93,6 +93,7 @@ RETRY_DELAY_SECONDS = 2
 BACKOFF_DELAY_SECONDS = 30
 SESSION_EXPIRED_ERRCODE = -14
 MESSAGE_DEDUP_TTL_SECONDS = 300
+CONTENT_DEDUP_TTL_SECONDS = 45
 
 MEDIA_IMAGE = 1
 MEDIA_VIDEO = 2
@@ -1174,6 +1175,7 @@ class WeixinAdapter(BasePlatformAdapter):
         self._send_session: Optional[aiohttp.ClientSession] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._dedup = MessageDeduplicator(ttl_seconds=MESSAGE_DEDUP_TTL_SECONDS)
+        self._content_dedup = MessageDeduplicator(ttl_seconds=CONTENT_DEDUP_TTL_SECONDS)
 
         self._account_id = str(extra.get("account_id") or os.getenv("WEIXIN_ACCOUNT_ID", "")).strip()
         self._token = str(config.token or extra.get("token") or os.getenv("WEIXIN_TOKEN", "")).strip()
@@ -1452,6 +1454,22 @@ class WeixinAdapter(BasePlatformAdapter):
         if not text and not media_paths:
             return
 
+        content_key = self._content_dedup_key(
+            sender_id=sender_id,
+            chat_id=effective_chat_id,
+            text=text,
+            media_paths=media_paths,
+            media_types=media_types,
+        )
+        if content_key and self._content_dedup.is_duplicate(content_key):
+            logger.info(
+                "[%s] duplicate inbound content suppressed from=%s type=%s",
+                self.name,
+                _safe_id(sender_id),
+                chat_type,
+            )
+            return
+
         source = self.build_source(
             chat_id=effective_chat_id,
             chat_type=chat_type,
@@ -1470,6 +1488,26 @@ class WeixinAdapter(BasePlatformAdapter):
         )
         logger.info("[%s] inbound from=%s type=%s media=%d", self.name, _safe_id(sender_id), source.chat_type, len(media_paths))
         await self.handle_message(event)
+
+    def _content_dedup_key(
+        self,
+        *,
+        sender_id: str,
+        chat_id: str,
+        text: str,
+        media_paths: List[str],
+        media_types: List[str],
+    ) -> str:
+        payload = {
+            "account_id": self._account_id,
+            "sender_id": sender_id,
+            "chat_id": chat_id,
+            "text": re.sub(r"\s+", " ", str(text or "").strip()),
+            "media_count": len(media_paths),
+            "media_types": list(media_types),
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _is_dm_allowed(self, sender_id: str) -> bool:
         if self._dm_policy == "disabled":

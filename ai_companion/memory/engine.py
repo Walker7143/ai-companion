@@ -245,18 +245,20 @@ class MemoryEngine:
         1. 存储本轮对话到工作记忆
         2. 异步抽取并更新情景记忆和语义记忆
         """
-        sid = self._session_id or self.working.current_session or "default"
-        context = self._normalize_turn_context(turn_context, session_id=sid)
+        current_sid = self._session_id or self.working.current_session or "default"
+        context = self._normalize_turn_context(turn_context, session_id=current_sid)
+        sid = context.session_id or current_sid
+        user_id = context.user_id or self.user_id
         await self.working.append(
             user_input=user_input,
             bot_output=llm_output,
             session_id=sid,
-            user_id=self.user_id,
+            user_id=user_id,
             platform=context.platform,
         )
         await self.daily.append_turn(
             bot_id=self.bot_id,
-            user_id=self.user_id,
+            user_id=user_id,
             user_input=user_input,
             bot_output=llm_output,
             session_id=sid,
@@ -281,7 +283,7 @@ class MemoryEngine:
             self.governor.apply(
                 candidates,
                 bot_id=self.bot_id,
-                user_id=self.user_id,
+                user_id=user_id,
                 session_id=sid,
             )
         )
@@ -301,7 +303,7 @@ class MemoryEngine:
         await task
         self._maintenance_counter += 1
         if self._maintenance_counter % 5 == 0:
-            await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id, summarizer=self._summarizer)
+            await self.maintenance.run_light(bot_id=self.bot_id, user_id=user_id, summarizer=self._summarizer)
 
     def _log_attitude_write(self, semantic_result):
         """attitude_score 写入日志（semantic 返回单个 dict 或 None）"""

@@ -125,6 +125,44 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
             await adapter.disconnect()
             self.assertFalse(adapter.is_connected)
 
+    async def test_weixin_deduplicates_same_content_with_different_message_ids(self):
+        events = []
+        adapter = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={
+                    "account_id": "wxbot",
+                    "base_url": "https://example.invalid",
+                    "dm_policy": "allowlist",
+                    "allow_from": ["user-1"],
+                    "group_policy": "disabled",
+                },
+            )
+        )
+
+        async def capture_event(event):
+            events.append(event)
+
+        async def noop_typing(*args, **kwargs):
+            return None
+
+        adapter.handle_message = capture_event
+        adapter._maybe_fetch_typing_ticket = noop_typing
+        adapter._poll_session = object()
+
+        message = {
+            "from_user_id": "user-1",
+            "to_user_id": "wxbot",
+            "context_token": "ctx-2",
+            "item_list": [{"type": 1, "text_item": {"text": "same text"}}],
+        }
+        await adapter._process_message({**message, "message_id": "msg-a"})
+        await adapter._process_message({**message, "message_id": "msg-b"})
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].text, "same text")
+
     async def test_weixin_send_splits_reply_into_gradual_sentences(self):
         sent = []
 

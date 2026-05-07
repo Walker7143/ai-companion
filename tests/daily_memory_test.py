@@ -69,6 +69,41 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertEqual(ctx.get("daily_context"), {})
         self.assertEqual(status.get("daily_messages"), 0)
 
+    def test_turn_context_session_controls_background_memory_write(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="daily-memory-session-") as tmp:
+                engine = MemoryEngine(
+                    "daily_session_bot",
+                    Path(tmp),
+                    config={"embedding": "none"},
+                )
+                await engine.init()
+                engine.start_session("cli-session")
+                await engine.on_message(
+                    "gateway user text",
+                    "gateway reply",
+                    turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw-session",
+                        "user_id": "gateway-user",
+                        "channel_type": "dm",
+                        "message_id": "msg-1",
+                    },
+                )
+                working_gw = engine.working.get_all_messages("gw-session")
+                working_cli = engine.working.get_all_messages("cli-session")
+                daily_ctx = engine.daily.get_recent_context(
+                    bot_id="daily_session_bot",
+                    user_id="gateway-user",
+                )
+                await engine.close()
+                return working_gw, working_cli, daily_ctx
+
+        working_gw, working_cli, daily_ctx = asyncio.run(run())
+        self.assertEqual([item["content"] for item in working_gw], ["gateway user text", "gateway reply"])
+        self.assertEqual(working_cli, [])
+        self.assertEqual(daily_ctx["recent_messages"][0]["session_id"], "gw-session")
+
 
 if __name__ == "__main__":
     unittest.main()
