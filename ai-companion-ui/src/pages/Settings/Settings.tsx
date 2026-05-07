@@ -7,6 +7,12 @@ import { configApi } from '../../api';
 import type { BotConfig, LifeConfig, PlatformConfig, ProactiveConfig } from '../../types';
 
 type SectionId = 'model' | 'memory' | 'proactive' | 'life' | 'platforms' | 'persona' | 'session_reset';
+type GatewayPlatformStatus = {
+  state?: string;
+  account_id_hint?: string;
+  error_message?: string;
+  updated_at?: string;
+};
 
 const sectionIcon: Record<string, ReactNode> = {
   model: <Sparkles style={{ width: 18, height: 18, color: 'var(--accent)' }} />,
@@ -118,6 +124,11 @@ function platformByName(config: BotConfig, name: string): PlatformConfig {
 
 function configObject(platform: PlatformConfig): Record<string, unknown> {
   return (platform.config || {}) as Record<string, unknown>;
+}
+
+function gatewayPlatformStatus(config: BotConfig, name: string): GatewayPlatformStatus | null {
+  const gatewayStatus = config.diagnostics?.gateway_status as { platforms?: Record<string, GatewayPlatformStatus> } | undefined;
+  return gatewayStatus?.platforms?.[name] || null;
 }
 
 function nestedConfig(platform: PlatformConfig, key: string): Record<string, unknown> {
@@ -360,6 +371,13 @@ export function Settings() {
     if (feishuRouting.mode && feishuRouting.mode !== 'dedicated') {
       items.push('飞书 App 与 Bot 必须一对一绑定，已不支持按群聊路由多个 Bot。');
     }
+    const weixinExtra = nestedConfig(platformByName(draft, 'weixin'), 'extra');
+    if (weixinExtra.dm_policy === 'open') {
+      items.push('微信私聊策略为 open，所有私聊都可能触发 Bot，生产环境建议使用 allowlist。');
+    }
+    if (weixinExtra.group_policy === 'open') {
+      items.push('微信群聊策略为 open，所有群聊都可能触发 Bot，生产环境建议使用 allowlist 或 disabled。');
+    }
     if (draft.proactive.enabled && draft.proactive.min_interval_hours < 1) {
       items.push('主动唤醒最小间隔小于 1 小时，可能造成消息过于频繁。');
     }
@@ -443,6 +461,18 @@ export function Settings() {
       toast.error('启用或填写飞书 App 后必须绑定 Bot，请先选择固定 Bot ID。');
       return;
     }
+    const weixinPlatform = platformByName(draft, 'weixin');
+    const weixinExtra = nestedConfig(weixinPlatform, 'extra');
+    const weixinBindingEnabled = weixinPlatform.enabled || Boolean(weixinExtra.account_id || configObject(weixinPlatform).token);
+    const weixinRouting = { ...nestedConfig(weixinPlatform, 'routing'), mode: 'dedicated', bot_id: draft.bot_id };
+    if (weixinBindingEnabled && !String(weixinExtra.account_id || '').trim()) {
+      toast.error('启用微信时必须填写 account_id。');
+      return;
+    }
+    if (weixinBindingEnabled && !String(configObject(weixinPlatform).token || weixinExtra.token || '').trim()) {
+      toast.error('启用微信时必须填写 token。');
+      return;
+    }
     if (warnings.length > 0 && !confirm(`检测到以下风险：\n\n${warnings.join('\n')}\n\n仍然保存吗？`)) return;
     setSaving(true);
     try {
@@ -451,6 +481,11 @@ export function Settings() {
         enabled: feishuBindingEnabled,
         routing: feishuRouting,
       };
+      const weixin = {
+        ...configObject(weixinPlatform),
+        enabled: weixinBindingEnabled,
+        routing: weixinRouting,
+      };
       const payload = {
         model: draft.model,
         memory: draft.memory,
@@ -458,6 +493,7 @@ export function Settings() {
         life: draft.life,
         platforms: draft.platforms,
         feishu,
+        weixin,
         session_reset: draft.session_reset,
         persona: draft.persona_summary,
       };
@@ -496,6 +532,11 @@ export function Settings() {
   const feishu = platformByName(draft, 'feishu');
   const feishuExtra = nestedConfig(feishu, 'extra');
   const feishuRouting = nestedConfig(feishu, 'routing');
+  const weixin = platformByName(draft, 'weixin');
+  const weixinConfig = configObject(weixin);
+  const weixinExtra = nestedConfig(weixin, 'extra');
+  const weixinRouting = nestedConfig(weixin, 'routing');
+  const weixinRuntime = gatewayPlatformStatus(draft, 'weixin');
   const webhook = platformByName(draft, 'webhook');
   const webhookConfig = configObject(webhook);
   const persona = draft.persona_summary;
@@ -584,7 +625,7 @@ export function Settings() {
           <Input label="最小间隔（小时）" type="number" step="0.1" value={draft.proactive.min_interval_hours} onChange={(event) => patchProactive({ min_interval_hours: Number(event.target.value) })} />
           <Input label="每日最大次数" type="number" value={draft.proactive.max_daily} onChange={(event) => patchProactive({ max_daily: Number(event.target.value) })} />
           <Input label="最长沉默天数" type="number" value={draft.proactive.max_idle_days} onChange={(event) => patchProactive({ max_idle_days: Number(event.target.value) })} />
-          <Select label="投递平台" options={[{ value: 'cli', label: 'CLI' }, { value: 'feishu', label: '飞书' }, { value: 'webhook', label: 'Webhook' }]} value={draft.proactive.platform_type} onChange={(event) => patchProactive({ platform_type: event.target.value })} />
+          <Select label="投递平台" options={[{ value: 'cli', label: 'CLI' }, { value: 'feishu', label: '飞书' }, { value: 'weixin', label: '微信' }, { value: 'webhook', label: 'Webhook' }]} value={draft.proactive.platform_type} onChange={(event) => patchProactive({ platform_type: event.target.value })} />
           <Input label="Webhook URL" value={draft.proactive.webhook_url} onChange={(event) => patchProactive({ webhook_url: event.target.value })} />
           <Input label="主动发送目标频道" value={draft.proactive.home_channel} onChange={(event) => patchProactive({ home_channel: event.target.value })} />
           <Input label="情绪延迟（分钟）" type="number" value={draft.proactive.emotion_response_delay_minutes} onChange={(event) => patchProactive({ emotion_response_delay_minutes: Number(event.target.value) })} />
@@ -617,17 +658,21 @@ export function Settings() {
 
       <SectionCard id="platforms" title={sectionMeta.platforms?.title || '平台集成'} description={sectionMeta.platforms?.description} restart={sectionMeta.platforms?.restart}>
         <div style={{ display: 'grid', gap: 16 }}>
-          {['cli', 'feishu', 'webhook'].map((name) => {
+          {['cli', 'feishu', 'weixin', 'webhook'].map((name) => {
             const platform = platformByName(draft, name);
             return (
               <div key={name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderRadius: 8, background: 'var(--bg-tertiary)' }}>
                 <div>
-                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{name === 'cli' ? 'CLI' : name === 'feishu' ? '飞书' : 'Webhook'}</div>
-                  <FieldHint text={name === 'cli' ? '本地命令行入口。' : name === 'feishu' ? '飞书机器人接入，凭据保存到 config.yaml。' : '通用 Webhook 投递。'} />
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{name === 'cli' ? 'CLI' : name === 'feishu' ? '飞书' : name === 'weixin' ? '微信' : 'Webhook'}</div>
+                  <FieldHint text={name === 'cli' ? '本地命令行入口。' : name === 'feishu' ? '飞书机器人接入，凭据保存到 config.yaml。' : name === 'weixin' ? '个人微信 iLink 接入，默认建议 allowlist。' : '通用 Webhook 投递。'} />
                 </div>
                 <Toggle checked={platform.enabled} onChange={(event) => updatePlatform(name, (p) => {
                   const next = { ...p, enabled: event.target.checked };
-                  return name === 'feishu' && event.target.checked ? ensureFeishuBinding(next, draft.bot_id) : next;
+                  if (name === 'feishu' && event.target.checked) return ensureFeishuBinding(next, draft.bot_id);
+                  if (name === 'weixin' && event.target.checked) {
+                    return { ...next, config: { ...configObject(next), routing: { ...nestedConfig(next, 'routing'), mode: 'dedicated', bot_id: draft.bot_id } } };
+                  }
+                  return next;
                 })} />
               </div>
             );
@@ -644,6 +689,30 @@ export function Settings() {
           <Input label="Webhook URL" value={String(webhookConfig.webhook_url || '')} onChange={(event) => updatePlatform('webhook', (p) => ({ ...p, config: { ...configObject(p), webhook_url: event.target.value } }))} />
         </div>
         <FieldHint text="一个飞书 App 只能绑定一个 Bot，一个 Bot 也只能绑定一个飞书 App；多 Bot 接入飞书时请分别创建独立飞书 App。" />
+
+        <div style={{ marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--border-subtle)' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 12 }}>微信 iLink</div>
+          <div style={gridStyle}>
+            <Input label="微信 account_id" value={String(weixinExtra.account_id || '')} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, enabled: true, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), account_id: event.target.value }, routing: { ...nestedConfig(p, 'routing'), mode: 'dedicated', bot_id: draft.bot_id } } }))} />
+            <Input label="微信 token" type="password" value={String(weixinConfig.token || weixinExtra.token || '')} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, enabled: true, config: { ...configObject(p), token: event.target.value, routing: { ...nestedConfig(p, 'routing'), mode: 'dedicated', bot_id: draft.bot_id } } }))} />
+            <Input label="Base URL" value={String(weixinExtra.base_url || 'https://ilinkai.weixin.qq.com')} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), base_url: event.target.value } } }))} />
+            <Input label="CDN Base URL" value={String(weixinExtra.cdn_base_url || 'https://novac2c.cdn.weixin.qq.com/c2c')} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), cdn_base_url: event.target.value } } }))} />
+            <Select label="私聊策略" options={[{ value: 'allowlist', label: 'allowlist' }, { value: 'open', label: 'open' }, { value: 'disabled', label: 'disabled' }]} value={String(weixinExtra.dm_policy || 'allowlist')} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), dm_policy: event.target.value } } }))} />
+            <Select label="群聊策略" options={[{ value: 'disabled', label: 'disabled' }, { value: 'allowlist', label: 'allowlist' }, { value: 'open', label: 'open' }]} value={String(weixinExtra.group_policy || 'disabled')} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), group_policy: event.target.value } } }))} />
+            <Input label="私聊 allowlist" value={joinList(Array.isArray(weixinExtra.allow_from) ? weixinExtra.allow_from : splitList(String(weixinExtra.allow_from || '')))} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), allow_from: splitList(event.target.value) } } }))} />
+            <Input label="群聊 allowlist" value={joinList(Array.isArray(weixinExtra.group_allow_from) ? weixinExtra.group_allow_from : splitList(String(weixinExtra.group_allow_from || '')))} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), group_allow_from: splitList(event.target.value) } } }))} />
+            <Input label="固定 Bot ID" value={String(weixinRouting.bot_id || draft.bot_id)} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), routing: { ...nestedConfig(p, 'routing'), mode: 'dedicated', bot_id: event.target.value } } }))} />
+            <Input label="主动目标 chat_id" value={String((weixinConfig.home_channel as { chat_id?: string } | undefined)?.chat_id || '')} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), home_channel: { platform: 'weixin', chat_id: event.target.value, name: '微信私聊' } } }))} />
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>按顶层换行拆成多条微信消息</div>
+              <FieldHint text="关闭时尽量合并为单条消息，超过微信长度限制才自动拆分。" />
+            </div>
+            <Toggle checked={Boolean(weixinExtra.split_multiline_messages)} onChange={(event) => updatePlatform('weixin', (p) => ({ ...p, config: { ...configObject(p), extra: { ...nestedConfig(p, 'extra'), split_multiline_messages: event.target.checked } } }))} />
+          </div>
+          <FieldHint text={`运行状态：${weixinRuntime?.state || '未连接'}${weixinRuntime?.account_id_hint ? `，账号 ${weixinRuntime.account_id_hint}` : ''}${weixinRuntime?.error_message ? `，最近错误：${weixinRuntime.error_message}` : ''}`} />
+        </div>
       </SectionCard>
 
       <SectionCard id="persona" title={sectionMeta.persona?.title || 'Bot 人格'} description={sectionMeta.persona?.description} restart={sectionMeta.persona?.restart}>

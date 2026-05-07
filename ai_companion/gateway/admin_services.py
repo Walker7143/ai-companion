@@ -86,13 +86,18 @@ WEB_CONFIG_SCHEMA = {
             "id": "platforms",
             "title": "平台集成",
             "scope": "global",
-            "description": "配置 CLI、飞书、Webhook 等入口和主动消息投递。",
-            "restart": "飞书连接模式、路由和凭据通常需要重启 Gateway。",
+            "description": "配置 CLI、飞书、微信、Webhook 等入口和主动消息投递。",
+            "restart": "飞书/微信连接模式、路由和凭据通常需要重启 Gateway。",
             "fields": {
                 "feishu.app_id": "飞书开放平台应用 ID。",
                 "feishu.app_secret": "敏感字段。留空或保留掩码表示继续使用旧值。",
                 "feishu.group_policy": "open 最开放；生产环境推荐 allowlist 或 admin_only。",
                 "feishu.routing": "固定 Bot 绑定。飞书 App 与 Bot 必须双向一对一绑定。",
+                "weixin.account_id": "微信 iLink account_id / ilink_bot_id。",
+                "weixin.token": "敏感字段。留空或保留掩码表示继续使用旧值。",
+                "weixin.dm_policy": "私聊策略；生产环境推荐 allowlist。",
+                "weixin.group_policy": "群聊策略；默认 disabled。",
+                "weixin.routing": "固定 Bot 绑定。当前版本一个微信账号绑定一个 Bot。",
             },
         },
         {
@@ -109,7 +114,12 @@ WEB_CONFIG_SCHEMA = {
             },
         },
     ],
-    "sensitive_fields": ["model.api_key", "platforms.feishu.extra.app_secret"],
+    "sensitive_fields": [
+        "model.api_key",
+        "platforms.feishu.extra.app_secret",
+        "platforms.weixin.token",
+        "platforms.weixin.extra.token",
+    ],
 }
 
 LIFE_TIME_PRESETS = [
@@ -219,6 +229,22 @@ def _as_list(value: Any) -> list:
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
     return [value]
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return default
 
 
 def _is_masked_or_empty(value: Any) -> bool:
@@ -350,6 +376,27 @@ def _mask_feishu_extra(extra: dict) -> dict:
     return public_extra
 
 
+def _weixin_routing_bot_id(weixin: dict) -> str:
+    routing = weixin.get("routing", {}) if isinstance(weixin.get("routing"), dict) else {}
+    if routing.get("mode", "dedicated") != "dedicated":
+        return ""
+    return str(routing.get("bot_id") or weixin.get("bot_id") or "")
+
+
+def _mask_weixin_config(weixin: dict, bot_id: str) -> dict:
+    extra = dict(weixin.get("extra", {}) if isinstance(weixin.get("extra"), dict) else {})
+    public_cfg: dict[str, Any] = {
+        "token": mask_secret(weixin.get("token") or extra.get("token") or ""),
+        "extra": extra,
+        "routing": {"mode": "dedicated", "bot_id": bot_id},
+    }
+    if "token" in public_cfg["extra"]:
+        public_cfg["extra"]["token"] = mask_secret(public_cfg["extra"].get("token"))
+    if isinstance(weixin.get("home_channel"), dict):
+        public_cfg["home_channel"] = weixin["home_channel"]
+    return public_cfg
+
+
 class ConfigAdminService:
     """Read/write Web UI configuration without changing on-disk formats."""
 
@@ -416,11 +463,11 @@ class ConfigAdminService:
             changed.append(str(life_path))
             self._reload_bot_runtime(bot)
 
-        if "platforms" in body or "feishu" in body or "webhook" in body or "session_reset" in body:
+        if "platforms" in body or "feishu" in body or "weixin" in body or "webhook" in body or "session_reset" in body:
             self._save_main_config(bot_id, body)
             changed.append(str(self.main_config_path))
-            if "platforms" in body or "feishu" in body:
-                warnings.append("平台连接与飞书路由通常需要重启 Gateway 才会重新建立连接。")
+            if "platforms" in body or "feishu" in body or "weixin" in body:
+                warnings.append("平台连接与飞书/微信路由通常需要重启 Gateway 才会重新建立连接。")
 
         if "persona" in body:
             changed.extend(self._save_persona(persona_dir, body["persona"]))
@@ -530,9 +577,10 @@ class ConfigAdminService:
 
     def _public_platforms(self, platforms: dict, bot_id: str) -> list[dict]:
         result = []
-        for name in ("cli", "feishu", "webhook"):
+        for name in ("cli", "feishu", "weixin", "webhook"):
             cfg = platforms.get(name, {}) if isinstance(platforms.get(name), dict) else {}
             public_cfg = dict(cfg)
+            enabled = bool(cfg.get("enabled", name == "cli"))
             if name == "feishu":
                 extra = _feishu_extra_for_bot(cfg, bot_id)
                 public_cfg = {
@@ -547,9 +595,26 @@ class ConfigAdminService:
                                 public_cfg[key] = binding[key]
                     elif isinstance(cfg.get("home_channel"), dict):
                         public_cfg["home_channel"] = cfg["home_channel"]
+                enabled = bool(extra)
+            elif name == "weixin":
+                enabled = bool(cfg.get("enabled")) and _weixin_routing_bot_id(cfg) == bot_id
+                public_cfg = _mask_weixin_config(cfg, bot_id) if enabled else {
+                    "token": "",
+                    "extra": {
+                        "account_id": "",
+                        "base_url": "https://ilinkai.weixin.qq.com",
+                        "cdn_base_url": "https://novac2c.cdn.weixin.qq.com/c2c",
+                        "dm_policy": "allowlist",
+                        "allow_from": [],
+                        "group_policy": "disabled",
+                        "group_allow_from": [],
+                        "split_multiline_messages": False,
+                    },
+                    "routing": {"mode": "dedicated", "bot_id": bot_id},
+                }
             result.append({
                 "name": name,
-                "enabled": bool(extra) if name == "feishu" else bool(cfg.get("enabled", name == "cli")),
+                "enabled": enabled,
                 "config": public_cfg,
             })
         return result
@@ -605,9 +670,17 @@ class ConfigAdminService:
                 life_status = bot.life_engine.get_status()
             except Exception:
                 life_status = {}
+        gateway_status = {}
+        try:
+            from ai_companion.gateway.status import read_runtime_status
+
+            gateway_status = read_runtime_status() or {}
+        except Exception:
+            gateway_status = {}
         return {
             "requires_restart": [],
             "life_status": life_status,
+            "gateway_status": gateway_status,
         }
 
     def _save_model(self, model_data: dict) -> list[str]:
@@ -721,12 +794,13 @@ class ConfigAdminService:
             name = platform.get("name")
             if not name:
                 continue
-            if name == "feishu":
+            if name in {"feishu", "weixin"}:
                 # Feishu is bot-scoped in the Web UI. Handle it below so one
-                # bot page cannot leak its app_id into every other bot page.
+                # bot page cannot leak app/token credentials into every other
+                # bot page. Weixin uses the same explicit save path.
                 continue
             current = dict(platforms.get(name, {}) if isinstance(platforms.get(name), dict) else {})
-            current["enabled"] = bool(platform.get("enabled", current.get("enabled", name == "cli")))
+            current["enabled"] = _as_bool(platform.get("enabled"), _as_bool(current.get("enabled"), name == "cli"))
             if isinstance(platform.get("config"), dict):
                 current = _deep_merge(current, platform["config"])
             platforms[name] = current
@@ -737,6 +811,14 @@ class ConfigAdminService:
                 bot_id,
                 dict(platforms.get("feishu", {}) if isinstance(platforms.get("feishu"), dict) else {}),
                 feishu,
+            )
+
+        weixin = body.get("weixin")
+        if isinstance(weixin, dict):
+            platforms["weixin"] = self._save_weixin_for_bot(
+                bot_id,
+                dict(platforms.get("weixin", {}) if isinstance(platforms.get("weixin"), dict) else {}),
+                weixin,
             )
 
         if isinstance(body.get("session_reset"), dict):
@@ -791,6 +873,83 @@ class ConfigAdminService:
         current["extra"] = next_extra
         current["routing"] = {"mode": "dedicated", "bot_id": bot_id}
         current.pop("bot_bindings", None)
+        return current
+
+    def _save_weixin_for_bot(self, bot_id: str, current: dict, incoming: dict) -> dict:
+        incoming_extra = incoming.get("extra", {}) if isinstance(incoming.get("extra"), dict) else {}
+        enabled = _as_bool(incoming.get("enabled"), _as_bool(current.get("enabled"), False))
+        current_bot_id = _weixin_routing_bot_id(current)
+
+        if not enabled:
+            if not current_bot_id or current_bot_id == bot_id:
+                current["enabled"] = False
+                current.pop("routing", None)
+            return current
+
+        if current_bot_id and current_bot_id != bot_id:
+            raise ValueError(
+                f"微信账号已绑定 Bot {current_bot_id}，当前版本一个微信账号只能绑定一个 Bot。"
+            )
+
+        existing_extra = dict(current.get("extra", {}) if isinstance(current.get("extra"), dict) else {})
+        next_extra = dict(existing_extra)
+        for key in (
+            "account_id",
+            "base_url",
+            "cdn_base_url",
+            "dm_policy",
+            "allow_from",
+            "group_policy",
+            "group_allow_from",
+            "send_chunk_delay_seconds",
+            "send_chunk_retries",
+            "send_chunk_retry_delay_seconds",
+        ):
+            if key in incoming_extra and incoming_extra.get(key) is not None:
+                next_extra[key] = incoming_extra[key]
+        if "split_multiline_messages" in incoming_extra:
+            next_extra["split_multiline_messages"] = _as_bool(
+                incoming_extra.get("split_multiline_messages"),
+                _as_bool(existing_extra.get("split_multiline_messages"), False),
+            )
+        for key in ("allow_from", "group_allow_from"):
+            if key in next_extra:
+                next_extra[key] = _as_list(next_extra.get(key))
+
+        existing_token = current.get("token") or existing_extra.get("token") or ""
+        incoming_token = incoming.get("token")
+        if _is_masked_or_empty(incoming_token):
+            incoming_token = existing_token
+        if not incoming_token and incoming_extra.get("token") and not _is_masked_or_empty(incoming_extra.get("token")):
+            incoming_token = incoming_extra.get("token")
+
+        if incoming_extra.get("token") and not _is_masked_or_empty(incoming_extra.get("token")):
+            next_extra["token"] = incoming_extra["token"]
+        elif _is_masked_or_empty(next_extra.get("token")):
+            next_extra.pop("token", None)
+
+        account_id = str(next_extra.get("account_id") or "").strip()
+        if not account_id:
+            raise ValueError("启用微信时必须填写 account_id。")
+        if not incoming_token and not next_extra.get("token"):
+            raise ValueError("启用微信时必须填写 token。")
+
+        current["enabled"] = True
+        if incoming_token:
+            current["token"] = incoming_token
+        else:
+            current.pop("token", None)
+        current["extra"] = next_extra
+        current["routing"] = {"mode": "dedicated", "bot_id": bot_id}
+
+        if isinstance(incoming.get("home_channel"), dict):
+            current["home_channel"] = incoming["home_channel"]
+        elif incoming.get("home_channel"):
+            current["home_channel"] = {
+                "platform": "weixin",
+                "chat_id": str(incoming["home_channel"]),
+                "name": "微信私聊",
+            }
         return current
 
     def _save_persona(self, persona_dir: Path, persona_data: dict) -> list[str]:

@@ -73,6 +73,22 @@ def _write_json_file(path: Path, data: dict):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _as_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 def _persona_template_roots(project_dir: Path, data_dir: Path | None = None) -> list[Path]:
     roots = [
         project_dir / "ai_companion" / "data" / "bots",
@@ -293,12 +309,13 @@ def _prompt_proactive_config(existing_proactive: dict | None = None, bot_label: 
     console.print("  1. CLI       - 终端输出（默认）")
     console.print("  2. 飞书     - 通过飞书机器人发送")
     console.print("  3. Webhook   - 通过 Webhook 发送")
+    console.print("  4. 微信     - 通过微信个人号通道发送")
 
     platform = existing_proactive.get("platform", {}) if isinstance(existing_proactive.get("platform"), dict) else {}
     existing_platform_type = platform.get("type", existing_proactive.get("platform_type", "cli"))
-    platform_default = {"cli": "1", "feishu": "2", "webhook": "3"}.get(existing_platform_type, "1")
-    platform_choice = Prompt.ask("选择发送平台", choices=["1", "2", "3"], default=platform_default)
-    platform_type = {"1": "cli", "2": "feishu", "3": "webhook"}[platform_choice]
+    platform_default = {"cli": "1", "feishu": "2", "webhook": "3", "weixin": "4"}.get(existing_platform_type, "1")
+    platform_choice = Prompt.ask("选择发送平台", choices=["1", "2", "3", "4"], default=platform_default)
+    platform_type = {"1": "cli", "2": "feishu", "3": "webhook", "4": "weixin"}[platform_choice]
     console.print(f"选择: [green]{platform_type}[/green]")
 
     console.print("\n主动唤醒模式:")
@@ -337,6 +354,20 @@ def _prompt_proactive_config(existing_proactive: dict | None = None, bot_label: 
     if platform_type == "webhook":
         existing_webhook = platform.get("webhook_url", existing_proactive.get("webhook_url", ""))
         proactive_config["platform"]["webhook_url"] = Prompt.ask("Webhook URL", default=existing_webhook)
+    elif platform_type in {"feishu", "weixin"}:
+        existing_home_channel = (
+            platform.get("home_channel")
+            or platform.get("chat_id")
+            or platform.get("group_id")
+            or existing_proactive.get("home_channel")
+            or ""
+        )
+        home_channel = Prompt.ask(
+            f"{platform_type} 主动发送目标 chat_id（可留空，收到消息后自动记录）",
+            default=str(existing_home_channel or ""),
+        ).strip()
+        if home_channel:
+            proactive_config["platform"]["home_channel"] = home_channel
 
     return proactive_config
 
@@ -437,6 +468,160 @@ def _prompt_feishu_extra(existing_extra: dict | None = None, bot_label: str = ""
     return feishu_extra
 
 
+async def _prompt_weixin_platform_config(
+    *,
+    existing_weixin: dict | None,
+    binding_bots: list[dict],
+    data_dir: Path,
+) -> dict:
+    """Prompt for personal Weixin iLink gateway configuration."""
+    existing_weixin = existing_weixin or {}
+    existing_extra = existing_weixin.get("extra", {}) if isinstance(existing_weixin.get("extra"), dict) else {}
+    existing_routing = existing_weixin.get("routing", {}) if isinstance(existing_weixin.get("routing"), dict) else {}
+
+    console.print("\n微信路由:")
+    console.print("  当前版本支持一个微信个人号绑定一个 Bot。")
+    existing_bot_id = existing_routing.get("bot_id") or existing_weixin.get("bot_id") or ""
+    default_index = 1
+    for i, b in enumerate(binding_bots, 1):
+        if b["id"] == existing_bot_id:
+            default_index = i
+            break
+    console.print(f"\n请选择这个微信账号绑定的 Bot（默认: {binding_bots[default_index - 1]['name']}）:")
+    for i, b in enumerate(binding_bots, 1):
+        console.print(f"  {i}. {b['name']} ({b['id']})")
+    bot_choice = Prompt.ask(
+        "选择",
+        choices=[str(i) for i in range(1, len(binding_bots) + 1)],
+        default=str(default_index),
+    )
+    bot_id = binding_bots[int(bot_choice) - 1]["id"]
+
+    token = str(existing_weixin.get("token") or existing_extra.get("token") or "").strip()
+    account_id = str(existing_extra.get("account_id") or existing_weixin.get("account_id") or "").strip()
+    user_id = str(existing_extra.get("user_id") or "").strip()
+    base_url = str(existing_extra.get("base_url") or "https://ilinkai.weixin.qq.com").strip()
+    cdn_base_url = str(existing_extra.get("cdn_base_url") or "https://novac2c.cdn.weixin.qq.com/c2c").strip()
+
+    if Confirm.ask("是否扫码登录微信 iLink 账号?", default=not bool(token and account_id)):
+        try:
+            from ai_companion.gateway.platforms.weixin import qr_login
+
+            credentials = await qr_login(str(data_dir))
+        except Exception as exc:
+            credentials = None
+            console.print(f"[yellow]扫码登录失败: {exc}[/yellow]")
+        if credentials:
+            account_id = credentials.get("account_id", account_id)
+            token = credentials.get("token", token)
+            base_url = credentials.get("base_url", base_url)
+            user_id = credentials.get("user_id", user_id)
+        else:
+            console.print("[yellow]未获得扫码凭据，改为手动输入。[/yellow]")
+
+    account_id = Prompt.ask("微信 account_id / ilink_bot_id", default=account_id).strip()
+    while not account_id:
+        console.print("[red]微信 account_id 不能为空。[/red]")
+        account_id = Prompt.ask("微信 account_id / ilink_bot_id", default=account_id).strip()
+
+    token_prompt = Prompt.ask(
+        "微信 bot_token（直接回车保留现有配置）" if token else "微信 bot_token",
+        password=True,
+        default="",
+    ).strip()
+    if token_prompt:
+        token = token_prompt
+    while not token:
+        console.print("[red]微信 bot_token 不能为空。[/red]")
+        token = Prompt.ask("微信 bot_token", password=True, default="").strip()
+
+    base_url = Prompt.ask("iLink API Base URL", default=base_url or "https://ilinkai.weixin.qq.com").strip()
+    cdn_base_url = Prompt.ask("微信 CDN Base URL", default=cdn_base_url or "https://novac2c.cdn.weixin.qq.com/c2c").strip()
+
+    console.print("\nDM 策略:")
+    console.print("  1. allowlist - 仅白名单用户（推荐）")
+    console.print("  2. open      - 接受所有私聊")
+    console.print("  3. disabled  - 禁用私聊")
+    dm_policy_default = {"allowlist": "1", "open": "2", "disabled": "3"}.get(
+        str(existing_extra.get("dm_policy") or "allowlist").lower(),
+        "1",
+    )
+    dm_choice = Prompt.ask("请选择 DM 策略", choices=["1", "2", "3"], default=dm_policy_default)
+    dm_policy = {"1": "allowlist", "2": "open", "3": "disabled"}[dm_choice]
+
+    allow_from = list(existing_extra.get("allow_from", [])) if isinstance(existing_extra.get("allow_from"), list) else []
+    if dm_policy == "allowlist":
+        console.print("\n允许私聊的微信用户 ID（留空结束，输入 . 保留现有）:")
+        while True:
+            user = Prompt.ask("用户 ID", default="")
+            if not user:
+                break
+            if user == ".":
+                break
+            allow_from.append(user)
+
+    console.print("\n群聊策略:")
+    console.print("  1. disabled  - 禁用群聊（推荐）")
+    console.print("  2. allowlist - 仅白名单群")
+    console.print("  3. open      - 接受所有群聊")
+    group_policy_default = {"disabled": "1", "allowlist": "2", "open": "3"}.get(
+        str(existing_extra.get("group_policy") or "disabled").lower(),
+        "1",
+    )
+    group_choice = Prompt.ask("请选择群聊策略", choices=["1", "2", "3"], default=group_policy_default)
+    group_policy = {"1": "disabled", "2": "allowlist", "3": "open"}[group_choice]
+
+    group_allow_from = (
+        list(existing_extra.get("group_allow_from", []))
+        if isinstance(existing_extra.get("group_allow_from"), list)
+        else []
+    )
+    if group_policy == "allowlist":
+        console.print("\n允许群聊 ID（留空结束，输入 . 保留现有）:")
+        while True:
+            group = Prompt.ask("群聊 ID", default="")
+            if not group:
+                break
+            if group == ".":
+                break
+            group_allow_from.append(group)
+
+    existing_home = existing_weixin.get("home_channel") if isinstance(existing_weixin.get("home_channel"), dict) else {}
+    home_chat_id = Prompt.ask(
+        "主动唤醒 home_channel chat_id（可留空，收到消息后自动记录）",
+        default=str((existing_home or {}).get("chat_id") or ""),
+    ).strip()
+    home_name = Prompt.ask(
+        "home_channel 名称",
+        default=str((existing_home or {}).get("name") or "微信私聊"),
+    ).strip()
+
+    weixin_config = {
+        "enabled": True,
+        "token": token,
+        "extra": {
+            "account_id": account_id,
+            "base_url": base_url.rstrip("/"),
+            "cdn_base_url": cdn_base_url.rstrip("/"),
+            "dm_policy": dm_policy,
+            "allow_from": allow_from,
+            "group_policy": group_policy,
+            "group_allow_from": group_allow_from,
+            "split_multiline_messages": _as_bool(existing_extra.get("split_multiline_messages"), False),
+        },
+        "routing": {"mode": "dedicated", "bot_id": bot_id},
+    }
+    if user_id:
+        weixin_config["extra"]["user_id"] = user_id
+    if home_chat_id:
+        weixin_config["home_channel"] = {
+            "platform": "weixin",
+            "chat_id": home_chat_id,
+            "name": home_name or "微信私聊",
+        }
+    return weixin_config
+
+
 def get_data_dir() -> Path:
     """获取 AI Companion 数据目录"""
     if sys.platform == "win32":
@@ -472,7 +657,7 @@ async def run_setup():
     existing_provider = existing_config.get("model", {}).get("provider", "minimax") if isinstance(existing_config.get("model"), dict) else "minimax"
 
     # Step 1: API Key 配置
-    console.print("[bold]步骤 1/7:[/bold] 模型配置")
+    console.print("[bold]步骤 1/8:[/bold] 模型配置")
     console.print("-" * 40)
 
     console.print("可选模型:")
@@ -566,7 +751,7 @@ async def run_setup():
     console.print("✓ 模型配置已保存（已保留其他模型和 memory 配置）\n")
 
     # Step 2: 创建 Bot(s)
-    console.print("[bold]步骤 2/7:[/bold] 创建 Bot")
+    console.print("[bold]步骤 2/8:[/bold] 创建 Bot")
     console.print("-" * 40)
 
     builtin_bots = _discover_builtin_bot_templates(project_dir)
@@ -653,7 +838,7 @@ async def run_setup():
     console.print(f"✓ Bot 列表已保存（总计 {len(bots_config['bots'])} 个；旧 Bot 配置已保留）\n")
 
     # Step 3: 主动唤醒配置
-    console.print("[bold]步骤 3/7:[/bold] 主动唤醒配置")
+    console.print("[bold]步骤 3/8:[/bold] 主动唤醒配置")
     console.print("-" * 40)
 
     sample_proactive = {}
@@ -686,7 +871,7 @@ async def run_setup():
         console.print("[dim]跳过主动唤醒配置[/dim]\n")
 
     # Step 4: Bot 人生轨迹配置
-    console.print("[bold]步骤 4/7:[/bold] Bot 人生轨迹配置")
+    console.print("[bold]步骤 4/8:[/bold] Bot 人生轨迹配置")
     console.print("-" * 40)
 
     sample_life = {}
@@ -721,17 +906,19 @@ async def run_setup():
         console.print("[dim]跳过人生轨迹配置[/dim]\n")
 
     # Step 5: 飞书配置
-    console.print("[bold]步骤 5/7:[/bold] 飞书配置")
+    console.print("[bold]步骤 5/8:[/bold] 飞书配置")
     console.print("-" * 40)
 
     # 加载现有飞书配置（用于默认值）
     config_path = config_dir / "config.yaml"
     config_data = {}
     existing_feishu = {}
+    existing_weixin = {}
     if config_path.exists():
         try:
             config_data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
             existing_feishu = config_data.get("platforms", {}).get("feishu", {}) or {}
+            existing_weixin = config_data.get("platforms", {}).get("weixin", {}) or {}
         except Exception:
             pass
 
@@ -821,8 +1008,34 @@ async def run_setup():
     else:
         console.print("✗ 跳过飞书配置\n")
 
-    # Step 6: 环境变量配置（可选）
-    console.print("[bold]步骤 6/7:[/bold] 环境变量配置")
+    # Step 6: 微信配置
+    console.print("[bold]步骤 6/8:[/bold] 微信配置")
+    console.print("-" * 40)
+
+    if Confirm.ask("是否配置微信个人号通道?", default=bool(existing_weixin)):
+        weixin_binding_bots = [
+            {"id": b["id"], "name": _bot_label(b)}
+            for b in bots_config.get("bots", [])
+            if isinstance(b, dict) and b.get("id")
+        ]
+        if not weixin_binding_bots:
+            console.print("[red]✗ 绑定微信前必须先创建 Bot，请重新运行 setup 并添加 Bot。[/red]\n")
+            return
+
+        if "platforms" not in config_data:
+            config_data["platforms"] = {}
+        config_data["platforms"]["weixin"] = await _prompt_weixin_platform_config(
+            existing_weixin=existing_weixin,
+            binding_bots=weixin_binding_bots,
+            data_dir=data_dir,
+        )
+        config_path.write_text(yaml.dump(config_data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        console.print("✓ 微信配置已保存到 config.yaml\n")
+    else:
+        console.print("✗ 跳过微信配置\n")
+
+    # Step 7: 环境变量配置（可选）
+    console.print("[bold]步骤 7/8:[/bold] 环境变量配置")
     console.print("-" * 40)
 
     # 检查是否已有 .env
@@ -885,6 +1098,56 @@ async def run_setup():
         elif existing_env.get("FEISHU_GROUP_POLICY"):
             console.print("[dim]保留现有 FEISHU_GROUP_POLICY[/dim]")
 
+        # 微信环境变量 - 只在新配置存在时才写入
+        weixin_config = config_data.get("platforms", {}).get("weixin", {})
+        weixin_extra = weixin_config.get("extra", {}) if isinstance(weixin_config.get("extra"), dict) else {}
+        if weixin_config.get("token"):
+            env_lines.append(f'WEIXIN_TOKEN="{weixin_config["token"]}"')
+        elif weixin_extra.get("token"):
+            env_lines.append(f'WEIXIN_TOKEN="{weixin_extra["token"]}"')
+        elif existing_env.get("WEIXIN_TOKEN"):
+            console.print("[dim]保留现有 WEIXIN_TOKEN[/dim]")
+
+        if weixin_extra.get("account_id"):
+            env_lines.append(f'WEIXIN_ACCOUNT_ID="{weixin_extra["account_id"]}"')
+        elif existing_env.get("WEIXIN_ACCOUNT_ID"):
+            console.print("[dim]保留现有 WEIXIN_ACCOUNT_ID[/dim]")
+
+        weixin_routing = weixin_config.get("routing", {}) if isinstance(weixin_config.get("routing"), dict) else {}
+        if weixin_routing.get("bot_id"):
+            env_lines.append(f'WEIXIN_BOT_ID="{weixin_routing["bot_id"]}"')
+        elif existing_env.get("WEIXIN_BOT_ID"):
+            console.print("[dim]保留现有 WEIXIN_BOT_ID[/dim]")
+
+        if weixin_extra.get("dm_policy"):
+            env_lines.append(f'WEIXIN_DM_POLICY="{weixin_extra["dm_policy"]}"')
+        elif existing_env.get("WEIXIN_DM_POLICY"):
+            console.print("[dim]保留现有 WEIXIN_DM_POLICY[/dim]")
+
+        if weixin_extra.get("group_policy"):
+            env_lines.append(f'WEIXIN_GROUP_POLICY="{weixin_extra["group_policy"]}"')
+        elif existing_env.get("WEIXIN_GROUP_POLICY"):
+            console.print("[dim]保留现有 WEIXIN_GROUP_POLICY[/dim]")
+
+        if weixin_extra.get("allow_from"):
+            allowed = ",".join(str(item) for item in weixin_extra["allow_from"])
+            env_lines.append(f'WEIXIN_ALLOWED_USERS="{allowed}"')
+        elif existing_env.get("WEIXIN_ALLOWED_USERS"):
+            console.print("[dim]保留现有 WEIXIN_ALLOWED_USERS[/dim]")
+
+        if weixin_extra.get("group_allow_from"):
+            groups = ",".join(str(item) for item in weixin_extra["group_allow_from"])
+            env_lines.append(f'WEIXIN_GROUP_ALLOWED_USERS="{groups}"')
+        elif existing_env.get("WEIXIN_GROUP_ALLOWED_USERS"):
+            console.print("[dim]保留现有 WEIXIN_GROUP_ALLOWED_USERS[/dim]")
+
+        weixin_home = weixin_config.get("home_channel") if isinstance(weixin_config.get("home_channel"), dict) else {}
+        if weixin_home.get("chat_id"):
+            env_lines.append(f'WEIXIN_HOME_CHANNEL="{weixin_home["chat_id"]}"')
+            env_lines.append(f'WEIXIN_HOME_CHANNEL_NAME="{weixin_home.get("name", "微信私聊")}"')
+        elif existing_env.get("WEIXIN_HOME_CHANNEL"):
+            console.print("[dim]保留现有 WEIXIN_HOME_CHANNEL[/dim]")
+
         # 保留原有但不在本次更新的变量
         for key, value in existing_env.items():
             if key not in [line.split("=")[0] for line in env_lines if "=" in line]:
@@ -895,8 +1158,8 @@ async def run_setup():
     else:
         console.print("✗ 跳过\n")
 
-    # Step 7: 完成
-    console.print("[bold]步骤 7/7:[/bold] 完成")
+    # Step 8: 完成
+    console.print("[bold]步骤 8/8:[/bold] 完成")
     console.print("-" * 40)
 
     console.print("\n[bold]当前可用 Bots:[/bold]")

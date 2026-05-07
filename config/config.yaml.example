@@ -1,0 +1,55 @@
+# AI Companion 主配置示例
+#
+# 复制到 ~/.ai-companion/config/config.yaml 后按需修改。
+
+platforms:
+  cli:
+    enabled: true
+
+  feishu:
+    enabled: false
+    extra:
+      app_id: "${FEISHU_APP_ID}"
+      app_secret: "${FEISHU_APP_SECRET}"
+      connection_mode: "websocket"
+      domain: "feishu"
+      group_policy: "allowlist"
+      allowed_users: []
+    routing:
+      mode: "dedicated"
+      bot_id: "lin_wanqing"
+    home_channel:
+      platform: "feishu"
+      chat_id: "oc_xxx"
+      name: "飞书会话"
+
+  weixin:
+    enabled: false
+    token: "${WEIXIN_TOKEN}"
+    extra:
+      account_id: "${WEIXIN_ACCOUNT_ID}"
+      base_url: "https://ilinkai.weixin.qq.com"
+      cdn_base_url: "https://novac2c.cdn.weixin.qq.com/c2c"
+      dm_policy: "allowlist"
+      allow_from:
+        - "wxid_xxx"
+      group_policy: "disabled"
+      group_allow_from: []
+      split_multiline_messages: false
+    routing:
+      mode: "dedicated"
+      bot_id: "lin_wanqing"
+    home_channel:
+      platform: "weixin"
+      chat_id: "wxid_xxx"
+      name: "微信私聊"
+
+session_reset:
+  mode: "daily"
+  at_hour: 4
+  idle_minutes: 1440
+  notify: true
+
+logging:
+  level: INFO
+  file: "~/.ai-companion/logs/ai_companion.log"

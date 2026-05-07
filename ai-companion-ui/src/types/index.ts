@@ -310,6 +310,7 @@ export interface PersonaSummaryConfig {
 export interface ConfigDiagnostics {
   requires_restart: string[];
   life_status: Record<string, unknown>;
+  gateway_status?: Record<string, unknown>;
 }
 
 export interface BotInfo {

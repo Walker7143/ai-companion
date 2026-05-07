@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # 项目根目录
 _project_root = Path(__file__).parent.parent.parent
@@ -182,8 +183,36 @@ def show_gateway_status() -> None:
     if pid:
         print(f"[OK] Gateway 运行中 (PID: {pid})")
         print(f"  日志文件: {GATEWAY_LOG_FILE}")
+        try:
+            from ai_companion.gateway.status import read_runtime_status
+
+            runtime = read_runtime_status() or {}
+        except Exception:
+            runtime = {}
+        platforms = runtime.get("platforms") if isinstance(runtime, dict) else {}
+        if isinstance(platforms, dict) and platforms:
+            print("  平台状态:")
+            for name, status in sorted(platforms.items()):
+                if not isinstance(status, dict):
+                    continue
+                state = status.get("state") or "unknown"
+                detail = _format_platform_status_detail(name, status)
+                suffix = f" ({detail})" if detail else ""
+                print(f"    - {name}: {state}{suffix}")
     else:
         print("[ERROR] Gateway 未运行")
+
+
+def _format_platform_status_detail(name: str, status: dict[str, Any]) -> str:
+    parts = []
+    if name == "weixin":
+        account = status.get("account_id_hint") or status.get("account_id")
+        if account:
+            parts.append(f"account={account}")
+    error = status.get("error_message")
+    if error:
+        parts.append(f"last_error={error}")
+    return ", ".join(str(part) for part in parts if part)
 
 
 def tail_logs(lines: int = 50) -> None:

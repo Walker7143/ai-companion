@@ -284,12 +284,20 @@ class BotInstance:
         if self.memory:
             self.memory.set_summarizer(model)
 
-    def set_proactive_platform(self, platform_type: str = None, feishu_adapter=None, **kwargs):
+    def set_proactive_platform(self, platform_type: str = None, feishu_adapter=None, gateway_adapter=None, **kwargs):
         """设置主动消息发送平台"""
+        if gateway_adapter:
+            adapter_platform = getattr(gateway_adapter, "platform", None)
+            ptype = platform_type or (
+                adapter_platform.value if hasattr(adapter_platform, "value") else str(adapter_platform or "gateway")
+            )
+            self._proactive_platform = gateway_adapter
+            self.proactive_engine._platform_sender = lambda msg: self._wrap_gateway_send(msg, gateway_adapter, str(ptype).lower())
+            return
+
         if feishu_adapter:
-            # 直接使用传入的飞书适配器
             self._proactive_platform = feishu_adapter
-            self.proactive_engine._platform_sender = lambda msg: self._wrap_feishu_send(msg, feishu_adapter)
+            self.proactive_engine._platform_sender = lambda msg: self._wrap_gateway_send(msg, feishu_adapter, "feishu")
             return
 
         ptype = platform_type or self.proactive_config.platform_type
@@ -318,45 +326,42 @@ class BotInstance:
                 logger.warning("[BotInstance] proactive platform=webhook 但未配置 webhook_url")
             return
 
-        if ptype == "feishu":
-            # Gateway 会注入 feishu_adapter；没有注入时不伪装发送成功。
-            logger.warning("[BotInstance] proactive platform=feishu 但未注入 feishu_adapter")
+        if ptype in {"feishu", "weixin"}:
+            # Gateway 会注入对应 adapter；没有注入时不伪装发送成功。
+            logger.warning("[BotInstance] proactive platform=%s 但未注入 gateway adapter", ptype)
             return
 
         self.set_proactive_platform("cli")
 
-    async def _wrap_feishu_send(self, message: str, adapter) -> bool:
-        """包装飞书发送（适配 proactive 引擎的接口）"""
+    async def _wrap_gateway_send(self, message: str, adapter, platform_type: str) -> bool:
+        """包装 gateway adapter 发送（适配 proactive 引擎的接口）"""
         try:
-            # 优先使用用户最近发消息的 chat_id（动态获取）
-            chat_id = getattr(self, "_feishu_chat_id", None)
+            chat_id = getattr(self, f"_{platform_type}_chat_id", None)
             proactive_cfg = self.proactive_config.to_dict() if hasattr(self.proactive_config, "to_dict") else {}
             if not chat_id:
-                # 尝试从 proactive 配置获取
                 home_channel = proactive_cfg.get("home_channel")
                 if isinstance(home_channel, dict):
                     chat_id = home_channel.get("chat_id") or home_channel.get("group_id")
                 else:
                     chat_id = home_channel
             if not chat_id:
-                # 尝试从 platform 配置获取
-                feishu_cfg = proactive_cfg.get("platform", {}) if isinstance(proactive_cfg, dict) else {}
+                platform_cfg = proactive_cfg.get("platform", {}) if isinstance(proactive_cfg, dict) else {}
                 chat_id = (
-                    feishu_cfg.get("home_channel")
-                    or feishu_cfg.get("chat_id")
-                    or feishu_cfg.get("group_id")
+                    platform_cfg.get("home_channel")
+                    or platform_cfg.get("chat_id")
+                    or platform_cfg.get("group_id")
                 )
             if not chat_id:
-                logger.warning(f"[BotInstance] 未配置 home_channel，无法发送主动消息")
+                logger.warning("[BotInstance] %s 未配置 home_channel，无法发送主动消息", platform_type)
                 return False
             result = await adapter.send(chat_id=chat_id, content=message)
             success = result.success if hasattr(result, 'success') else result
             if not success:
                 error = getattr(result, "error", "unknown") if result is not None else "unknown"
-                logger.warning(f"[BotInstance] 飞书主动消息发送失败: {error}")
+                logger.warning("[BotInstance] %s 主动消息发送失败: %s", platform_type, error)
             return success
         except Exception as e:
-            logger.error(f"[BotInstance] 飞书发送失败: {e}")
+            logger.error("[BotInstance] %s 发送失败: %s", platform_type, e)
             return False
 
     def set_channel(self, channel_type: str = "cli", **kwargs):

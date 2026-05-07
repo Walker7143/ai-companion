@@ -3173,11 +3173,27 @@ class SystemTestSuite:
                 yaml.safe_dump(
                     {
                         "platforms": {
-                            "feishu": {
+                        "feishu": {
+                            "enabled": True,
+                            "extra": {"app_id": "old-app", "app_secret": "keep-secret", "connection_mode": "websocket"},
+                            "routing": {"mode": "dedicated", "bot_id": "webbot"},
+                            },
+                            "weixin": {
                                 "enabled": True,
-                                "extra": {"app_id": "old-app", "app_secret": "keep-secret", "connection_mode": "websocket"},
+                                "token": "keep-wx-token",
+                                "extra": {
+                                    "account_id": "wx-account",
+                                    "base_url": "https://ilinkai.weixin.qq.com",
+                                    "cdn_base_url": "https://novac2c.cdn.weixin.qq.com/c2c",
+                                    "dm_policy": "allowlist",
+                                    "allow_from": ["wx-user"],
+                                    "group_policy": "disabled",
+                                    "group_allow_from": [],
+                                    "split_multiline_messages": False,
+                                },
                                 "routing": {"mode": "dedicated", "bot_id": "webbot"},
-                            }
+                                "home_channel": {"platform": "weixin", "chat_id": "wx-user", "name": "微信私聊"},
+                            },
                         }
                     },
                     allow_unicode=True,
@@ -3264,6 +3280,22 @@ class SystemTestSuite:
                         "extra": {"app_id": "new-app", "app_secret": before["platforms"][1]["config"]["extra"]["app_secret"], "group_policy": "allowlist"},
                         "routing": {"mode": "dedicated", "bot_id": "webbot"},
                     },
+                    "weixin": {
+                        "enabled": True,
+                        "token": before["platforms"][2]["config"]["token"],
+                        "extra": {
+                            "account_id": "wx-account",
+                            "base_url": "https://ilinkai.weixin.qq.com",
+                            "cdn_base_url": "https://novac2c.cdn.weixin.qq.com/c2c",
+                            "dm_policy": "allowlist",
+                            "allow_from": ["wx-user"],
+                            "group_policy": "allowlist",
+                            "group_allow_from": ["wx-group"],
+                            "split_multiline_messages": True,
+                        },
+                        "routing": {"mode": "dedicated", "bot_id": "webbot"},
+                        "home_channel": {"platform": "weixin", "chat_id": "wx-user", "name": "微信私聊"},
+                    },
                     "session_reset": {"mode": "idle", "at_hour": 3, "idle_minutes": 45, "notify": False},
                     "persona": {
                         "profile": {"name": "新名", "personality_tags": ["温柔", "可靠"]},
@@ -3287,6 +3319,22 @@ class SystemTestSuite:
             other_after = service.get_bot_config("otherbot")
             web_after = service.get_bot_config("webbot")
             invalid_error = ""
+            try:
+                service.update_bot_config(
+                    "otherbot",
+                    {
+                        "weixin": {
+                            "enabled": True,
+                            "token": "other-token",
+                            "extra": {"account_id": "other-account"},
+                            "routing": {"mode": "dedicated", "bot_id": "otherbot"},
+                        },
+                    },
+                )
+            except ValueError as e:
+                weixin_conflict_error = str(e)
+            else:
+                weixin_conflict_error = ""
             try:
                 service.update_bot_config(
                     "otherbot",
@@ -3342,12 +3390,20 @@ class SystemTestSuite:
             and life["event_policy"]["unexpected_event_probability"] == 0.02
             and main_cfg["platforms"]["feishu"]["extra"]["app_secret"] == "keep-secret"
             and main_cfg["platforms"]["feishu"]["extra"]["app_id"] == "new-app"
+            and main_cfg["platforms"]["weixin"]["token"] == "keep-wx-token"
+            and main_cfg["platforms"]["weixin"]["extra"]["group_policy"] == "allowlist"
+            and main_cfg["platforms"]["weixin"]["extra"]["split_multiline_messages"] is True
+            and before["platforms"][2]["config"]["token"] != "keep-wx-token"
+            and web_after["platforms"][2]["enabled"] is True
+            and web_after["platforms"][2]["config"]["extra"]["group_allow_from"] == ["wx-group"]
+            and other_before["platforms"][2]["enabled"] is False
             and other_before["platforms"][1]["enabled"] is False
             and other_before["platforms"][1]["config"]["extra"].get("app_id") is None
             and other_result["ok"] is True
             and main_cfg["platforms"]["feishu"]["bot_bindings"]["otherbot"]["extra"]["app_id"] == "other-app"
             and other_after["platforms"][1]["config"]["extra"]["app_id"] == "other-app"
             and web_after["platforms"][1]["config"]["extra"]["app_id"] == "new-app"
+            and "一个微信账号只能绑定一个 Bot" in weixin_conflict_error
             and "同时绑定了多个 Bot" in invalid_error
             and "必须填写 App ID" in missing_app_error
             and "同时绑定了多个 App" in bot_double_error
@@ -3369,6 +3425,7 @@ class SystemTestSuite:
                 "invalid_error": invalid_error,
                 "missing_app_error": missing_app_error,
                 "bot_double_error": bot_double_error,
+                "weixin_conflict_error": weixin_conflict_error,
                 "proactive": proactive,
                 "life": life,
                 "profile": profile,

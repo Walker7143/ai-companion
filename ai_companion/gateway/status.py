@@ -11,6 +11,7 @@ that will be useful when we add named profiles (multiple agents running
 concurrently under distinct configurations).
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -399,6 +400,7 @@ def write_runtime_status(
     platform_state: Any = _UNSET,
     error_code: Any = _UNSET,
     error_message: Any = _UNSET,
+    platform_details: Any = _UNSET,
 ) -> None:
     """Persist gateway runtime health information for diagnostics/status."""
     path = _get_runtime_status_path()
@@ -426,6 +428,8 @@ def write_runtime_status(
             platform_payload["error_code"] = error_code
         if error_message is not _UNSET:
             platform_payload["error_message"] = error_message
+        if platform_details is not _UNSET and isinstance(platform_details, dict):
+            platform_payload.update(platform_details)
         platform_payload["updated_at"] = _utc_now_iso()
         payload["platforms"][platform] = platform_payload
 
@@ -434,7 +438,28 @@ def write_runtime_status(
 
 def read_runtime_status() -> Optional[dict[str, Any]]:
     """Read the persisted gateway runtime health/status information."""
-    return _read_json_file(_get_runtime_status_path())
+    payload = _read_json_file(_get_runtime_status_path())
+    if not isinstance(payload, dict):
+        return payload
+    return _redact_runtime_status(payload)
+
+
+def _redact_runtime_status(payload: dict[str, Any]) -> dict[str, Any]:
+    redacted = copy.deepcopy(payload)
+    platforms = redacted.get("platforms")
+    if not isinstance(platforms, dict):
+        return redacted
+    for platform_payload in platforms.values():
+        if not isinstance(platform_payload, dict):
+            continue
+        for key in ("token", "context_token", "bot_token", "Authorization", "authorization"):
+            if key in platform_payload:
+                platform_payload[key] = "***"
+        account_id = platform_payload.get("account_id")
+        if isinstance(account_id, str) and account_id and "..." not in account_id:
+            platform_payload["account_id_hint"] = account_id[:8] + "..." if len(account_id) > 8 else account_id[:3] + "..."
+            platform_payload["account_id"] = "***"
+    return redacted
 
 
 def remove_pid_file() -> None:

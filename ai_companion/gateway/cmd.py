@@ -1,5 +1,5 @@
 """
-Gateway 命令入口 - 启动网关服务连接飞书
+Gateway 命令入口 - 启动网关服务连接消息平台
 """
 
 # Import aiohttp early to avoid platform module shadowing issue
@@ -29,8 +29,10 @@ from ai_companion.bot.instance import BotInstance
 from ai_companion.gateway.commands import GatewayCommandHandler
 from ai_companion.gateway.config import Platform, PlatformConfig
 from ai_companion.gateway.platforms.feishu import FeishuAdapter
+from ai_companion.gateway.platforms.weixin import WeixinAdapter, _safe_id as _safe_weixin_id
 from ai_companion.gateway.router import PlatformRouter
 from ai_companion.gateway.control import GATEWAY_PID_FILE, GATEWAY_LOG_FILE, save_gateway_pid, remove_gateway_pid
+from ai_companion.gateway.status import read_runtime_status
 from ai_companion.gateway.admin_services import (
     ConfigAdminService,
     admin_host,
@@ -241,6 +243,10 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         """GET /api/v1/admin/bots"""
         bots = _discover_bots()
         return web.json_response({"bots": bots})
+
+    async def handle_gateway_status(request):
+        """GET /api/v1/admin/gateway/status"""
+        return web.json_response(read_runtime_status() or {})
 
     async def handle_metrics_system(request):
         """GET /api/v1/admin/metrics/system"""
@@ -955,6 +961,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     # Create aiohttp app
     _admin_app = web.Application()
     _admin_app.router.add_get("/api/v1/admin/bots", handle_bots)
+    _admin_app.router.add_get("/api/v1/admin/gateway/status", handle_gateway_status)
     _admin_app.router.add_get("/api/v1/admin/metrics/system", handle_metrics_system)
     _admin_app.router.add_get("/api/v1/admin/metrics/bot/{bot_id}", handle_metrics_bot)
     _admin_app.router.add_get("/api/v1/admin/sessions", handle_sessions)
@@ -1032,6 +1039,24 @@ def get_data_dir() -> Path:
     return resolve_data_dir()
 
 
+def load_platform_config(platform_name: str) -> dict | None:
+    """从 ~/.ai-companion/config/config.yaml 加载单个平台配置。"""
+    config_path = Path.home() / ".ai-companion" / "config" / "config.yaml"
+    if not config_path.exists():
+        return None
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+        platform_config = config.get("platforms", {}).get(platform_name, {})
+        if platform_config.get("enabled"):
+            return platform_config
+    except Exception as e:
+        logger.error("加载 %s 配置失败: %s", platform_name, e)
+
+    return None
+
+
 _FEISHU_EXTRA_KEYS = {
     "app_id",
     "app_secret",
@@ -1050,21 +1075,7 @@ _FEISHU_EXTRA_KEYS = {
 
 def load_feishu_platform_config() -> dict | None:
     """从 ~/.ai-companion/config/config.yaml 加载飞书平台完整配置。"""
-    config_path = Path.home() / ".ai-companion" / "config" / "config.yaml"
-    if not config_path.exists():
-        return None
-
-    try:
-        with open(config_path, encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
-        platforms = config.get("platforms", {})
-        feishu = platforms.get("feishu", {})
-        if feishu.get("enabled"):
-            return feishu
-    except Exception as e:
-        logger.error(f"加载飞书配置失败: {e}")
-
-    return None
+    return load_platform_config("feishu")
 
 
 def _normalize_feishu_extra(base: dict | None, override: dict | None = None) -> dict:
@@ -1258,9 +1269,96 @@ def _get_feishu_home_channel_for_bot(feishu_platform_config: dict | None, bot_id
     return _extract_home_channel_id(binding)
 
 
-def _extract_feishu_target_id_from_bot(bot) -> str:
-    """从 Bot proactive 配置提取可用于主动发送的飞书目标（群聊/会话 ID）。"""
-    runtime_chat_id = getattr(bot, "_feishu_chat_id", None)
+def load_weixin_platform_config() -> dict | None:
+    """从 ~/.ai-companion/config/config.yaml 加载微信平台完整配置。"""
+    config = load_platform_config("weixin")
+    if config:
+        return config
+    if os.getenv("WEIXIN_ACCOUNT_ID") or os.getenv("WEIXIN_TOKEN"):
+        bot_id = os.getenv("WEIXIN_BOT_ID", "").strip()
+        return {
+            "enabled": True,
+            "token": os.getenv("WEIXIN_TOKEN", ""),
+            "extra": {
+                "account_id": os.getenv("WEIXIN_ACCOUNT_ID", ""),
+                "base_url": os.getenv("WEIXIN_BASE_URL", ""),
+                "cdn_base_url": os.getenv("WEIXIN_CDN_BASE_URL", ""),
+                "dm_policy": os.getenv("WEIXIN_DM_POLICY", ""),
+                "allow_from": os.getenv("WEIXIN_ALLOWED_USERS", ""),
+                "group_policy": os.getenv("WEIXIN_GROUP_POLICY", ""),
+                "group_allow_from": os.getenv("WEIXIN_GROUP_ALLOWED_USERS", ""),
+                "split_multiline_messages": os.getenv("WEIXIN_SPLIT_MULTILINE_MESSAGES", ""),
+            },
+            "routing": {"mode": "dedicated", "bot_id": bot_id} if bot_id else {},
+        }
+    return None
+
+
+def _normalize_weixin_extra(weixin_platform_config: dict | None) -> dict:
+    config = weixin_platform_config or {}
+    extra = dict(config.get("extra", {}) or {})
+    if config.get("token") and "token" not in extra:
+        extra["token"] = config["token"]
+    for key in (
+        "account_id",
+        "base_url",
+        "cdn_base_url",
+        "dm_policy",
+        "allow_from",
+        "group_policy",
+        "group_allow_from",
+        "split_multiline_messages",
+        "send_chunk_delay_seconds",
+        "send_chunk_retries",
+        "send_chunk_retry_delay_seconds",
+    ):
+        if key in config and config.get(key) is not None:
+            extra[key] = config[key]
+    return extra
+
+
+def _build_weixin_adapter_profiles(weixin_platform_config: dict | None) -> list[dict]:
+    """生成需要连接的微信账号列表。当前支持一个个人微信账号绑定一个 Bot。"""
+    if not weixin_platform_config:
+        return []
+
+    extra = _normalize_weixin_extra(weixin_platform_config)
+    account_id = str(extra.get("account_id") or "").strip()
+    token = str(weixin_platform_config.get("token") or extra.get("token") or "").strip()
+    routing = weixin_platform_config.get("routing", {}) or {}
+    bot_id = str(routing.get("bot_id") or weixin_platform_config.get("bot_id") or "").strip()
+    if not bot_id:
+        bot_id = os.getenv("WEIXIN_BOT_ID", "").strip()
+    if not bot_id:
+        raise ValueError("微信配置未绑定 Bot：请配置 platforms.weixin.routing.bot_id。")
+    if not account_id and not os.getenv("WEIXIN_ACCOUNT_ID"):
+        raise ValueError("微信配置缺少 account_id：请配置 platforms.weixin.extra.account_id 或 WEIXIN_ACCOUNT_ID。")
+    if not token and not os.getenv("WEIXIN_TOKEN"):
+        raise ValueError("微信配置缺少 token：请配置 platforms.weixin.token 或 WEIXIN_TOKEN。")
+
+    return [{
+        "name": f"account:{account_id or os.getenv('WEIXIN_ACCOUNT_ID', '')}",
+        "platform": Platform.WEIXIN,
+        "account_id": account_id,
+        "extra": extra,
+        "token": token,
+        "routing": {"mode": "dedicated", "bot_id": bot_id},
+        "bot_id": bot_id,
+    }]
+
+
+def _get_weixin_home_channel_for_bot(weixin_platform_config: dict | None, bot_id: str) -> str:
+    if not weixin_platform_config:
+        return os.getenv("WEIXIN_HOME_CHANNEL", "")
+    routing = weixin_platform_config.get("routing", {}) or {}
+    if str(routing.get("bot_id") or weixin_platform_config.get("bot_id") or "") != bot_id:
+        return ""
+    return _extract_home_channel_id(weixin_platform_config) or os.getenv("WEIXIN_HOME_CHANNEL", "")
+
+
+def _extract_gateway_target_id_from_bot(bot, platform_type: str) -> str:
+    """从 Bot proactive 配置提取可用于主动发送的目标会话 ID。"""
+    runtime_chat_id = getattr(bot, f"_{platform_type}_chat_id", None)
     if runtime_chat_id:
         return str(runtime_chat_id)
 
@@ -1287,7 +1385,7 @@ def _extract_feishu_target_id_from_bot(bot) -> str:
     return ""
 
 
-def _should_start_gateway_schedulers_for_bot(bot, feishu_config: dict) -> tuple[bool, str]:
+def _should_start_gateway_schedulers_for_bot(bot, platform_configs_by_type: dict[str, dict]) -> tuple[bool, str]:
     """网关启动时判断是否应立即启动某 Bot 的 proactive/life 轮询。"""
     pc = getattr(bot, "proactive_config", None)
     if not pc:
@@ -1297,21 +1395,20 @@ def _should_start_gateway_schedulers_for_bot(bot, feishu_config: dict) -> tuple[
     if not pc.is_active:
         return False, f"inactive(mode={pc.mode},enabled={pc.enabled})"
 
-    # 发送通道必须是 feishu，cli/webhook 跳过
     platform_type = (pc.platform_type or "cli").lower()
-    if platform_type != "feishu":
+    if platform_type not in platform_configs_by_type:
         return False, f"platform={platform_type}"
 
-    # 需要有飞书机器人配置；如果没有固定目标，会在收到入站消息后按动态 chat_id 启动。
-    has_feishu_robot = bool(feishu_config and feishu_config.get("app_id"))
-    target_id = _extract_feishu_target_id_from_bot(bot)
+    platform_config = platform_configs_by_type.get(platform_type) or {}
+    has_platform_config = bool(platform_config)
+    target_id = _extract_gateway_target_id_from_bot(bot, platform_type)
     has_target = bool(target_id)
-    if not has_feishu_robot:
-        return False, "feishu_app_missing"
+    if not has_platform_config:
+        return False, f"{platform_type}_config_missing"
     if not has_target:
-        return False, "feishu_target_missing_waiting_for_inbound"
+        return False, f"{platform_type}_target_missing_waiting_for_inbound"
 
-    return True, f"platform=feishu has_robot={has_feishu_robot} has_target={has_target}"
+    return True, f"platform={platform_type} has_config={has_platform_config} has_target={has_target}"
 
 
 async def run_gateway(daemon: bool = True):
@@ -1347,10 +1444,12 @@ async def run_gateway(daemon: bool = True):
     # 加载配置
     config = Config()
     feishu_platform_config = load_feishu_platform_config()
+    weixin_platform_config = load_weixin_platform_config()
     try:
         feishu_profiles = _build_feishu_adapter_profiles(feishu_platform_config)
+        weixin_profiles = _build_weixin_adapter_profiles(weixin_platform_config)
     except ValueError as e:
-        print(f"[ERROR] 飞书配置无效: {e}")
+        print(f"[ERROR] 平台配置无效: {e}")
         sys.exit(1)
 
     model_cfg = config.get_model_config()
@@ -1397,33 +1496,53 @@ async def run_gateway(daemon: bool = True):
             extra=profile["extra"]
         )
         feishu_adapters_by_app_id[profile["app_id"]] = FeishuAdapter(platform_config)
+    weixin_adapters_by_account_id: dict[str, WeixinAdapter] = {}
+    for profile in weixin_profiles:
+        platform_config = PlatformConfig(
+            enabled=True,
+            token=profile.get("token") or None,
+            extra=profile["extra"],
+        )
+        account_id = profile.get("account_id") or profile["extra"].get("account_id") or os.getenv("WEIXIN_ACCOUNT_ID", "")
+        weixin_adapters_by_account_id[str(account_id)] = WeixinAdapter(platform_config)
+
+    platform_configs_by_type: dict[str, dict] = {}
+    if feishu_profiles:
+        platform_configs_by_type["feishu"] = feishu_profiles[0]["extra"]
+    if weixin_profiles:
+        platform_configs_by_type["weixin"] = weixin_profiles[0]["extra"]
 
     for bot_config in config.get_enabled_bots():
         bot_config = {**bot_config, "data_dir": str(data_dir)}
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
-        bot.set_allowed_proactive_scheduler_platforms({"feishu"})
+        bot.set_allowed_proactive_scheduler_platforms(set(platform_configs_by_type.keys()) or {"feishu"})
+        proactive_platform_type = (bot.proactive_config.platform_type or "cli").lower()
 
-        # 设置主动消息发送平台（需要飞书适配器在 init 之前设置）。
-        # 必须复用后续 connect() 的同一个 adapter，否则主动发送会命中未连接实例。
+        # 设置主动消息发送平台（需要复用后续 connect() 的同一个 adapter）。
         bot_feishu_app_id = _get_feishu_app_id_for_bot(feishu_platform_config, bot.id)
         bot_feishu_adapter = feishu_adapters_by_app_id.get(bot_feishu_app_id)
-        if bot_feishu_adapter:
-            bot.set_proactive_platform(feishu_adapter=bot_feishu_adapter)
+        if bot_feishu_adapter and proactive_platform_type == "feishu":
+            bot.set_proactive_platform("feishu", gateway_adapter=bot_feishu_adapter)
+
+        for profile in weixin_profiles:
+            if profile.get("bot_id") == bot.id:
+                account_id = profile.get("account_id") or profile["extra"].get("account_id") or os.getenv("WEIXIN_ACCOUNT_ID", "")
+                bot_weixin_adapter = weixin_adapters_by_account_id.get(str(account_id))
+                if bot_weixin_adapter and proactive_platform_type == "weixin":
+                    bot.set_proactive_platform("weixin", gateway_adapter=bot_weixin_adapter)
+                break
 
         # Bot 级持久化目标会话，来自 config.yaml 的 platforms.feishu.bot_bindings。
         bot_home_channel = _get_feishu_home_channel_for_bot(feishu_platform_config, bot.id)
         if bot_home_channel:
             bot._feishu_chat_id = bot_home_channel
+        bot_weixin_home_channel = _get_weixin_home_channel_for_bot(weixin_platform_config, bot.id)
+        if bot_weixin_home_channel:
+            bot._weixin_chat_id = bot_weixin_home_channel
 
         # 网关默认先初始化，不全量拉起轮询；按规则选择性启动
         await bot.init(start_schedulers=False)
-        bot_feishu_config = None
-        if bot_feishu_app_id:
-            for profile in feishu_profiles:
-                if profile["app_id"] == bot_feishu_app_id:
-                    bot_feishu_config = profile["extra"]
-                    break
-        should_start, reason = _should_start_gateway_schedulers_for_bot(bot, bot_feishu_config)
+        should_start, reason = _should_start_gateway_schedulers_for_bot(bot, platform_configs_by_type)
         if should_start:
             await bot.ensure_schedulers_started()
             print(f"[OK] 启动轮询: {bot.name} ({bot.id}) [{reason}]")
@@ -1439,61 +1558,80 @@ async def run_gateway(daemon: bool = True):
     # 启动管理 API
     await _start_admin_api(bot_manager, config)
 
-    # 飞书未配置时，只启动管理 API
-    connected_feishu_adapters = []
+    connected_adapters = []
+    command_handler = GatewayCommandHandler(config)
+
+    def _make_gateway_message_handler(router: PlatformRouter):
+        async def gateway_message_handler(event):
+            """Process a platform message and route it to BotInstance."""
+            bot_id = router.route(event)
+            bot = bot_manager.get_bot(bot_id) if bot_id else None
+            if not bot:
+                bot = bot_manager.first_bot
+            if not bot:
+                return "没有可用的 Bot"
+
+            source = getattr(event, "source", None)
+            if source and getattr(source, "chat_id", None):
+                platform_value = getattr(getattr(source, "platform", None), "value", str(getattr(source, "platform", "")))
+                if platform_value:
+                    setattr(bot, f"_{platform_value}_chat_id", source.chat_id)
+
+            try:
+                command_response = await command_handler.handle(event.text, bot, event)
+                if command_response is not None:
+                    return command_response
+                response = await bot.handle_message(event.text)
+                return response
+            except Exception as e:
+                logger.exception("处理消息失败: %s", e)
+                return f"处理失败: {e}"
+
+        return gateway_message_handler
+
+    async def _connect_profile(platform_label: str, profile: dict, adapter, detail: str = ""):
+        router = PlatformRouter(profile.get("routing", {}) or {})
+        adapter.set_message_handler(_make_gateway_message_handler(router))
+        print(f"[OK] {platform_label} 路由模式({profile['name']}): {router.mode}")
+        success = await adapter.connect()
+        if not success:
+            print(f"[ERROR] {platform_label}连接失败")
+            print(f"   错误: {adapter.fatal_error_message or '未知错误'}")
+            sys.exit(1)
+        connected_adapters.append(adapter)
+        suffix = f" [{detail}]" if detail else ""
+        print(f"[OK] {platform_label}连接成功{suffix}")
+
     if feishu_profiles:
         print(f"[OK] 飞书配置已加载 ({len(feishu_profiles)} 个应用)")
-        command_handler = GatewayCommandHandler(config)
-
-        def _make_feishu_message_handler(router: PlatformRouter):
-            async def feishu_message_handler(event):
-                """process feishu message, route to BotInstance"""
-                bot_id = router.route(event)
-                bot = bot_manager.get_bot(bot_id) if bot_id else None
-
-                if not bot:
-                    # Fallback: 使用第一个可用的 bot
-                    bot = bot_manager.first_bot
-
-                if not bot:
-                    return "没有可用的 Bot"
-
-                # 记录用户所在的 chat_id，作为本轮运行时主动消息发送目标。
-                # 持久化目标建议写入 config.yaml 的 platforms.feishu.bot_bindings。
-                if event.source and hasattr(event.source, 'chat_id'):
-                    bot._feishu_chat_id = event.source.chat_id
-
-                try:
-                    command_response = await command_handler.handle(event.text, bot, event)
-                    if command_response is not None:
-                        return command_response
-                    response = await bot.handle_message(event.text)
-                    return response
-                except Exception as e:
-                    logger.exception("处理消息失败: %s", e)
-                    return f"处理失败: {e}"
-
-            return feishu_message_handler
-
         print()
         print("正在连接飞书...")
-
         for profile in feishu_profiles:
             adapter = feishu_adapters_by_app_id[profile["app_id"]]
-            router = PlatformRouter(profile.get("routing", {}) or {})
-            adapter.set_message_handler(_make_feishu_message_handler(router))
-            print(f"[OK] 路由模式({profile['name']}): {router.mode}")
-
-            success = await adapter.connect()
-            if not success:
-                print("[ERROR] 飞书连接失败")
-                print(f"   错误: {adapter.fatal_error_message or '未知错误'}")
-                sys.exit(1)
-
-            connected_feishu_adapters.append(adapter)
-            print(f"[OK] 飞书连接成功 [{profile['extra'].get('connection_mode', 'websocket')}]")
+            await _connect_profile(
+                "飞书",
+                profile,
+                adapter,
+                profile["extra"].get("connection_mode", "websocket"),
+            )
     else:
-        print("[WARN] 飞书未配置，跳过网关连接")
+        print("[WARN] 飞书未配置，跳过飞书连接")
+
+    if weixin_profiles:
+        print(f"[OK] 微信配置已加载 ({len(weixin_profiles)} 个账号)")
+        for profile in weixin_profiles:
+            account_id = profile.get("account_id") or profile["extra"].get("account_id") or os.getenv("WEIXIN_ACCOUNT_ID", "")
+            print(f"     - account={_safe_weixin_id(account_id)} bot={profile.get('bot_id')}")
+        print()
+        print("正在连接微信...")
+        for profile in weixin_profiles:
+            account_id = profile.get("account_id") or profile["extra"].get("account_id") or os.getenv("WEIXIN_ACCOUNT_ID", "")
+            adapter = weixin_adapters_by_account_id[str(account_id)]
+            await _connect_profile("微信", profile, adapter, f"account={_safe_weixin_id(account_id)}")
+    else:
+        print("[WARN] 微信未配置，跳过微信连接")
+
+    if not connected_adapters:
         print("       管理 API 已启动，可访问 http://localhost:8642")
 
     # 默认随网关启动 UI；可用 START_UI=false 或 AI_COMPANION_START_UI=false 关闭。
@@ -1508,7 +1646,13 @@ async def run_gateway(daemon: bool = True):
         print(f"  管理后台: http://localhost:1421")
         print("  按 Ctrl+C 退出")
     else:
-        print("网关已启动，等待飞书消息...")
+        platforms = []
+        if feishu_profiles:
+            platforms.append("飞书")
+        if weixin_profiles:
+            platforms.append("微信")
+        suffix = " / ".join(platforms) if platforms else "管理 API"
+        print(f"网关已启动，等待{suffix}消息...")
         print("按 Ctrl+C 退出")
     print("=" * 50)
 
@@ -1521,8 +1665,8 @@ async def run_gateway(daemon: bool = True):
         print("正在停止网关...")
     finally:
         _stop_ui_server()
-        for feishu_adapter in connected_feishu_adapters:
-            await feishu_adapter.disconnect()
+        for platform_adapter in connected_adapters:
+            await platform_adapter.disconnect()
         await _stop_admin_api()
         for bot in bot_manager.bots.values():
             try:
