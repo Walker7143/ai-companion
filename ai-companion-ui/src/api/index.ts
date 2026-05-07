@@ -7,6 +7,7 @@ import type {
   Message,
   EpisodicItem,
   SemanticMemory,
+  DailyMemoryPayload,
   UnderstandingPayload,
   DebugContextPayload,
   LogPage,
@@ -70,6 +71,9 @@ export const memoryApi = {
 
   getWorking: (botId: string): Promise<Message[]> =>
     fetchApi<Message[]>(`/admin/memory/${botId}/working`),
+
+  getDaily: (botId: string): Promise<DailyMemoryPayload> =>
+    fetchApi<DailyMemoryPayload>(`/admin/memory/${botId}/daily`),
 
   getEpisodic: (botId: string, query?: string, limit?: number): Promise<EpisodicItem[]> => {
     const params = new URLSearchParams();

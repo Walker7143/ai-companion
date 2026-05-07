@@ -151,6 +151,7 @@ export function Dashboard() {
 
   const totalMemory =
     (botMetrics?.memory_stats.working_count ?? 0) +
+    (botMetrics?.memory_stats.daily_count ?? 0) +
     (botMetrics?.memory_stats.episodic_count ?? 0) +
     (botMetrics?.memory_stats.semantic_count ?? 0);
 
@@ -332,12 +333,13 @@ export function Dashboard() {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
                   gap: '12px',
                 }}
               >
                 {[
                   { label: '工作记忆', value: botMetrics.memory_stats.working_count, color: 'var(--accent)' },
+                  { label: '日记忆', value: botMetrics.memory_stats.daily_count ?? 0, color: 'var(--success)' },
                   { label: '情景记忆', value: botMetrics.memory_stats.episodic_count, color: 'var(--warning)' },
                   { label: '语义记忆', value: botMetrics.memory_stats.semantic_count, color: 'var(--info)' },
                 ].map((item) => (

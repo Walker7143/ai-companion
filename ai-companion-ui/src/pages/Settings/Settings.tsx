@@ -163,6 +163,15 @@ const defaultMemory: BotConfig['memory'] = {
   semantic_char_limit: 4400,
   embedding: 'local',
   embedding_model: 'all-MiniLM-L6-v2',
+  daily: {
+    enabled: true,
+    retention_days: 10,
+    recent_message_limit: 16,
+    summary_days: 10,
+    max_prompt_chars: 1800,
+    summarize_after_messages: 12,
+    summarize_after_chars: 3000,
+  },
 };
 
 const defaultProactive: ProactiveConfig = {
@@ -261,7 +270,14 @@ function normalizeConfig(data: BotConfig): BotConfig {
     name: raw.name || raw.bot_id || '未命名 Bot',
     schema: raw.schema || { sections: [], sensitive_fields: [] },
     model: { ...defaultModel, ...(raw.model || {}) },
-    memory: { ...defaultMemory, ...(raw.memory || {}) },
+    memory: {
+      ...defaultMemory,
+      ...(raw.memory || {}),
+      daily: {
+        ...defaultMemory.daily,
+        ...((raw.memory || {}).daily || {}),
+      },
+    },
     proactive: {
       ...defaultProactive,
       ...(raw.proactive || {}),
@@ -393,6 +409,15 @@ export function Settings() {
         ...prev,
         [section]: { ...(prev[section] as object), ...(patch as object) },
       };
+    });
+  };
+
+  const patchDailyMemory = (patch: Partial<BotConfig['memory']['daily']>) => {
+    patchSection('memory', {
+      daily: {
+        ...draft!.memory.daily,
+        ...patch,
+      },
     });
   };
 
@@ -551,6 +576,24 @@ export function Settings() {
           当前 Bot：{draft.name}。这里的配置会写回 YAML/JSON 文件，保存前可在底部查看变更范围。
         </p>
       </div>
+
+      <SectionCard id="memory-daily" title="日记忆（跨通道短期记忆）" description="按 bot + 用户共享飞书、微信、CLI 等通道的最近日常连续性；工作记忆仍保持会话隔离。">
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>启用日记忆</div>
+            <FieldHint text="关闭后不会写入或注入跨通道短期记忆，原有工作/情景/语义记忆保持不变。" />
+          </div>
+          <Toggle checked={draft.memory.daily.enabled} onChange={(event) => patchDailyMemory({ enabled: event.target.checked })} />
+        </div>
+        <div style={gridStyle}>
+          <Input label="保留天数" type="number" min="1" value={draft.memory.daily.retention_days} onChange={(event) => patchDailyMemory({ retention_days: Number(event.target.value) })} />
+          <Input label="Prompt 字符预算" type="number" min="200" value={draft.memory.daily.max_prompt_chars} onChange={(event) => patchDailyMemory({ max_prompt_chars: Number(event.target.value) })} />
+          <Input label="最近流水条数" type="number" min="0" value={draft.memory.daily.recent_message_limit} onChange={(event) => patchDailyMemory({ recent_message_limit: Number(event.target.value) })} />
+          <Input label="摘要覆盖天数" type="number" min="1" value={draft.memory.daily.summary_days} onChange={(event) => patchDailyMemory({ summary_days: Number(event.target.value) })} />
+          <Input label="触发摘要消息数" type="number" min="1" value={draft.memory.daily.summarize_after_messages} onChange={(event) => patchDailyMemory({ summarize_after_messages: Number(event.target.value) })} />
+          <Input label="触发摘要字符数" type="number" min="200" value={draft.memory.daily.summarize_after_chars} onChange={(event) => patchDailyMemory({ summarize_after_chars: Number(event.target.value) })} />
+        </div>
+      </SectionCard>
 
       <Card>
         <CardContent style={{ padding: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>

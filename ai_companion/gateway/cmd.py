@@ -215,6 +215,37 @@ def _clear_user_understanding_auto(data: dict) -> tuple[dict, int]:
     return data, count
 
 
+def _table_count(path, table):
+    if not path:
+        return 0
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(path))
+        c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        conn.close()
+        return c
+    except Exception:
+        return 0
+
+
+def _table_size_kb(path) -> int:
+    try:
+        if path and Path(path).exists():
+            return max(1, int(Path(path).stat().st_size // 1024))
+    except Exception:
+        pass
+    return 0
+
+
+def _daily_memory_stats(bot_id: str) -> dict:
+    daily_path = _get_memory_db_path(bot_id, "daily.db")
+    return {
+        "daily_count": _table_count(daily_path, "daily_messages"),
+        "daily_summary_count": _table_count(daily_path, "daily_summaries"),
+        "daily_size_kb": _table_size_kb(daily_path),
+    }
+
+
 async def _start_admin_api(bot_manager: BotManager, config: Config):
     """Start the admin API HTTP server on port 8642."""
     global _admin_app, _admin_runner
@@ -301,18 +332,6 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         semantic_path = _get_memory_db_path(bot_id, "semantic.db")
         understanding, understanding_path = _load_user_understanding(bot_id)
 
-        def _table_count(path, table):
-            if not path:
-                return 0
-            try:
-                import sqlite3
-                conn = sqlite3.connect(str(path))
-                c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                conn.close()
-                return c
-            except Exception:
-                return 0
-
         def _sessions_today(path):
             """Count distinct sessions created today"""
             if not path:
@@ -361,11 +380,12 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             "output_tokens_today": output_tokens,
             "memory_stats": {
                 "working_count": _table_count(db_path, "messages"),
-                "working_size_kb": 0,
+                "working_size_kb": _table_size_kb(db_path),
+                **_daily_memory_stats(bot_id),
                 "episodic_count": _table_count(episodic_path, "episodic_memory"),
-                "episodic_size_kb": 0,
+                "episodic_size_kb": _table_size_kb(episodic_path),
                 "semantic_count": _table_count(semantic_path, "user_facts"),
-                "semantic_size_kb": 0,
+                "semantic_size_kb": _table_size_kb(semantic_path),
                 "user_understanding_path": understanding_path,
                 "user_understanding_auto_facts": _understanding_auto_count(understanding),
                 "embedding_enabled": embedding_enabled,
@@ -577,25 +597,14 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         semantic_path = _get_memory_db_path(bot_id, "semantic.db")
         understanding, understanding_path = _load_user_understanding(bot_id)
 
-        def _table_count(path, table):
-            if not path:
-                return 0
-            try:
-                import sqlite3
-                conn = sqlite3.connect(str(path))
-                c = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                conn.close()
-                return c
-            except Exception:
-                return 0
-
         return web.json_response({
             "working_count": _table_count(db_path, "messages"),
-            "working_size_kb": 0,
+            "working_size_kb": _table_size_kb(db_path),
+            **_daily_memory_stats(bot_id),
             "episodic_count": _table_count(episodic_path, "episodic_memory"),
-            "episodic_size_kb": 0,
+            "episodic_size_kb": _table_size_kb(episodic_path),
             "semantic_count": _table_count(semantic_path, "user_facts"),
-            "semantic_size_kb": 0,
+            "semantic_size_kb": _table_size_kb(semantic_path),
             "user_understanding_path": understanding_path,
             "user_understanding_auto_facts": _understanding_auto_count(understanding),
             "embedding_enabled": embedding_enabled,
@@ -606,6 +615,52 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         bot_id = request.match_info["bot_id"]
         query_session = request.query.get("session_id")
         return web.json_response(working_messages(bot_id, query_session))
+
+    async def handle_memory_daily(request):
+        """GET /api/v1/admin/memory/:bot_id/daily"""
+        bot_id = request.match_info["bot_id"]
+        db_path = _get_memory_db_path(bot_id, "daily.db")
+        if not db_path:
+            return web.json_response({"messages": [], "summaries": []})
+        try:
+            import sqlite3
+            try:
+                limit = max(1, min(500, int(request.query.get("limit", "120"))))
+            except ValueError:
+                limit = 120
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            messages = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT id, bot_id, user_id, local_date, created_at, platform,
+                           session_id, channel_type, role, content, summarized
+                    FROM daily_messages
+                    WHERE COALESCE(archived, 0) = 0
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            ]
+            summaries = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT id, bot_id, user_id, local_date, summary, topics_json,
+                           open_threads_json, mood_json, commitments_json,
+                           message_count, updated_at
+                    FROM daily_summaries
+                    ORDER BY local_date DESC
+                    LIMIT 10
+                    """
+                ).fetchall()
+            ]
+            conn.close()
+            return web.json_response({"messages": messages, "summaries": summaries})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
 
     async def handle_memory_episodic(request):
         """GET /api/v1/admin/memory/:bot_id/episodic"""
@@ -822,6 +877,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
         type_to_db = {
             "working": "working.db",
+            "daily": "daily.db",
             "episodic": "episodic.db",
             "semantic": "semantic.db",
         }
@@ -838,6 +894,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             conn = sqlite3.connect(str(db_path))
             if memory_type == "working":
                 cur = conn.execute("DELETE FROM messages WHERE id = ?", (memory_id,))
+            elif memory_type == "daily":
+                cur = conn.execute("DELETE FROM daily_messages WHERE id = ?", (memory_id,))
             elif memory_type == "episodic":
                 cur = conn.execute("DELETE FROM episodic_memory WHERE id = ?", (memory_id,))
             else:  # semantic
@@ -857,6 +915,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         deleted = {
             "working_messages": 0,
             "working_summaries": 0,
+            "daily_messages": 0,
+            "daily_summaries": 0,
             "episodic": 0,
             "semantic": 0,
             "relationship": 0,
@@ -876,6 +936,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 pass
 
         working_db = _get_memory_db_path(bot_id, "working.db")
+        daily_db = _get_memory_db_path(bot_id, "daily.db")
         episodic_db = _get_memory_db_path(bot_id, "episodic.db")
         semantic_db = _get_memory_db_path(bot_id, "semantic.db")
         relationship_db = _get_memory_db_path(bot_id, "relationship.db")
@@ -883,6 +944,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
 
         _delete_rows(working_db, "DELETE FROM messages", "working_messages")
         _delete_rows(working_db, "DELETE FROM summaries", "working_summaries")
+        _delete_rows(daily_db, "DELETE FROM daily_messages", "daily_messages")
+        _delete_rows(daily_db, "DELETE FROM daily_summaries", "daily_summaries")
         _delete_rows(episodic_db, "DELETE FROM episodic_memory", "episodic")
         _delete_rows(semantic_db, "DELETE FROM user_facts", "semantic")
         _delete_rows(relationship_db, "DELETE FROM relationship_state", "relationship")
@@ -973,6 +1036,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_get("/api/v1/admin/logs/stream", handle_logs_stream)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/stats", handle_memory_stats)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/working", handle_memory_working)
+    _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/daily", handle_memory_daily)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/episodic", handle_memory_episodic)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/semantic", handle_memory_semantic)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding)

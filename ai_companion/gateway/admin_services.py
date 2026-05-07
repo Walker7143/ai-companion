@@ -505,6 +505,7 @@ class ConfigAdminService:
         return _deep_merge(DEFAULT_CONFIG, raw)
 
     def _public_memory(self, memory: dict) -> dict:
+        daily = memory.get("daily") if isinstance(memory.get("daily"), dict) else {}
         return {
             "hard_limit_chars": _as_int(memory.get("hard_limit_chars"), 100000, 1000),
             "soft_limit_chars": _as_int(memory.get("soft_limit_chars"), 80000, 500),
@@ -513,6 +514,15 @@ class ConfigAdminService:
             "semantic_char_limit": _as_int(memory.get("semantic_char_limit"), 4400, 500),
             "embedding": memory.get("embedding", "local"),
             "embedding_model": memory.get("embedding_model", "all-MiniLM-L6-v2"),
+            "daily": {
+                "enabled": bool(daily.get("enabled", True)),
+                "retention_days": _as_int(daily.get("retention_days"), 10, 1, 365),
+                "recent_message_limit": _as_int(daily.get("recent_message_limit"), 16, 0, 200),
+                "summary_days": _as_int(daily.get("summary_days"), 10, 1, 365),
+                "max_prompt_chars": _as_int(daily.get("max_prompt_chars"), 1800, 200, 20000),
+                "summarize_after_messages": _as_int(daily.get("summarize_after_messages"), 12, 1, 500),
+                "summarize_after_chars": _as_int(daily.get("summarize_after_chars"), 3000, 200, 100000),
+            },
         }
 
     def _public_proactive(self, cfg: dict) -> dict:
@@ -721,6 +731,18 @@ class ConfigAdminService:
             "embedding": memory_data.get("embedding", existing.get("embedding", "local")),
             "embedding_model": memory_data.get("embedding_model", existing.get("embedding_model", "all-MiniLM-L6-v2")),
         })
+        daily_data = memory_data.get("daily") if isinstance(memory_data.get("daily"), dict) else {}
+        existing_daily = dict(existing.get("daily", {}) if isinstance(existing.get("daily"), dict) else {})
+        existing_daily.update({
+            "enabled": bool(daily_data.get("enabled", existing_daily.get("enabled", True))),
+            "retention_days": _as_int(daily_data.get("retention_days"), existing_daily.get("retention_days", 10), 1, 365),
+            "recent_message_limit": _as_int(daily_data.get("recent_message_limit"), existing_daily.get("recent_message_limit", 16), 0, 200),
+            "summary_days": _as_int(daily_data.get("summary_days"), existing_daily.get("summary_days", 10), 1, 365),
+            "max_prompt_chars": _as_int(daily_data.get("max_prompt_chars"), existing_daily.get("max_prompt_chars", 1800), 200, 20000),
+            "summarize_after_messages": _as_int(daily_data.get("summarize_after_messages"), existing_daily.get("summarize_after_messages", 12), 1, 500),
+            "summarize_after_chars": _as_int(daily_data.get("summarize_after_chars"), existing_daily.get("summarize_after_chars", 3000), 200, 100000),
+        })
+        existing["daily"] = existing_daily
         if existing["soft_limit_chars"] >= existing["hard_limit_chars"]:
             existing["soft_limit_chars"] = max(500, existing["hard_limit_chars"] - 1000)
         models_data["memory"] = existing

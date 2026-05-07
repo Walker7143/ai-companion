@@ -11,6 +11,9 @@ export interface SystemMetrics {
 export interface MemoryStats {
   working_count: number;
   working_size_kb: number;
+  daily_count?: number;
+  daily_summary_count?: number;
+  daily_size_kb?: number;
   episodic_count: number;
   episodic_size_kb: number;
   semantic_count: number;
@@ -59,6 +62,39 @@ export interface Message {
   role: string;
   content: string;
   created_at: string;
+}
+
+export interface DailyMessage {
+  id: string;
+  bot_id?: string;
+  user_id?: string;
+  local_date: string;
+  created_at: string;
+  platform?: string | null;
+  session_id?: string | null;
+  channel_type?: string | null;
+  role: string;
+  content: string;
+  summarized?: number;
+}
+
+export interface DailySummary {
+  id: string;
+  bot_id?: string;
+  user_id?: string;
+  local_date: string;
+  summary: string;
+  topics_json?: string | null;
+  open_threads_json?: string | null;
+  mood_json?: string | null;
+  commitments_json?: string | null;
+  message_count?: number;
+  updated_at: string;
+}
+
+export interface DailyMemoryPayload {
+  messages: DailyMessage[];
+  summaries: DailySummary[];
 }
 
 export interface EpisodicItem {
@@ -207,6 +243,17 @@ export interface MemoryConfig {
   semantic_char_limit: number;
   embedding: string;
   embedding_model: string;
+  daily: DailyMemoryConfig;
+}
+
+export interface DailyMemoryConfig {
+  enabled: boolean;
+  retention_days: number;
+  recent_message_limit: number;
+  summary_days: number;
+  max_prompt_chars: number;
+  summarize_after_messages: number;
+  summarize_after_chars: number;
 }
 
 export interface ProactiveConfig {
