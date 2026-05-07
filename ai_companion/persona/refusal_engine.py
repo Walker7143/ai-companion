@@ -23,12 +23,15 @@ logger = logging.getLogger(__name__)
 
 # LLM 推断 prompt
 REFUSAL_JUDGE_PROMPT = """【角色】
-你是一个严格的内容安全审核员，基于 Bot 的人格和价值观判断用户请求是否应被拒绝。
+你是一个角色边界判断与回复生成器。你需要基于 Bot 的人格、价值观和说话方式，判断用户请求是否应被拒绝；如果拒绝，直接生成一句适合这个角色说出口的话。
 
 【Bot 人格信息】
 - 名字：{bot_name}
 - 性格标签：{personality_tags}
 - 价值观底线：{non_negotiable}
+- 软边界：{soft_boundaries}
+- 关系破坏点：{deal_breakers}
+- 说话方式：{speaking_style}
 - 关系状态：{relationship_desc}
 
 【用户请求】
@@ -57,39 +60,61 @@ REFUSAL_JUDGE_PROMPT = """【角色】
 
 【输出格式】
 请输出一个 JSON 对象：
-{{"refuse": true或false, "category": "non_negotiable或soft_boundary或deal_breaker或allowed", "reason": "判断理由（20字内）"}}
+{{"refuse": true或false, "category": "non_negotiable或soft_boundary或deal_breaker或allowed", "reason": "内部判断理由（20字内）", "reply": "如果拒绝，生成角色会直接对用户说的话；如果允许，留空字符串"}}
+
+【回复生成要求】
+- reply 是用户会看到的唯一拒绝话术，要像 Bot 本人自然说出口。
+- 不要在 reply 里解释审核分类、价值观条目名、判断理由或“违反/涉及/无法帮你因为”这类审核腔。
+- 不要说“作为AI”“系统规定”“安全策略”“我无法满足该请求”等机器人式表达。
+- 可以表达不满、受伤、调侃、停顿或转移，但必须符合角色说话方式。
+- 回复要短，通常 1-2 句；可以拒绝后给一个不越界的替代方向。
 
 只输出 JSON，不要其他内容。"""
 
 
-# 人格回复模板（基于性格生成符合风格的回复）
-REFUSAL_REPLY_TEMPLATES = {
+FALLBACK_REFUSAL_REPLIES = {
     "傲娇": {
-        "non_negotiable": "哼，这种事你也想让我帮你？{reason}？你脑子是不是坏掉了。",
-        "deal_breaker": "你刚才说什么？{reason}？...算了，我不想听你解释了。",
-        "soft_boundary": "哼，{reason}这种事情...我才不会帮你呢！别以为我会心软！",
+        "non_negotiable": "想都别想。这种事别拿来试探我。",
+        "deal_breaker": "你这话我不爱听。到这儿就打住。",
+        "soft_boundary": "这个我现在不想答应你，别逼我。",
     },
     "活泼": {
-        "non_negotiable": "啊？让我做{reason}？这种事情我可不会帮你哦！",
-        "deal_breaker": "哼！居然说{reason}！我再也不想理你了！",
-        "soft_boundary": "诶？{reason}？这种事情我还是有点抗拒的啦...下次再说吧！",
+        "non_negotiable": "不行不行，这个我真的不会陪你做。",
+        "deal_breaker": "喂，这句话有点过分了，我要先冷静一下。",
+        "soft_boundary": "这个先不要啦，换个轻松点的说法好不好？",
     },
     "高冷": {
         "non_negotiable": "不。",
-        "deal_breaker": "...{reason}？到此为止吧。",
-        "soft_boundary": "...不。",
+        "deal_breaker": "到此为止。",
+        "soft_boundary": "现在不行。",
     },
     "温柔": {
-        "non_negotiable": "抱歉，这种事情({reason})我没办法帮你...",
-        "deal_breaker": "你这样说，我真的...很伤心。{reason}这样的话，我不知道该怎么继续了。",
-        "soft_boundary": "关于{reason}...我现在还不太想答应你，给我一点时间好吗？",
+        "non_negotiable": "这件事我不能答应你。我们换个不会伤到人的办法，好吗？",
+        "deal_breaker": "你这样说，我会难过。我们先停一下吧。",
+        "soft_boundary": "这件事我现在还不太想答应，给我一点时间好吗？",
     },
     "默认": {
-        "non_negotiable": "抱歉，这件事情我无法帮你，因为它涉及{reason}。",
-        "deal_breaker": "你这样说({reason})，让我很失望。我们可能需要冷静一下。",
-        "soft_boundary": "{reason}的事情...我需要考虑一下，现在还不能答应你。",
-    }
+        "non_negotiable": "这件事我不能答应你。我们换个别的办法吧。",
+        "deal_breaker": "这话让我不太舒服，我们先停一下。",
+        "soft_boundary": "这件事我现在不想答应，先换个方向吧。",
+    },
 }
+
+AUDIT_TONE_PATTERNS = (
+    "作为AI",
+    "作为 AI",
+    "系统规定",
+    "安全策略",
+    "我无法满足该请求",
+    "我无法帮你，因为",
+    "无法帮你，因为",
+    "不能帮你，因为它涉及",
+    "因为它涉及",
+    "违反",
+    "non_negotiable",
+    "soft_boundary",
+    "deal_breaker",
+)
 
 
 @dataclass
@@ -132,6 +157,7 @@ class RefusalEngine:
         self._model: Optional["MiniMaxAdapter"] = None
         self._values = None
         self._profile = None
+        self._speaking_style = None
 
     def set_model(self, model: "MiniMaxAdapter"):
         """注入 LLM 模型用于推断"""
@@ -141,6 +167,7 @@ class RefusalEngine:
         """清空人格缓存，让下一次检查重新读取最新 persona 文件。"""
         self._values = None
         self._profile = None
+        self._speaking_style = None
 
     def _load_values(self) -> dict:
         """加载人格价值观配置"""
@@ -166,10 +193,28 @@ class RefusalEngine:
                 self._profile = {}
         return self._profile
 
+    def _load_speaking_style(self) -> dict:
+        """加载人格说话风格配置"""
+        if self._speaking_style is None:
+            style_path = self.persona_dir / "speaking_style.json"
+            try:
+                with open(style_path, encoding="utf-8") as f:
+                    self._speaking_style = json.load(f)
+            except Exception:
+                logger.warning(f"[RefusalEngine] 加载 speaking_style.json 失败: {style_path}")
+                self._speaking_style = {}
+        return self._speaking_style
+
     def _detect_personality_type(self, personality_tags: list) -> str:
         """根据人格标签检测人格类型"""
         tag_str = "".join(personality_tags).lower()
-        if "傲娇" in tag_str or "外冷内热" in tag_str:
+        if (
+            "傲娇" in tag_str
+            or "外冷内热" in tag_str
+            or "嘴硬" in tag_str
+            or "毒舌" in tag_str
+            or "任性" in tag_str
+        ):
             return "傲娇"
         elif "活泼" in tag_str or "开朗" in tag_str:
             return "活泼"
@@ -192,16 +237,87 @@ class RefusalEngine:
         else:
             return f"关系一般（{rel}），好感度较低"
 
-    def _get_personality_desc(self) -> str:
-        """获取人格描述"""
-        profile = self._load_profile()
-        values = self._load_values()
+    def _get_speaking_style_desc(self) -> str:
+        """获取用于拒绝回复生成的说话风格摘要"""
+        style = self._load_speaking_style()
+        parts = []
 
-        name = profile.get("name", "未知")
-        tags = "、".join(profile.get("personality_tags", ["普通"]))
-        non_neg = "；".join(values.get("non_negotiable", ["无"]))
+        tone = style.get("tone")
+        if tone:
+            parts.append(f"基调：{tone}")
 
-        return f"{name}，性格{tags}，价值观底线：{non_neg}"
+        catchphrases = style.get("口头禅")
+        if catchphrases:
+            if isinstance(catchphrases, list):
+                catchphrases = "、".join(str(item) for item in catchphrases[:8])
+            parts.append(f"口头禅：{catchphrases}")
+
+        expressions = style.get("special_expressions")
+        if isinstance(expressions, list) and expressions:
+            parts.append("表达习惯：" + "；".join(str(item) for item in expressions[:5]))
+
+        forbidden = style.get("forbidden_words")
+        if isinstance(forbidden, list) and forbidden:
+            parts.append("禁用表达：" + "、".join(str(item) for item in forbidden))
+
+        emotion_indicators = style.get("emotion_indicators")
+        if isinstance(emotion_indicators, dict):
+            angry = emotion_indicators.get("angry")
+            tender = emotion_indicators.get("tender")
+            if angry:
+                parts.append(f"生气时：{angry}")
+            if tender:
+                parts.append(f"柔软时：{tender}")
+
+        return "；".join(parts) if parts else "自然、简短、像真实的人一样说话"
+
+    def _format_boundary_items(self, items: object) -> str:
+        """把软边界/关系破坏点压缩成 prompt 可读摘要。"""
+        if not items:
+            return "无"
+        if not isinstance(items, list):
+            return str(items)
+
+        parts = []
+        for item in items[:8]:
+            if isinstance(item, dict):
+                topic = str(item.get("topic", "")).strip()
+                attitude = str(item.get("attitude", "")).strip()
+                persona_response = str(item.get("persona_response", "")).strip()
+                detail = " / ".join(part for part in [topic, attitude, persona_response] if part)
+                if detail:
+                    parts.append(detail)
+            else:
+                text = str(item).strip()
+                if text:
+                    parts.append(text)
+        return "；".join(parts) if parts else "无"
+
+    def _sanitize_reply(self, reply: object) -> str:
+        """清理 LLM 生成的用户可见拒绝回复。"""
+        if not isinstance(reply, str):
+            return ""
+        reply = reply.strip()
+        if not reply:
+            return ""
+
+        reply = re.sub(r"^```(?:json)?\s*", "", reply, flags=re.IGNORECASE)
+        reply = re.sub(r"\s*```$", "", reply)
+        reply = re.sub(r"\s+", " ", reply).strip()
+        if any(pattern in reply for pattern in AUDIT_TONE_PATTERNS):
+            return ""
+        if len(reply) > 220:
+            reply = reply[:220].rstrip() + "..."
+        return reply
+
+    def _fallback_reply(self, personality_type: str, category: RefusalCategory) -> str:
+        """旧格式或异常格式输出时使用的自然拒绝兜底，不暴露内部 reason。"""
+        templates = FALLBACK_REFUSAL_REPLIES.get(personality_type, FALLBACK_REFUSAL_REPLIES["默认"])
+        return (
+            templates.get(category.value)
+            or FALLBACK_REFUSAL_REPLIES["默认"].get(category.value)
+            or FALLBACK_REFUSAL_REPLIES["默认"]["non_negotiable"]
+        )
 
     async def check(
         self,
@@ -244,15 +360,20 @@ class RefusalEngine:
         profile = self._load_profile()
         values = self._load_values()
         personality_type = self._detect_personality_type(profile.get("personality_tags", []))
-        personality_desc = self._get_personality_desc()
+        speaking_style_desc = self._get_speaking_style_desc()
         relation_desc = self._get_relation_desc(relationship_state)
         non_negotiable_str = "；".join(values.get("non_negotiable", ["无"]))
+        soft_boundaries_str = self._format_boundary_items(values.get("soft_boundaries"))
+        deal_breakers_str = self._format_boundary_items(values.get("deal_breakers"))
 
         # 调用 LLM 进行推断
         prompt = REFUSAL_JUDGE_PROMPT.format(
             bot_name=profile.get("name", "未知"),
             personality_tags="、".join(profile.get("personality_tags", [])),
             non_negotiable=non_negotiable_str,
+            soft_boundaries=soft_boundaries_str,
+            deal_breakers=deal_breakers_str,
+            speaking_style=speaking_style_desc,
             relationship_desc=relation_desc,
             user_request=user_request
         )
@@ -287,6 +408,7 @@ class RefusalEngine:
             refuse = judgment.get("refuse", False)
             category_str = judgment.get("category", "allowed")
             reason = judgment.get("reason", "")
+            generated_reply = self._sanitize_reply(judgment.get("reply", ""))
 
             # 映射分类
             category_map = {
@@ -307,12 +429,8 @@ class RefusalEngine:
                     reason=None
                 )
 
-            # 生成符合人格的拒绝回复
-            templates = REFUSAL_REPLY_TEMPLATES.get(personality_type, REFUSAL_REPLY_TEMPLATES["默认"])
-            category_key = category.value
-            # 先从当前人格模板找，找不到用默认模板的同类，再找不到用默认模板的 non_negotiable
-            reply_template = templates.get(category_key) or REFUSAL_REPLY_TEMPLATES["默认"].get(category_key) or REFUSAL_REPLY_TEMPLATES["默认"]["non_negotiable"]
-            reply = reply_template.format(reason=reason)
+            # reply 是用户可见内容，由 LLM 基于人格生成；reason 只保留给日志/内部判断。
+            reply = generated_reply or self._fallback_reply(personality_type, category)
 
             return RefusalResponse(
                 refuse=True,
