@@ -74,11 +74,31 @@ ai-companion setup
 向导会引导你完成：
 1. API Key 配置
 2. 创建或更新自定义 Bot
-3. 飞书集成（可选）
+3. 飞书和微信集成（可选）
 
 重复运行 `setup` 时，向导会读取现有配置并默认保留旧值。没有选择重新配置或覆盖的部分不会被清空；例如只重新设置模型时，已有 `bots.yaml`、Bot persona、`proactive.json`、`life.json` 和飞书配置都会保留。
 
-### 1.4 一键更新
+### 1.4 单独配置微信通道
+
+如果已完成基础配置，只想补充或调整微信个人号通道，不需要重新跑完整向导：
+
+```bash
+ai-companion weixin
+```
+
+等价于：
+
+```bash
+ai-companion weixin setup
+```
+
+默认会写入 `~/.ai-companion/config/config.yaml` 的 `platforms.weixin`，并同步 `~/.ai-companion/.env` 里的 `WEIXIN_*` 环境变量。只想写 `config.yaml` 时可使用：
+
+```bash
+ai-companion weixin --no-env
+```
+
+### 1.5 一键更新
 
 以后更新最新代码不需要卸载重装：
 
@@ -94,7 +114,7 @@ ai-companion update --cn
 
 更新命令会保留 `~/.ai-companion/` 下的配置、Bot 人格、记忆和日志。如果 Gateway 正在运行，默认会先停止，更新完成后自动重新启动。
 
-### 1.5 快速配置
+### 1.6 快速配置
 
 如果你已有 API Key，只需创建配置文件：
 
@@ -1630,7 +1650,7 @@ platforms:
 
 ## 8. 微信个人号通道
 
-微信通道基于个人微信 iLink Bot API，与飞书共用同一套 Gateway、BotInstance、记忆、命令和主动唤醒逻辑。推荐通过 `ai-companion setup` 扫码登录；也可以直接在 `config.yaml` 或环境变量里填写 `token/account_id`。
+微信通道基于个人微信 iLink Bot API，与飞书共用同一套 Gateway、BotInstance、记忆、命令和主动唤醒逻辑。推荐通过 `ai-companion weixin` 单独扫码登录；也可以在完整 `ai-companion setup` 里配置，或直接在 `config.yaml` / 环境变量里填写 `token/account_id`。
 
 ### 8.1 最小配置
 

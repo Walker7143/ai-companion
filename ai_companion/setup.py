@@ -73,6 +73,35 @@ def _write_json_file(path: Path, data: dict):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _quote_env_value(value: object) -> str:
+    return f'"{value}"'
+
+
+def _upsert_env_values(path: Path, updates: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    updated_keys = set()
+    new_lines = []
+
+    for line in lines:
+        if "=" not in line or line.lstrip().startswith("#"):
+            new_lines.append(line)
+            continue
+        key, _, _ = line.partition("=")
+        key = key.strip()
+        if key in updates:
+            new_lines.append(f"{key}={updates[key]}")
+            updated_keys.add(key)
+        else:
+            new_lines.append(line)
+
+    for key, value in updates.items():
+        if key not in updated_keys:
+            new_lines.append(f"{key}={value}")
+
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
 def _as_bool(value, default: bool = False) -> bool:
     if value is None:
         return default
@@ -622,6 +651,93 @@ async def _prompt_weixin_platform_config(
     return weixin_config
 
 
+def _weixin_env_updates(weixin_config: dict) -> dict[str, str]:
+    updates = {}
+    weixin_extra = weixin_config.get("extra", {}) if isinstance(weixin_config.get("extra"), dict) else {}
+    if weixin_config.get("token"):
+        updates["WEIXIN_TOKEN"] = _quote_env_value(weixin_config["token"])
+    elif weixin_extra.get("token"):
+        updates["WEIXIN_TOKEN"] = _quote_env_value(weixin_extra["token"])
+
+    if weixin_extra.get("account_id"):
+        updates["WEIXIN_ACCOUNT_ID"] = _quote_env_value(weixin_extra["account_id"])
+
+    weixin_routing = weixin_config.get("routing", {}) if isinstance(weixin_config.get("routing"), dict) else {}
+    if weixin_routing.get("bot_id"):
+        updates["WEIXIN_BOT_ID"] = _quote_env_value(weixin_routing["bot_id"])
+
+    if weixin_extra.get("dm_policy"):
+        updates["WEIXIN_DM_POLICY"] = _quote_env_value(weixin_extra["dm_policy"])
+    if weixin_extra.get("group_policy"):
+        updates["WEIXIN_GROUP_POLICY"] = _quote_env_value(weixin_extra["group_policy"])
+    if weixin_extra.get("allow_from"):
+        updates["WEIXIN_ALLOWED_USERS"] = _quote_env_value(",".join(str(item) for item in weixin_extra["allow_from"]))
+    if weixin_extra.get("group_allow_from"):
+        updates["WEIXIN_GROUP_ALLOWED_USERS"] = _quote_env_value(
+            ",".join(str(item) for item in weixin_extra["group_allow_from"])
+        )
+
+    weixin_home = weixin_config.get("home_channel") if isinstance(weixin_config.get("home_channel"), dict) else {}
+    if weixin_home.get("chat_id"):
+        updates["WEIXIN_HOME_CHANNEL"] = _quote_env_value(weixin_home["chat_id"])
+        updates["WEIXIN_HOME_CHANNEL_NAME"] = _quote_env_value(weixin_home.get("name", "微信私聊"))
+    return updates
+
+
+def _binding_bots_from_config(bots_config: dict) -> list[dict]:
+    return [
+        {"id": b["id"], "name": _bot_label(b)}
+        for b in bots_config.get("bots", [])
+        if isinstance(b, dict) and b.get("id")
+    ]
+
+
+async def configure_weixin_channel(*, data_dir: Path | None = None, sync_env: bool = True) -> bool:
+    """Configure only the Weixin platform and leave other config sections intact."""
+    data_dir = data_dir or get_data_dir()
+    config_dir = data_dir / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "data" / "bots").mkdir(parents=True, exist_ok=True)
+
+    config_path = config_dir / "config.yaml"
+    bots_config_path = config_dir / "bots.yaml"
+    config_data = _load_yaml_file(config_path)
+    bots_config = _load_yaml_file(bots_config_path)
+
+    binding_bots = _binding_bots_from_config(bots_config)
+    if not binding_bots:
+        console.print("[red]✗ 绑定微信前必须先创建 Bot，请先运行 ai-companion setup 添加 Bot。[/red]\n")
+        return False
+
+    platforms = config_data.get("platforms", {}) if isinstance(config_data.get("platforms"), dict) else {}
+    existing_weixin = platforms.get("weixin", {}) or {}
+    config_data["platforms"] = platforms
+    config_data["platforms"]["weixin"] = await _prompt_weixin_platform_config(
+        existing_weixin=existing_weixin,
+        binding_bots=binding_bots,
+        data_dir=data_dir,
+    )
+
+    _write_yaml_file(config_path, config_data)
+    console.print(f"✓ 微信配置已保存到 {config_path}")
+
+    if sync_env:
+        env_path = data_dir / ".env"
+        _upsert_env_values(env_path, _weixin_env_updates(config_data["platforms"]["weixin"]))
+        console.print(f"✓ 微信环境变量已同步到 {env_path}")
+    return True
+
+
+async def run_weixin_setup(sync_env: bool = True) -> int:
+    console.print("\n[bold cyan]微信通道配置向导[/bold cyan]\n")
+    configured = await configure_weixin_channel(sync_env=sync_env)
+    if not configured:
+        return 1
+    console.print("\n✓ 微信通道配置完成")
+    console.print("[bold]启动方式:[/bold] [cyan]ai-companion gateway restart[/cyan]\n")
+    return 0
+
+
 def get_data_dir() -> Path:
     """获取 AI Companion 数据目录"""
     if sys.platform == "win32":
@@ -1013,23 +1129,15 @@ async def run_setup():
     console.print("-" * 40)
 
     if Confirm.ask("是否配置微信个人号通道?", default=bool(existing_weixin)):
-        weixin_binding_bots = [
-            {"id": b["id"], "name": _bot_label(b)}
-            for b in bots_config.get("bots", [])
-            if isinstance(b, dict) and b.get("id")
-        ]
+        weixin_binding_bots = _binding_bots_from_config(bots_config)
         if not weixin_binding_bots:
             console.print("[red]✗ 绑定微信前必须先创建 Bot，请重新运行 setup 并添加 Bot。[/red]\n")
             return
 
         if "platforms" not in config_data:
             config_data["platforms"] = {}
-        config_data["platforms"]["weixin"] = await _prompt_weixin_platform_config(
-            existing_weixin=existing_weixin,
-            binding_bots=weixin_binding_bots,
-            data_dir=data_dir,
-        )
-        config_path.write_text(yaml.dump(config_data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        await configure_weixin_channel(data_dir=data_dir, sync_env=False)
+        config_data = _load_yaml_file(config_path)
         console.print("✓ 微信配置已保存到 config.yaml\n")
     else:
         console.print("✗ 跳过微信配置\n")

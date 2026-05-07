@@ -11,6 +11,7 @@ AI Companion CLI 入口
     ai-companion gateway logs   # 查看网关日志
     ai-companion gateway status  # 查看网关状态
     ai-companion setup          # 配置向导
+    ai-companion weixin         # 单独配置微信通道
     ai-companion update         # 一键更新到最新代码
     ai-companion status         # 查看状态
     ai-companion bot list       # Bot 管理
@@ -29,7 +30,7 @@ sys.path.insert(0, str(_project_root))
 
 def main():
     from ai_companion.main import main as start_main
-    from ai_companion.setup import run_setup
+    from ai_companion.setup import run_setup, run_weixin_setup
     from ai_companion.main import show_status
     from ai_companion.bot.cli import handle_bot_command
     from ai_companion.persona_importer.cli import add_persona_parser, handle_persona_command
@@ -75,6 +76,11 @@ def main():
 
     # setup 命令
     subparsers.add_parser("setup", help="运行配置向导")
+
+    # weixin 命令
+    weixin_parser = subparsers.add_parser("weixin", help="微信通道配置")
+    weixin_parser.add_argument("weixin_command", nargs="?", default="setup", choices=["setup"], help="微信子命令")
+    weixin_parser.add_argument("--no-env", action="store_true", help="只写 config.yaml，不同步 ~/.ai-companion/.env")
 
     # update 命令
     update_parser = subparsers.add_parser("update", help="一键更新到最新代码")
@@ -145,6 +151,9 @@ def main():
             asyncio.run(run_gateway(daemon=True))
     elif args.command == "setup":
         asyncio.run(run_setup())
+    elif args.command == "weixin":
+        if args.weixin_command == "setup":
+            sys.exit(asyncio.run(run_weixin_setup(sync_env=not args.no_env)))
     elif args.command == "update":
         index_url = args.index_url
         if args.cn and not index_url:
