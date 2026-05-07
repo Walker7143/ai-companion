@@ -66,6 +66,7 @@ from ai_companion.gateway.platforms.base import (
     cache_image_from_bytes,
 )
 from ai_companion.gateway.constants import get_hermes_home
+from ai_companion.gateway.sentence_splitter import SentenceSplitter, get_delay_for_sentence
 from ai_companion.utils import atomic_json_write
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -1718,19 +1719,43 @@ class WeixinAdapter(BasePlatformAdapter):
                 except Exception as exc:
                     logger.warning("[%s] local file delivery failed for %s: %s", self.name, Path(file_path).name, exc)
 
-            # Deliver text content.
-            chunks = [c for c in self._split_text(self.format_message(final_content)) if c and c.strip()]
-            for idx, chunk in enumerate(chunks):
-                client_id = f"ai-companion-weixin-{uuid.uuid4().hex}"
-                await self._send_text_chunk(
-                    chat_id=chat_id,
-                    chunk=chunk,
-                    context_token=context_token,
-                    client_id=client_id,
-                )
-                last_message_id = client_id
-                if idx < len(chunks) - 1 and self._send_chunk_delay_seconds > 0:
-                    await asyncio.sleep(self._send_chunk_delay_seconds)
+            # Deliver text content sentence-by-sentence, then apply Weixin's
+            # length/Markdown chunking inside each sentence when needed.
+            formatted = self.format_message(final_content)
+            sentences = SentenceSplitter.split(formatted)
+            chunks_by_sentence = [
+                [c for c in self._split_text(sentence) if c and c.strip()]
+                for sentence in sentences
+            ]
+            chunks_by_sentence = [chunks for chunks in chunks_by_sentence if chunks]
+
+            for sentence_idx, chunks in enumerate(chunks_by_sentence):
+                for chunk_idx, chunk in enumerate(chunks):
+                    client_id = f"ai-companion-weixin-{uuid.uuid4().hex}"
+                    await self._send_text_chunk(
+                        chat_id=chat_id,
+                        chunk=chunk,
+                        context_token=context_token,
+                        client_id=client_id,
+                    )
+                    context_token = self._token_store.get(self._account_id, chat_id)
+                    last_message_id = client_id
+                    if (
+                        chunk_idx < len(chunks) - 1
+                        and self._send_chunk_delay_seconds > 0
+                    ):
+                        await asyncio.sleep(self._send_chunk_delay_seconds)
+                if sentence_idx < len(chunks_by_sentence) - 1:
+                    delay = get_delay_for_sentence(chunks[-1])
+                    logger.debug(
+                        "[%s] gradual send: sleeping %.1fs before next sentence (%d/%d)",
+                        self.name,
+                        delay,
+                        sentence_idx + 1,
+                        len(chunks_by_sentence),
+                    )
+                    if delay > 0:
+                        await asyncio.sleep(delay)
             return SendResult(success=True, message_id=last_message_id)
         except Exception as exc:
             logger.error("[%s] send failed to=%s: %s", self.name, _safe_id(chat_id), exc)

@@ -85,6 +85,8 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
             "ai_companion.gateway.platforms.weixin._get_updates", fake_get_updates
         ), patch(
             "ai_companion.gateway.platforms.weixin._send_message", fake_send_message
+        ), patch(
+            "ai_companion.gateway.platforms.weixin.get_delay_for_sentence", return_value=0
         ):
             connected = await adapter.connect()
             self.assertTrue(connected)
@@ -122,6 +124,34 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
 
             await adapter.disconnect()
             self.assertFalse(adapter.is_connected)
+
+    async def test_weixin_send_splits_reply_into_gradual_sentences(self):
+        sent = []
+
+        async def fake_send_message(session, *, text, **kwargs):
+            sent.append(text)
+            return {"ret": 0}
+
+        adapter = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={
+                    "account_id": "wxbot",
+                    "send_chunk_delay_seconds": 0,
+                    "send_chunk_retries": 0,
+                },
+            )
+        )
+        adapter._send_session = object()
+
+        with patch("ai_companion.gateway.platforms.weixin._send_message", fake_send_message), patch(
+            "ai_companion.gateway.platforms.weixin.get_delay_for_sentence", return_value=0
+        ):
+            result = await adapter.send("user-1", "我刚到家。外面下雨了！你吃饭了吗？")
+
+        self.assertTrue(result.success)
+        self.assertEqual(sent, ["我刚到家。", "外面下雨了！", "你吃饭了吗？"])
 
     async def test_weixin_send_retries_without_expired_context_token(self):
         sent_contexts = []
