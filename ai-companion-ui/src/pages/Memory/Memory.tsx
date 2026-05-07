@@ -39,7 +39,10 @@ export function Memory() {
       const [stats, working, daily, episodic, semantic] = await Promise.all([
         memoryApi.getStats(currentBotId),
         memoryApi.getWorking(currentBotId),
-        memoryApi.getDaily(currentBotId),
+        memoryApi.getDaily(currentBotId).catch((error) => {
+          console.warn('Daily memory API unavailable:', error);
+          return { messages: [], summaries: [] };
+        }),
         memoryApi.getEpisodic(currentBotId),
         memoryApi.getSemantic(currentBotId),
       ]);
