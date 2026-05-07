@@ -14,6 +14,11 @@ from ai_companion import setup
 
 
 class WeixinSetupTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self._console_print_patch = patch.object(setup.console, "print")
+        self._console_print_patch.start()
+        self.addCleanup(self._console_print_patch.stop)
+
     async def test_configure_weixin_channel_preserves_existing_config_and_syncs_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp)
@@ -88,6 +93,64 @@ class WeixinSetupTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn('WEIXIN_ACCOUNT_ID="wxbot-1"', env_text)
             self.assertIn('WEIXIN_BOT_ID="lin_wanqing"', env_text)
             self.assertIn('WEIXIN_HOME_CHANNEL="wxid_a"', env_text)
+
+    async def test_prompt_weixin_qr_success_auto_generates_config_without_followup_prompts(self):
+        async def fake_qr_login(_home):
+            return {
+                "account_id": "wxbot-qr",
+                "token": "qr-token",
+                "base_url": "https://qr.weixin.example",
+                "user_id": "wx-user",
+            }
+
+        with patch.object(setup.Confirm, "ask", return_value=True), patch(
+            "ai_companion.gateway.platforms.weixin.qr_login", fake_qr_login
+        ), patch.object(setup.Prompt, "ask", side_effect=AssertionError("unexpected follow-up prompt")):
+            config = await setup._prompt_weixin_platform_config(
+                existing_weixin={},
+                binding_bots=[{"id": "lin_wanqing", "name": "林晚晴"}],
+                data_dir=Path("/tmp/ai-companion-test"),
+            )
+
+        self.assertEqual(config["token"], "qr-token")
+        self.assertEqual(config["extra"]["account_id"], "wxbot-qr")
+        self.assertEqual(config["extra"]["base_url"], "https://qr.weixin.example")
+        self.assertEqual(config["extra"]["user_id"], "wx-user")
+        self.assertEqual(config["extra"]["dm_policy"], "open")
+        self.assertEqual(config["extra"]["group_policy"], "disabled")
+        self.assertEqual(config["routing"], {"mode": "dedicated", "bot_id": "lin_wanqing"})
+
+    async def test_prompt_weixin_qr_success_preserves_existing_allowlist(self):
+        async def fake_qr_login(_home):
+            return {
+                "account_id": "wxbot-qr",
+                "token": "qr-token",
+                "base_url": "https://qr.weixin.example",
+            }
+
+        existing = {
+            "extra": {
+                "dm_policy": "allowlist",
+                "allow_from": ["wxid_a"],
+                "group_policy": "allowlist",
+                "group_allow_from": ["room_a"],
+            },
+            "routing": {"mode": "dedicated", "bot_id": "lin_wanqing"},
+        }
+
+        with patch.object(setup.Confirm, "ask", return_value=True), patch(
+            "ai_companion.gateway.platforms.weixin.qr_login", fake_qr_login
+        ), patch.object(setup.Prompt, "ask", side_effect=AssertionError("unexpected follow-up prompt")):
+            config = await setup._prompt_weixin_platform_config(
+                existing_weixin=existing,
+                binding_bots=[{"id": "lin_wanqing", "name": "林晚晴"}],
+                data_dir=Path("/tmp/ai-companion-test"),
+            )
+
+        self.assertEqual(config["extra"]["dm_policy"], "allowlist")
+        self.assertEqual(config["extra"]["allow_from"], ["wxid_a"])
+        self.assertEqual(config["extra"]["group_policy"], "allowlist")
+        self.assertEqual(config["extra"]["group_allow_from"], ["room_a"])
 
 
 if __name__ == "__main__":

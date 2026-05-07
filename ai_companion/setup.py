@@ -118,6 +118,59 @@ def _as_bool(value, default: bool = False) -> bool:
     return default
 
 
+def _list_from_config(value) -> list:
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
+def _build_weixin_config(
+    *,
+    token: str,
+    account_id: str,
+    base_url: str,
+    cdn_base_url: str,
+    bot_id: str,
+    existing_weixin: dict,
+    dm_policy: str,
+    allow_from: list,
+    group_policy: str,
+    group_allow_from: list,
+    user_id: str = "",
+    home_chat_id: str = "",
+    home_name: str = "",
+) -> dict:
+    existing_extra = existing_weixin.get("extra", {}) if isinstance(existing_weixin.get("extra"), dict) else {}
+    weixin_config = {
+        "enabled": True,
+        "token": token,
+        "extra": {
+            "account_id": account_id,
+            "base_url": (base_url or "https://ilinkai.weixin.qq.com").rstrip("/"),
+            "cdn_base_url": (cdn_base_url or "https://novac2c.cdn.weixin.qq.com/c2c").rstrip("/"),
+            "dm_policy": dm_policy,
+            "allow_from": allow_from,
+            "group_policy": group_policy,
+            "group_allow_from": group_allow_from,
+            "split_multiline_messages": _as_bool(existing_extra.get("split_multiline_messages"), False),
+        },
+        "routing": {"mode": "dedicated", "bot_id": bot_id},
+    }
+    if user_id:
+        weixin_config["extra"]["user_id"] = user_id
+    if home_chat_id:
+        weixin_config["home_channel"] = {
+            "platform": "weixin",
+            "chat_id": home_chat_id,
+            "name": home_name or "微信私聊",
+        }
+    return weixin_config
+
+
 def _persona_template_roots(project_dir: Path, data_dir: Path | None = None) -> list[Path]:
     roots = [
         project_dir / "ai_companion" / "data" / "bots",
@@ -516,21 +569,26 @@ async def _prompt_weixin_platform_config(
         if b["id"] == existing_bot_id:
             default_index = i
             break
-    console.print(f"\n请选择这个微信账号绑定的 Bot（默认: {binding_bots[default_index - 1]['name']}）:")
-    for i, b in enumerate(binding_bots, 1):
-        console.print(f"  {i}. {b['name']} ({b['id']})")
-    bot_choice = Prompt.ask(
-        "选择",
-        choices=[str(i) for i in range(1, len(binding_bots) + 1)],
-        default=str(default_index),
-    )
-    bot_id = binding_bots[int(bot_choice) - 1]["id"]
+    if len(binding_bots) == 1:
+        bot_id = binding_bots[0]["id"]
+        console.print(f"[green]已自动绑定 Bot: {binding_bots[0]['name']} ({bot_id})[/green]")
+    else:
+        console.print(f"\n请选择这个微信账号绑定的 Bot（默认: {binding_bots[default_index - 1]['name']}）:")
+        for i, b in enumerate(binding_bots, 1):
+            console.print(f"  {i}. {b['name']} ({b['id']})")
+        bot_choice = Prompt.ask(
+            "选择",
+            choices=[str(i) for i in range(1, len(binding_bots) + 1)],
+            default=str(default_index),
+        )
+        bot_id = binding_bots[int(bot_choice) - 1]["id"]
 
     token = str(existing_weixin.get("token") or existing_extra.get("token") or "").strip()
     account_id = str(existing_extra.get("account_id") or existing_weixin.get("account_id") or "").strip()
     user_id = str(existing_extra.get("user_id") or "").strip()
     base_url = str(existing_extra.get("base_url") or "https://ilinkai.weixin.qq.com").strip()
     cdn_base_url = str(existing_extra.get("cdn_base_url") or "https://novac2c.cdn.weixin.qq.com/c2c").strip()
+    existing_home = existing_weixin.get("home_channel") if isinstance(existing_weixin.get("home_channel"), dict) else {}
 
     if Confirm.ask("是否扫码登录微信 iLink 账号?", default=not bool(token and account_id)):
         try:
@@ -541,10 +599,35 @@ async def _prompt_weixin_platform_config(
             credentials = None
             console.print(f"[yellow]扫码登录失败: {exc}[/yellow]")
         if credentials:
-            account_id = credentials.get("account_id", account_id)
-            token = credentials.get("token", token)
-            base_url = credentials.get("base_url", base_url)
-            user_id = credentials.get("user_id", user_id)
+            account_id = str(credentials.get("account_id") or account_id).strip()
+            token = str(credentials.get("token") or token).strip()
+            base_url = str(credentials.get("base_url") or base_url).strip()
+            user_id = str(credentials.get("user_id") or user_id).strip()
+            if account_id and token:
+                allow_from = _list_from_config(existing_extra.get("allow_from"))
+                dm_policy = str(existing_extra.get("dm_policy") or "open").strip().lower()
+                if dm_policy == "allowlist" and not allow_from:
+                    dm_policy = "open"
+                group_allow_from = _list_from_config(existing_extra.get("group_allow_from"))
+                group_policy = str(existing_extra.get("group_policy") or "disabled").strip().lower()
+                if group_policy == "allowlist" and not group_allow_from:
+                    group_policy = "disabled"
+                console.print("[green]扫码成功，已自动生成微信通道配置。[/green]")
+                return _build_weixin_config(
+                    token=token,
+                    account_id=account_id,
+                    base_url=base_url,
+                    cdn_base_url=cdn_base_url,
+                    bot_id=bot_id,
+                    existing_weixin=existing_weixin,
+                    dm_policy=dm_policy,
+                    allow_from=allow_from,
+                    group_policy=group_policy,
+                    group_allow_from=group_allow_from,
+                    user_id=user_id,
+                    home_chat_id=str((existing_home or {}).get("chat_id") or ""),
+                    home_name=str((existing_home or {}).get("name") or "微信私聊"),
+                )
         else:
             console.print("[yellow]未获得扫码凭据，改为手动输入。[/yellow]")
 
@@ -578,7 +661,7 @@ async def _prompt_weixin_platform_config(
     dm_choice = Prompt.ask("请选择 DM 策略", choices=["1", "2", "3"], default=dm_policy_default)
     dm_policy = {"1": "allowlist", "2": "open", "3": "disabled"}[dm_choice]
 
-    allow_from = list(existing_extra.get("allow_from", [])) if isinstance(existing_extra.get("allow_from"), list) else []
+    allow_from = _list_from_config(existing_extra.get("allow_from"))
     if dm_policy == "allowlist":
         console.print("\n允许私聊的微信用户 ID（留空结束，输入 . 保留现有）:")
         while True:
@@ -600,11 +683,7 @@ async def _prompt_weixin_platform_config(
     group_choice = Prompt.ask("请选择群聊策略", choices=["1", "2", "3"], default=group_policy_default)
     group_policy = {"1": "disabled", "2": "allowlist", "3": "open"}[group_choice]
 
-    group_allow_from = (
-        list(existing_extra.get("group_allow_from", []))
-        if isinstance(existing_extra.get("group_allow_from"), list)
-        else []
-    )
+    group_allow_from = _list_from_config(existing_extra.get("group_allow_from"))
     if group_policy == "allowlist":
         console.print("\n允许群聊 ID（留空结束，输入 . 保留现有）:")
         while True:
@@ -615,7 +694,6 @@ async def _prompt_weixin_platform_config(
                 break
             group_allow_from.append(group)
 
-    existing_home = existing_weixin.get("home_channel") if isinstance(existing_weixin.get("home_channel"), dict) else {}
     home_chat_id = Prompt.ask(
         "主动唤醒 home_channel chat_id（可留空，收到消息后自动记录）",
         default=str((existing_home or {}).get("chat_id") or ""),
@@ -625,30 +703,21 @@ async def _prompt_weixin_platform_config(
         default=str((existing_home or {}).get("name") or "微信私聊"),
     ).strip()
 
-    weixin_config = {
-        "enabled": True,
-        "token": token,
-        "extra": {
-            "account_id": account_id,
-            "base_url": base_url.rstrip("/"),
-            "cdn_base_url": cdn_base_url.rstrip("/"),
-            "dm_policy": dm_policy,
-            "allow_from": allow_from,
-            "group_policy": group_policy,
-            "group_allow_from": group_allow_from,
-            "split_multiline_messages": _as_bool(existing_extra.get("split_multiline_messages"), False),
-        },
-        "routing": {"mode": "dedicated", "bot_id": bot_id},
-    }
-    if user_id:
-        weixin_config["extra"]["user_id"] = user_id
-    if home_chat_id:
-        weixin_config["home_channel"] = {
-            "platform": "weixin",
-            "chat_id": home_chat_id,
-            "name": home_name or "微信私聊",
-        }
-    return weixin_config
+    return _build_weixin_config(
+        token=token,
+        account_id=account_id,
+        base_url=base_url,
+        cdn_base_url=cdn_base_url,
+        bot_id=bot_id,
+        existing_weixin=existing_weixin,
+        dm_policy=dm_policy,
+        allow_from=allow_from,
+        group_policy=group_policy,
+        group_allow_from=group_allow_from,
+        user_id=user_id,
+        home_chat_id=home_chat_id,
+        home_name=home_name,
+    )
 
 
 def _weixin_env_updates(weixin_config: dict) -> dict[str, str]:
