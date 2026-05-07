@@ -180,7 +180,13 @@ class CLIAdapter:
 
             try:
                 bot = self.bot_manager.get_bot(self.current_bot_id)
-                response = await bot.handle_message(user_input)
+                memory_turn_context = {
+                    "platform": "cli",
+                    "session_id": getattr(getattr(bot, "memory", None), "_session_id", None),
+                    "user_id": getattr(getattr(bot, "memory", None), "user_id", "default_user"),
+                    "channel_type": "local",
+                }
+                response = await bot.handle_message(user_input, memory_turn_context=memory_turn_context)
                 sentences = SentenceSplitter.split(response)
                 if sentences:
                     # Print bot name prefix only before the first sentence

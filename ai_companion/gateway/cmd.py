@@ -31,6 +31,7 @@ from ai_companion.gateway.config import Platform, PlatformConfig
 from ai_companion.gateway.platforms.feishu import FeishuAdapter
 from ai_companion.gateway.platforms.weixin import WeixinAdapter, _safe_id as _safe_weixin_id
 from ai_companion.gateway.router import PlatformRouter
+from ai_companion.gateway.session import build_session_key
 from ai_companion.gateway.control import GATEWAY_PID_FILE, GATEWAY_LOG_FILE, save_gateway_pid, remove_gateway_pid
 from ai_companion.gateway.status import read_runtime_status
 from ai_companion.gateway.admin_services import (
@@ -1385,6 +1386,90 @@ def _extract_gateway_target_id_from_bot(bot, platform_type: str) -> str:
     return ""
 
 
+def _memory_user_id_from_source(source, adapter_extra: dict | None = None) -> str:
+    """Build the shared user id used by long-term memory across gateways."""
+    extra = adapter_extra or {}
+    configured = str(extra.get("memory_user_id") or "").strip()
+    if configured:
+        return configured
+    if source is None:
+        return "default_user"
+    return "default_user"
+
+
+def _memory_session_id_from_source(source, adapter_extra: dict | None = None) -> str:
+    """Map a platform session key to a SQLite-friendly working-memory session id."""
+    if source is None:
+        return ""
+    extra = adapter_extra or {}
+    session_key = build_session_key(
+        source,
+        group_sessions_per_user=extra.get("group_sessions_per_user", True),
+        thread_sessions_per_user=extra.get("thread_sessions_per_user", False),
+    )
+    return "gw_" + uuid.uuid5(uuid.NAMESPACE_URL, session_key).hex[:24]
+
+
+async def _run_gateway_action_with_memory_context(bot, event, action, adapter_extra: dict | None = None) -> str:
+    """Bind BotInstance memory to the inbound gateway user/session for one action."""
+    memory = getattr(bot, "memory", None)
+    if memory is None:
+        return await action()
+
+    source = getattr(event, "source", None)
+    session_id = _memory_session_id_from_source(source, adapter_extra)
+    user_id = _memory_user_id_from_source(source, adapter_extra)
+
+    lock = getattr(bot, "_gateway_memory_context_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        setattr(bot, "_gateway_memory_context_lock", lock)
+
+    async with lock:
+        previous_user_id = getattr(memory, "user_id", "default_user")
+        previous_session_id = getattr(memory, "_session_id", None)
+        previous_working_session = getattr(getattr(memory, "working", None), "current_session", None)
+        try:
+            memory.user_id = user_id
+            if session_id:
+                memory.start_session(session_id)
+            return await action()
+        finally:
+            memory.user_id = previous_user_id
+            if previous_session_id:
+                memory.start_session(previous_session_id)
+            else:
+                memory._session_id = previous_session_id
+                if getattr(memory, "working", None) is not None:
+                    memory.working.current_session = previous_working_session
+
+
+async def _run_bot_with_gateway_memory_context(bot, event, adapter_extra: dict | None = None) -> str:
+    """Bind BotInstance memory to the inbound gateway user/session for one turn."""
+    source = getattr(event, "source", None)
+    session_id = _memory_session_id_from_source(source, adapter_extra)
+    user_id = _memory_user_id_from_source(source, adapter_extra)
+    memory_turn_context = {
+        "platform": source.platform.value if source is not None else "gateway",
+        "session_id": session_id,
+        "user_id": user_id,
+        "channel_type": getattr(source, "chat_type", None),
+        "chat_id": getattr(source, "chat_id", None),
+        "message_id": getattr(event, "message_id", None),
+        "metadata": {
+            "thread_id": getattr(source, "thread_id", None),
+            "chat_name": getattr(source, "chat_name", None),
+            "user_name": getattr(source, "user_name", None),
+        },
+    }
+    return await _run_gateway_action_with_memory_context(
+        bot,
+        event,
+        lambda: bot.handle_message(event.text, memory_turn_context=memory_turn_context),
+        adapter_extra,
+    )
+
+
 def _should_start_gateway_schedulers_for_bot(bot, platform_configs_by_type: dict[str, dict]) -> tuple[bool, str]:
     """网关启动时判断是否应立即启动某 Bot 的 proactive/life 轮询。"""
     pc = getattr(bot, "proactive_config", None)
@@ -1561,7 +1646,7 @@ async def run_gateway(daemon: bool = True):
     connected_adapters = []
     command_handler = GatewayCommandHandler(config)
 
-    def _make_gateway_message_handler(router: PlatformRouter):
+    def _make_gateway_message_handler(router: PlatformRouter, adapter_extra: dict | None = None):
         async def gateway_message_handler(event):
             """Process a platform message and route it to BotInstance."""
             bot_id = router.route(event)
@@ -1578,10 +1663,15 @@ async def run_gateway(daemon: bool = True):
                     setattr(bot, f"_{platform_value}_chat_id", source.chat_id)
 
             try:
-                command_response = await command_handler.handle(event.text, bot, event)
+                command_response = await _run_gateway_action_with_memory_context(
+                    bot,
+                    event,
+                    lambda: command_handler.handle(event.text, bot, event),
+                    adapter_extra,
+                )
                 if command_response is not None:
                     return command_response
-                response = await bot.handle_message(event.text)
+                response = await _run_bot_with_gateway_memory_context(bot, event, adapter_extra)
                 return response
             except Exception as e:
                 logger.exception("处理消息失败: %s", e)
@@ -1591,7 +1681,7 @@ async def run_gateway(daemon: bool = True):
 
     async def _connect_profile(platform_label: str, profile: dict, adapter, detail: str = ""):
         router = PlatformRouter(profile.get("routing", {}) or {})
-        adapter.set_message_handler(_make_gateway_message_handler(router))
+        adapter.set_message_handler(_make_gateway_message_handler(router, profile.get("extra", {}) or {}))
         print(f"[OK] {platform_label} 路由模式({profile['name']}): {router.mode}")
         success = await adapter.connect()
         if not success:

@@ -32,6 +32,15 @@ class MemoryPromptBuilder:
                 + "\n使用方式：这只影响语气和分寸，不要直接向用户报数值。"
             )
 
+        daily_text = self._format_daily_context(retrieved)
+        if daily_text:
+            parts.append(
+                "【最近日常连续性】\n"
+                + daily_text
+                + "\n使用方式：这是用户最近十天内跨通道与你相处的短期背景。"
+                + "当前会话优先；只在自然、必要时参考，不要逐字复述，也不要表现得像在翻日志。"
+            )
+
         fact_lines = self._format_semantic_items(retrieved)
         if fact_lines:
             parts.append(
@@ -193,6 +202,57 @@ class MemoryPromptBuilder:
             if items:
                 lines.append(f"{title}：")
                 lines.extend([f"  - {item}" for item in items])
+
+        return "\n".join(lines)
+
+    def _format_daily_context(self, retrieved: RetrievedMemory) -> str:
+        data = retrieved.daily_context or {}
+        summaries = data.get("summaries") if isinstance(data.get("summaries"), list) else []
+        messages = data.get("recent_messages") if isinstance(data.get("recent_messages"), list) else []
+        if not summaries and not messages:
+            return ""
+
+        lines: list[str] = []
+        today = data.get("today")
+        today_summary = None
+        older_summaries = []
+        for item in summaries:
+            if not isinstance(item, dict):
+                continue
+            if item.get("local_date") == today:
+                today_summary = item
+            else:
+                older_summaries.append(item)
+
+        if today_summary and today_summary.get("summary"):
+            lines.append(f"  - 今天：{str(today_summary.get('summary'))[:240]}")
+            for key, title in [
+                ("open_threads", "今天未完话题"),
+                ("commitments", "今天承诺/待办"),
+                ("mood", "今天情绪线索"),
+            ]:
+                values = _clean_list(today_summary.get(key))
+                if values:
+                    lines.append(f"    {title}：" + "；".join(values[:3]))
+
+        if older_summaries:
+            lines.append("  - 最近几天：")
+            for item in older_summaries[:5]:
+                date = item.get("local_date") or "未知日期"
+                summary = str(item.get("summary") or "").strip()
+                if summary:
+                    lines.append(f"    - {date}: {summary[:180]}")
+
+        if messages:
+            lines.append("  - 其他通道最近几条：")
+            for item in messages[-8:]:
+                if not isinstance(item, dict):
+                    continue
+                platform = item.get("platform") or "unknown"
+                role = "用户" if item.get("role") == "user" else "助手"
+                content = str(item.get("content") or "").strip()
+                if content:
+                    lines.append(f"    - [{platform}] {role}: {content[:120]}")
 
         return "\n".join(lines)
 

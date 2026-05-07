@@ -8,14 +8,18 @@ from datetime import datetime
 class MemoryMaintenance:
     """Decay expired temporary facts and refresh the user understanding projection."""
 
-    def __init__(self, *, semantic_store, episodic_store, user_understanding, relationship_store=None):
+    def __init__(self, *, semantic_store, episodic_store, user_understanding, relationship_store=None, daily_store=None):
         self.semantic = semantic_store
         self.episodic = episodic_store
         self.user_understanding = user_understanding
         self.relationship = relationship_store
+        self.daily = daily_store
 
-    async def run_light(self, *, bot_id: str, user_id: str):
+    async def run_light(self, *, bot_id: str, user_id: str, summarizer=None):
         now = datetime.now().isoformat()
+        if self.daily is not None:
+            await self.daily.summarize_due(bot_id=bot_id, user_id=user_id, summarizer=summarizer)
+            await self.daily.prune_old(bot_id=bot_id, user_id=user_id)
         await self.semantic.archive_expired(now=now, bot_id=bot_id, user_id=user_id)
         await self.episodic.archive_low_value(bot_id=bot_id, user_id=user_id)
         facts = await self.semantic.list_facts(

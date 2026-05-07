@@ -33,6 +33,7 @@ from .stores.relationship import RelationshipStore
 from .stores.semantic import SemanticStore
 from .stores.user_understanding import UserUnderstandingStore
 from .stores.working import WorkingMemoryStore
+from .stores.daily import DailyMemoryStore, MemoryTurnContext
 from .extractor import MemoryExtractor
 from .governor import MemoryGovernor
 from .maintenance import MemoryMaintenance
@@ -95,6 +96,7 @@ class MemoryEngine:
         self.soft_limit = self.config.get("soft_limit_chars", self.DEFAULT_SOFT_LIMIT_CHARS)
         self.max_working_turns = self.config.get("max_working_turns", self.DEFAULT_MAX_WORKING_TURNS)
         self.max_summaries = self.config.get("max_summaries", self.DEFAULT_MAX_SUMMARIES)
+        daily_cfg = self.config.get("daily", {}) if isinstance(self.config.get("daily"), dict) else {}
 
         # embedding 配置
         emb_cfg = self.config
@@ -107,6 +109,16 @@ class MemoryEngine:
             self.memory_dir / "working.db",
             soft_limit=self.soft_limit,
             hard_limit=self.hard_limit,
+        )
+        self.daily = DailyMemoryStore(
+            self.memory_dir / "daily.db",
+            enabled=daily_cfg.get("enabled", True),
+            retention_days=daily_cfg.get("retention_days", 10),
+            recent_message_limit=daily_cfg.get("recent_message_limit", 16),
+            summary_days=daily_cfg.get("summary_days", 10),
+            max_prompt_chars=daily_cfg.get("max_prompt_chars", 1800),
+            summarize_after_messages=daily_cfg.get("summarize_after_messages", 12),
+            summarize_after_chars=daily_cfg.get("summarize_after_chars", 3000),
         )
         self.episodic = EpisodicStore(
             self.memory_dir / "episodic.db",
@@ -137,6 +149,7 @@ class MemoryEngine:
         )
         self.retriever = MemoryRetriever(
             working_store=self.working,
+            daily_store=self.daily,
             episodic_store=self.episodic,
             semantic_store=self.semantic,
             relationship_store=self.relationship,
@@ -149,6 +162,7 @@ class MemoryEngine:
             episodic_store=self.episodic,
             user_understanding=self.user_understanding,
             relationship_store=self.relationship,
+            daily_store=self.daily,
         )
 
         self._session_id: Optional[str] = None
@@ -183,12 +197,13 @@ class MemoryEngine:
     async def init(self):
         """初始化所有 store"""
         await self.working.init()
+        await self.daily.init()
         await self.episodic.init()
         await self.user_understanding.init()
         self._seed_user_understanding_from_builtin()
         await self.semantic.init()
         await self.relationship.init()
-        await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id)
+        await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id, summarizer=self._summarizer)
 
     async def load_context(self, current_input: str) -> dict:
         """
@@ -218,23 +233,34 @@ class MemoryEngine:
             "episodic_recall": retrieved.episodic_recall,
             "semantic_facts": facts,
             "relationship_state": retrieved.relationship_state,
+            "daily_context": retrieved.daily_context,
             "memory_intent": retrieved.intent,
             "user_understanding": self.user_understanding.load(),
             "system_suffix": suffix,
         }
 
-    async def on_message(self, user_input: str, llm_output: str):
+    async def on_message(self, user_input: str, llm_output: str, turn_context: MemoryTurnContext | dict | None = None):
         """
         每条消息调用一次：
         1. 存储本轮对话到工作记忆
         2. 异步抽取并更新情景记忆和语义记忆
         """
         sid = self._session_id or self.working.current_session or "default"
+        context = self._normalize_turn_context(turn_context, session_id=sid)
         await self.working.append(
             user_input=user_input,
             bot_output=llm_output,
             session_id=sid,
             user_id=self.user_id,
+            platform=context.platform,
+        )
+        await self.daily.append_turn(
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            user_input=user_input,
+            bot_output=llm_output,
+            session_id=sid,
+            context=context,
         )
 
         # 2. 获取最近 3 轮对话上下文（用于判断整体语气：撒娇/吵架/调侃等）
@@ -275,7 +301,7 @@ class MemoryEngine:
         await task
         self._maintenance_counter += 1
         if self._maintenance_counter % 5 == 0:
-            await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id)
+            await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id, summarizer=self._summarizer)
 
     def _log_attitude_write(self, semantic_result):
         """attitude_score 写入日志（semantic 返回单个 dict 或 None）"""
@@ -311,6 +337,8 @@ class MemoryEngine:
         episodic_count = self._count_episodes()
         fact_count = await self.semantic.get_fact_count()
         relationship = await self.relationship.get_state(bot_id=self.bot_id, user_id=self.user_id)
+        daily_messages = self.daily.count_messages(bot_id=self.bot_id, user_id=self.user_id)
+        daily_days = self.daily.count_recent_days(bot_id=self.bot_id, user_id=self.user_id)
 
         return {
             "session_id": sid,
@@ -320,6 +348,8 @@ class MemoryEngine:
             "episodic_count": episodic_count,
             "fact_count": fact_count,
             "relationship": relationship,
+            "daily_messages": daily_messages,
+            "daily_days": daily_days,
             "user_understanding_path": str(self.user_understanding.path),
             "user_understanding_auto_facts": self.user_understanding.auto_fact_count(),
             "health": health,
@@ -334,6 +364,7 @@ class MemoryEngine:
         if self._compress_task and not self._compress_task.done():
             await self._compress_task
         await self.working.close()
+        await self.daily.close()
         await self.episodic.close()
         await self.semantic.close()
         await self.relationship.close()
@@ -347,6 +378,26 @@ class MemoryEngine:
             return
         if self.user_understanding.seed_manual_from(seed_path):
             logger.info("[Memory]  已从内置模板补充 user_understanding.manual: %s", seed_path)
+
+    def _normalize_turn_context(self, value, *, session_id: str) -> MemoryTurnContext:
+        if isinstance(value, MemoryTurnContext):
+            if value.session_id is None:
+                value.session_id = session_id
+            if not value.user_id:
+                value.user_id = self.user_id
+            return value
+        if isinstance(value, dict):
+            metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+            return MemoryTurnContext(
+                platform=str(value.get("platform") or "unknown"),
+                session_id=value.get("session_id") or session_id,
+                user_id=str(value.get("user_id") or self.user_id),
+                channel_type=value.get("channel_type"),
+                chat_id=value.get("chat_id"),
+                message_id=value.get("message_id"),
+                metadata=metadata,
+            )
+        return MemoryTurnContext(session_id=session_id, user_id=self.user_id)
 
     async def _do_compress(self):
         """执行压缩"""

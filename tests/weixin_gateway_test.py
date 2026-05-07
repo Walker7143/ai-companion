@@ -28,6 +28,8 @@ from ai_companion.gateway.platforms.weixin import (
 )
 from ai_companion.bot.instance import BotInstance
 from ai_companion.gateway.platforms.base import SendResult
+from ai_companion.gateway.config import Platform
+from ai_companion.gateway.session import SessionSource
 
 
 class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
@@ -472,6 +474,34 @@ class WeixinGatewayConfigTest(unittest.TestCase):
         self.assertEqual(weixin_profiles[0]["platform"].value, "weixin")
         self.assertEqual(weixin_profiles[0]["bot_id"], "lin_wanqing")
         self.assertEqual(weixin_profiles[0]["token"], "wx-token")
+
+    def test_gateway_memory_context_shares_user_memory_across_platforms(self):
+        from ai_companion.gateway.cmd import (
+            _memory_session_id_from_source,
+            _memory_user_id_from_source,
+        )
+
+        feishu_source = SessionSource(
+            platform=Platform.FEISHU,
+            chat_id="chat-1",
+            chat_type="dm",
+            user_id="same-user",
+            user_id_alt="union-1",
+        )
+        weixin_source = SessionSource(
+            platform=Platform.WEIXIN,
+            chat_id="same-user",
+            chat_type="dm",
+            user_id="same-user",
+        )
+
+        self.assertEqual(_memory_user_id_from_source(feishu_source), "default_user")
+        self.assertEqual(_memory_user_id_from_source(weixin_source), "default_user")
+        self.assertEqual(_memory_user_id_from_source(weixin_source, {"memory_user_id": "owner"}), "owner")
+        self.assertNotEqual(
+            _memory_session_id_from_source(feishu_source),
+            _memory_session_id_from_source(weixin_source),
+        )
 
 
 if __name__ == "__main__":

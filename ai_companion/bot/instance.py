@@ -523,7 +523,7 @@ class BotInstance:
             system_prompt = system_prompt + adjustment_note
         return system_prompt
 
-    async def handle_message(self, user_input: str) -> str:
+    async def handle_message(self, user_input: str, memory_turn_context: dict | None = None) -> str:
         """处理用户消息，返回回复"""
         if self.model is None:
             return "[Error] 模型未初始化"
@@ -605,7 +605,10 @@ class BotInstance:
             response = self._polish_response(response, ctx, relationship_state)
 
             # 6. 异步写入记忆
-            self._track_background_task(self.memory.on_message(user_input, response), name="memory.on_message")
+            self._track_background_task(
+                self.memory.on_message(user_input, response, turn_context=memory_turn_context),
+                name="memory.on_message",
+            )
         else:
             system_prompt = self._build_system_prompt(adjustment_note=adjustment_note)
             messages = [{"role": "user", "content": user_input}]

@@ -10,6 +10,7 @@ from typing import Any
 class RetrievedMemory:
     intent: str
     working_history: list[dict] = field(default_factory=list)
+    daily_context: dict[str, Any] = field(default_factory=dict)
     episodic_recall: list[dict] = field(default_factory=list)
     semantic_facts: dict[str, str] = field(default_factory=dict)
     semantic_items: list[dict] = field(default_factory=list)
@@ -42,6 +43,7 @@ class MemoryRetriever:
         self,
         *,
         working_store,
+        daily_store=None,
         episodic_store,
         semantic_store,
         relationship_store,
@@ -49,6 +51,7 @@ class MemoryRetriever:
         max_working_turns: int = 20,
     ):
         self.working = working_store
+        self.daily = daily_store
         self.episodic = episodic_store
         self.semantic = semantic_store
         self.relationship = relationship_store
@@ -66,6 +69,14 @@ class MemoryRetriever:
     ) -> RetrievedMemory:
         detected_intent = intent or self.classify_intent(current_input)
         working = self.working.load_context(session_id, max_working_turns=self.max_working_turns)
+        daily_context = {}
+        if self.daily is not None:
+            daily_context = self.daily.get_recent_context(
+                bot_id=bot_id,
+                user_id=user_id,
+                current_session_id=session_id,
+                intent=detected_intent,
+            )
         understanding = self.user_understanding.load()
         relationship = await self.relationship.get_state(bot_id=bot_id, user_id=user_id)
 
@@ -94,6 +105,7 @@ class MemoryRetriever:
         return RetrievedMemory(
             intent=detected_intent,
             working_history=working,
+            daily_context=daily_context,
             episodic_recall=episodic,
             semantic_facts=semantic_facts,
             semantic_items=semantic_items,
