@@ -554,6 +554,7 @@ class LifeEngine:
 
         if not self.model:
             return None
+        tick_time = datetime.now()
 
         if self.config.time_ratio > self.config.time_ratio_warning_threshold:
             logger.warning(
@@ -575,6 +576,11 @@ class LifeEngine:
             logger.info(
                 f"[LifeEngine] 日期推进 {len(advanced_dates)} 天，最新日期={advanced_dates[-1].strftime('%Y-%m-%d')}"
             )
+
+        # 先持久化日期推进结果；后续生日、里程碑或事件生成出错时，调度器不会反复重试并重复推进日期。
+        self.state.bot_age_days += max(1, len(advanced_dates))
+        self.state.last_daily_tick = tick_time
+        self.state.save()
 
         # 检查生日
         await self._check_birthday()
@@ -610,9 +616,6 @@ class LifeEngine:
         else:
             logger.info("[LifeEngine] 今日无新增事件")
 
-        # Bot 年龄增长
-        self.state.bot_age_days += max(1, len(advanced_dates))
-        self.state.last_daily_tick = datetime.now()
         self.state.save()
 
         return event
@@ -636,18 +639,82 @@ class LifeEngine:
             return
 
         current_age = self._calc_real_age()
-        if current_age <= self.state.last_checked_age:
+        try:
+            last_checked_age = int(self.state.last_checked_age or 0)
+        except (TypeError, ValueError):
+            last_checked_age = 0
+
+        if current_age <= last_checked_age:
             return
 
         triggered = self.state.triggered_milestones
+        if not isinstance(triggered, list):
+            triggered = []
+        triggered_ages = self._triggered_milestone_age_set(triggered)
+
         for milestone in self.config.milestones:
-            if milestone["age"] > self.state.last_checked_age and milestone["age"] <= current_age:
-                if milestone["age"] not in triggered:
-                    await self.generate_milestone_event(milestone)
-                    triggered.append(milestone["age"])
+            normalized = self._normalize_milestone(milestone)
+            if not normalized:
+                continue
+
+            age = normalized["age"]
+            if age > last_checked_age and age <= current_age:
+                if age not in triggered_ages:
+                    event = await self.generate_milestone_event(normalized)
+                    if event:
+                        triggered.append(age)
+                        triggered_ages.add(age)
                     self.state.triggered_milestones = triggered
 
         self.state.last_checked_age = current_age
+
+    def _triggered_milestone_age_set(self, triggered: list) -> set[int]:
+        ages: set[int] = set()
+        for item in triggered:
+            try:
+                if isinstance(item, bool):
+                    continue
+                if isinstance(item, float) and not item.is_integer():
+                    continue
+                ages.add(int(item))
+            except (TypeError, ValueError):
+                continue
+        return ages
+
+    def _normalize_milestone(self, milestone: Any) -> Optional[dict]:
+        if not isinstance(milestone, dict):
+            logger.warning("[LifeEngine] 跳过非法里程碑配置: %s", milestone)
+            return None
+
+        event = str(milestone.get("event") or "").strip()
+        if not event:
+            logger.warning("[LifeEngine] 跳过缺少 event 的里程碑配置: %s", milestone)
+            return None
+
+        age_raw = milestone.get("age")
+        try:
+            if isinstance(age_raw, bool) or age_raw is None:
+                raise ValueError
+            if isinstance(age_raw, str):
+                age_text = age_raw.strip()
+                if not re.fullmatch(r"\d+", age_text):
+                    raise ValueError
+                age = int(age_text)
+            elif isinstance(age_raw, float):
+                if not age_raw.is_integer():
+                    raise ValueError
+                age = int(age_raw)
+            else:
+                age = int(age_raw)
+        except (TypeError, ValueError):
+            logger.warning("[LifeEngine] 跳过缺少合法 age 的里程碑配置: %s", milestone)
+            return None
+
+        if age < 0:
+            logger.warning("[LifeEngine] 跳过非法年龄里程碑配置: %s", milestone)
+            return None
+
+        return {**milestone, "age": age, "event": event}
 
     async def tick_major(self) -> Optional["MajorLifeEvent"]:
         """执行一次人生大事检查"""
@@ -925,8 +992,13 @@ class LifeEngine:
         """强制生成里程碑事件"""
         from .life_state import MajorLifeEvent
 
+        milestone = self._normalize_milestone(milestone)
+        if not milestone:
+            return None
+        event_description = milestone["event"]
+        milestone_age = milestone["age"]
         event = MajorLifeEvent(
-            description=milestone["event"],
+            description=event_description,
             mood_before="期待",
             mood_after="感慨",
             importance=9.0,
@@ -934,15 +1006,15 @@ class LifeEngine:
             topic_prompt=milestone.get("topic_prompt", ""),
             mood_tags=["重要节点"],
             related_to_user=False,
-            context_bits=len(milestone["event"]),
-            scenario_key=f"milestone_{milestone['age']}",
+            context_bits=len(event_description),
+            scenario_key=f"milestone_{milestone_age}",
             scenario_category="major",
             source="milestone",
         )
 
         self.state.add_major_event(event)
         await self._apply_major_event(event)
-        logger.info(f"[LifeEngine] 里程碑事件: {milestone['event']} at age {milestone['age']}")
+        logger.info(f"[LifeEngine] 里程碑事件: {event_description} at age {milestone_age}")
 
         return event
 

@@ -208,6 +208,7 @@ class SystemTestSuite:
         self._run_case("T16", "No hardcoded Feishu credentials", self.case_no_hardcoded_feishu_credentials)
         self._run_case("T17", "Life daily progression + event journal", self.case_life_journal_records)
         self._run_case("T18", "Life fallback daily + fixed major probability", self.case_life_fallback_and_fixed_major_probability)
+        self._run_case("T18b", "Life invalid milestones do not break checkpointing", self.case_life_invalid_milestones_do_not_break_checkpointing)
         self._run_case("T19", "Life scenario cooldown blocks repeats", self.case_life_scenario_cooldown)
         self._run_case("T20", "Persona updater applies patch", self.case_persona_updater_patch)
         self._run_case("T21", "Life timeline context enters persona prompt", self.case_life_context_persona_prompt)
@@ -1184,6 +1185,77 @@ class SystemTestSuite:
                     "day_records_tail": day_records[-3:],
                     "daily_records_tail": daily_records[-3:],
                     "major_records_tail": major_records[-3:],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            return passed, detail, log
+
+    async def case_life_invalid_milestones_do_not_break_checkpointing(self) -> tuple[bool, str, str]:
+        from ai_companion.proactive.life_config import LifeConfig
+        from ai_companion.proactive.life_engine import LifeEngine
+        from ai_companion.proactive.life_state import LifeState
+
+        class _DailyOnlyModel:
+            async def chat(self, messages: list[dict], system_prompt: str = "", **kwargs) -> str:
+                text = messages[-1].get("content", "") if messages else ""
+                if "输出一个 JSON 数组" in text:
+                    return "[]"
+                if "输出一个 JSON 对象" in text:
+                    return '{"is_major": false, "reason": "stable"}'
+                return "[]"
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-life-invalid-milestones-") as td:
+            root = Path(td)
+            state = LifeState("life_invalid_milestone_bot", root)
+            state.current_date = "2024-01-01"
+            state.initial_age = 20
+            state.bot_age_days = 364
+            state.last_checked_age = 19
+            state.last_daily_tick = datetime.now() - timedelta(days=1, seconds=1)
+            previous_tick = state.last_daily_tick
+
+            cfg = LifeConfig(
+                daily_interval_seconds=86400,
+                major_interval_seconds=604800,
+                time_ratio=1,
+                milestones=[
+                    {"event": "缺少 age 的坏配置"},
+                    {"age": "21", "event": "合法里程碑"},
+                ],
+            )
+            engine = LifeEngine(
+                bot_id="life_invalid_milestone_bot",
+                config=cfg,
+                state=state,
+                model=_DailyOnlyModel(),
+                memory=None,
+                persona_dir=None,
+            )
+
+            event = await engine.tick_daily()
+            state_data = state.to_dict()
+
+            passed = (
+                event is not None
+                and state_data.get("current_date") == "2024-01-02"
+                and state_data.get("bot_age_days") == 365
+                and state.last_daily_tick is not None
+                and state.last_daily_tick > previous_tick
+                and state_data.get("last_checked_age") == 21
+                and state_data.get("triggered_milestones") == [21]
+                and len(state_data.get("major_life_events", [])) >= 1
+            )
+            detail = (
+                f"current_date={state_data.get('current_date')} "
+                f"last_checked_age={state_data.get('last_checked_age')} "
+                f"major_events={len(state_data.get('major_life_events', []))}"
+            )
+            log = json.dumps(
+                {
+                    "event": event.to_dict() if event else None,
+                    "state": state_data,
+                    "previous_tick": previous_tick.isoformat() if previous_tick else None,
                 },
                 ensure_ascii=False,
                 indent=2,
