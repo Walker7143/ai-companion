@@ -1,105 +1,205 @@
 """
-Gateway 进程管理 - 启动、停止、重启网关服务
+Gateway process management: start, stop, restart, status and logs.
 """
 
+import asyncio
 import os
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-# 项目根目录
+import psutil
+
+# Project root
 _project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_project_root))
 
 GATEWAY_PID_FILE = Path(os.environ.get("AI_COMPANION_GATEWAY_PID_FILE", Path.home() / ".ai-companion" / "gateway.pid"))
 GATEWAY_LOG_FILE = Path(os.environ.get("AI_COMPANION_LOG_DIR", Path.home() / ".ai-companion" / "logs")) / "gateway.log"
 
+_GATEWAY_PROCESS_PATTERNS = (
+    "ai_companion.gateway",
+    "ai_companion\\gateway",
+    "ai_companion/gateway",
+)
+
 
 def get_gateway_pid() -> int | None:
-    """获取 gateway 进程 PID"""
-    if not GATEWAY_PID_FILE.exists():
+    """Return the PID from the PID file only when it is still a gateway."""
+    pid = _read_pid_file()
+    if pid is None:
         return None
-    try:
-        pid = int(GATEWAY_PID_FILE.read_text(encoding="utf-8").strip())
-        # 检查进程是否存在
-        os.kill(pid, 0)
+    if _is_gateway_pid(pid):
         return pid
-    except (ValueError, FileNotFoundError, ProcessLookupError, OSError):
-        # 清理无效的 PID 文件
-        GATEWAY_PID_FILE.unlink(missing_ok=True)
-        return None
+    remove_gateway_pid()
+    return None
 
 
 def save_gateway_pid(pid: int) -> None:
-    """保存 gateway PID"""
+    """Save gateway PID."""
     GATEWAY_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     GATEWAY_PID_FILE.write_text(str(pid), encoding="utf-8")
 
 
 def remove_gateway_pid() -> None:
-    """删除 gateway PID 文件"""
+    """Remove gateway PID file."""
     GATEWAY_PID_FILE.unlink(missing_ok=True)
 
 
 def is_gateway_running() -> bool:
-    """检查 gateway 是否在运行"""
-    return get_gateway_pid() is not None
+    """Check whether any gateway process is running."""
+    return bool(_find_gateway_pids())
 
 
 def ensure_log_dir() -> None:
-    """确保日志目录存在"""
+    """Ensure log directory exists."""
     GATEWAY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
-def stop_gateway(silent: bool = False) -> bool:
-    """停止 gateway 进程及其子进程（包括 UI）"""
-    # 读取 PID 文件，不依赖 os.kill 验证
-    pid = None
-    if GATEWAY_PID_FILE.exists():
+def _read_pid_file() -> int | None:
+    if not GATEWAY_PID_FILE.exists():
+        return None
+    try:
+        pid = int(GATEWAY_PID_FILE.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        remove_gateway_pid()
+        return None
+    return pid if pid > 0 else None
+
+
+def _process_cmdline(proc: psutil.Process) -> str:
+    try:
+        return " ".join(proc.cmdline())
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        return ""
+
+
+def _looks_like_gateway_cmdline(cmdline: str) -> bool:
+    if not cmdline:
+        return False
+    normalized = cmdline.replace("/", "\\") if sys.platform == "win32" else cmdline
+    return any(pattern in cmdline or pattern in normalized for pattern in _GATEWAY_PROCESS_PATTERNS)
+
+
+def _is_gateway_pid(pid: int) -> bool:
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        proc = psutil.Process(pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return False
+    return _looks_like_gateway_cmdline(_process_cmdline(proc)) and _process_in_current_scope(proc)
+
+
+def _process_in_current_scope(proc: psutil.Process) -> bool:
+    """Respect explicit PID-file overrides so tests/profiles do not stop each other."""
+    expected_pid_file = os.getenv("AI_COMPANION_GATEWAY_PID_FILE")
+    if not expected_pid_file:
+        return True
+
+    try:
+        proc_env = proc.environ()
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+
+    actual_pid_file = proc_env.get("AI_COMPANION_GATEWAY_PID_FILE")
+    if not actual_pid_file:
+        return False
+
+    try:
+        return Path(actual_pid_file).resolve() == Path(expected_pid_file).resolve()
+    except OSError:
+        return actual_pid_file == expected_pid_file
+
+
+def _find_gateway_pids() -> list[int]:
+    """Find gateway processes even if the PID file is stale or missing."""
+    pids: set[int] = set()
+    file_pid = _read_pid_file()
+    if file_pid and _is_gateway_pid(file_pid):
+        pids.add(file_pid)
+
+    current_pid = os.getpid()
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        pid = proc.info.get("pid")
+        if not isinstance(pid, int) or pid == current_pid:
+            continue
         try:
-            pid = int(GATEWAY_PID_FILE.read_text(encoding="utf-8").strip())
-        except (ValueError, OSError):
+            cmdline = " ".join(proc.info.get("cmdline") or [])
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+        if _looks_like_gateway_cmdline(cmdline) and _process_in_current_scope(proc):
+            pids.add(pid)
+
+    return sorted(pids)
+
+
+def _wait_for_exit(pids: list[int], timeout: float) -> list[int]:
+    deadline = time.time() + timeout
+    remaining = list(dict.fromkeys(pids))
+    while remaining and time.time() < deadline:
+        remaining = [pid for pid in remaining if psutil.pid_exists(pid)]
+        if remaining:
+            time.sleep(0.2)
+    return [pid for pid in remaining if psutil.pid_exists(pid)]
+
+
+def _terminate_process_tree(pid: int, *, force: bool = False) -> None:
+    if pid == os.getpid():
+        return
+
+    if sys.platform == "win32":
+        args = ["taskkill", "/T", "/PID", str(pid)]
+        if force:
+            args.insert(1, "/F")
+        try:
+            subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+            return
+        except (FileNotFoundError, subprocess.SubprocessError):
             pass
 
-    # 尝试杀死进程（不管 os.kill 验证结果如何）
-    if pid:
+    try:
+        proc = psutil.Process(pid)
+        targets = proc.children(recursive=True) + [proc]
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return
+
+    for target in targets:
         try:
-            if sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+            if force:
+                target.kill()
             else:
-                os.kill(-pid, signal.SIGTERM)
-        except FileNotFoundError:
-            pass  # 进程已不存在
-        except ProcessLookupError:
-            pass
-        except OSError:
+                target.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
-    # 等待进程退出
-    for _ in range(5):
-        if pid is None or not is_gateway_running():
-            break
-        time.sleep(0.5)
-    else:
-        # 强制杀死
-        if pid:
-            try:
-                if sys.platform == "win32":
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
-                else:
-                    os.kill(-pid, signal.SIGKILL)
-            except (FileNotFoundError, ProcessLookupError, OSError):
-                pass
-        time.sleep(1)
 
-    if pid is not None and is_gateway_running():
+def stop_gateway(silent: bool = False) -> bool:
+    """Stop all gateway processes and their child process trees."""
+    pids = _find_gateway_pids()
+    if not pids:
+        remove_gateway_pid()
         if not silent:
-            print(f"[ERROR] 无法停止 Gateway (PID: {pid})，请手动结束进程")
-        elif not silent:
-            print("[ERROR] Gateway 未运行")
+            print("[OK] Gateway 已停止")
+        return True
+
+    for pid in pids:
+        _terminate_process_tree(pid, force=False)
+
+    remaining = _wait_for_exit(pids, timeout=5)
+    if remaining:
+        for pid in remaining:
+            _terminate_process_tree(pid, force=True)
+        remaining = _wait_for_exit(remaining, timeout=5)
+
+    # A final scan catches detached children or processes hidden by a stale PID file.
+    remaining = sorted(set(remaining) | set(_find_gateway_pids()))
+    if remaining:
+        if not silent:
+            pid_text = ", ".join(str(pid) for pid in remaining)
+            print(f"[ERROR] 无法停止 Gateway (PID: {pid_text})，请手动结束进程")
         return False
 
     remove_gateway_pid()
@@ -109,46 +209,42 @@ def stop_gateway(silent: bool = False) -> bool:
 
 
 def start_gateway(sync: bool = False) -> int | None:
-    """启动 gateway 进程"""
-    # 检查是否已在运行
-    if is_gateway_running():
+    """Start gateway process."""
+    running_pids = _find_gateway_pids()
+    if running_pids:
         print("[ERROR] Gateway 已在运行")
-        print(f"   PID: {get_gateway_pid()}")
+        print(f"   PID: {', '.join(str(pid) for pid in running_pids)}")
         print("   使用 'ai-companion gateway stop' 停止")
         return None
 
     ensure_log_dir()
-
-    # 启动进程
     cmd = [sys.executable, "-m", "ai_companion.gateway"]
 
     if sync:
-        # 前台模式：直接在当前进程运行，显示日志
         print("正在启动 Gateway（前台模式）...")
         from ai_companion.gateway.cmd import run_gateway
-        import asyncio
+
         asyncio.run(run_gateway(daemon=False))
         return None
-    else:
-        # 守护进程模式（默认）：后台运行
-        cmd.append("--daemon")
-        with open(GATEWAY_LOG_FILE, "a", encoding="utf-8") as log_file:
-            process = subprocess.Popen(
-                cmd,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                start_new_session=True
-            )
 
-        save_gateway_pid(process.pid)
-        print(f"[OK] Gateway 已启动 (PID: {process.pid})")
-        print(f"  日志文件: {GATEWAY_LOG_FILE}")
-        print("  使用 'ai-companion gateway logs' 查看日志")
-        return process.pid
+    cmd.append("--daemon")
+    with open(GATEWAY_LOG_FILE, "a", encoding="utf-8") as log_file:
+        process = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    save_gateway_pid(process.pid)
+    print(f"[OK] Gateway 已启动 (PID: {process.pid})")
+    print(f"  日志文件: {GATEWAY_LOG_FILE}")
+    print("  使用 'ai-companion gateway logs' 查看日志")
+    return process.pid
 
 
 def restart_gateway(sync: bool = False) -> bool:
-    """重启 gateway"""
+    """Restart gateway."""
     was_running = is_gateway_running()
 
     if was_running:
@@ -162,26 +258,25 @@ def restart_gateway(sync: bool = False) -> bool:
 
 
 def replace_gateway(sync: bool = False) -> bool:
-    """替换 gateway（先停止旧实例，再启动新实例）"""
+    """Replace gateway by stopping old instances before starting a new one."""
     print("正在替换 Gateway...")
 
-    # 先停止旧实例
     if is_gateway_running():
         print("正在停止旧 Gateway...")
         stop_gateway(silent=True)
         time.sleep(2)
 
-    # 再启动新实例
     print("正在启动新 Gateway...")
     result = start_gateway(sync=sync)
     return result is not None
 
 
 def show_gateway_status() -> None:
-    """显示 gateway 状态"""
-    pid = get_gateway_pid()
-    if pid:
-        print(f"[OK] Gateway 运行中 (PID: {pid})")
+    """Show gateway status."""
+    pids = _find_gateway_pids()
+    if pids:
+        pid_text = ", ".join(str(pid) for pid in pids)
+        print(f"[OK] Gateway 运行中 (PID: {pid_text})")
         print(f"  日志文件: {GATEWAY_LOG_FILE}")
         try:
             from ai_companion.gateway.status import read_runtime_status
@@ -216,7 +311,7 @@ def _format_platform_status_detail(name: str, status: dict[str, Any]) -> str:
 
 
 def tail_logs(lines: int = 50) -> None:
-    """输出 gateway 最新日志"""
+    """Print latest gateway log lines."""
     if not GATEWAY_LOG_FILE.exists():
         print("[ERROR] 日志文件不存在")
         return
