@@ -154,7 +154,16 @@ class CLIAdapter:
                     await self._safe_print(f"  语义记忆事实数: {status['fact_count']}")
                     relationship = status.get("relationship") or {}
                     if relationship:
-                        await self._safe_print(f"  关系状态: {relationship.get('relationship_label', '朋友')}")
+                        label = relationship.get("relationship_label", "朋友")
+                        score = float(relationship.get("relationship_score") or 0)
+                        await self._safe_print(f"  关系状态: {label}（综合 {score:.0f}/100）")
+                        await self._safe_print(
+                            "  关系维度: "
+                            f"亲密 {float(relationship.get('intimacy_score') or 0):.0f} / "
+                            f"信任 {float(relationship.get('trust_score') or 0):.0f} / "
+                            f"好感 {float(relationship.get('affection_score') or 0):.0f} / "
+                            f"紧张 {float(relationship.get('tension_score') or 0):.0f}"
+                        )
                     if status.get("user_understanding_path"):
                         await self._safe_print(f"  用户理解文件: {status['user_understanding_path']}")
                         await self._safe_print(f"  自动补充事实数: {status.get('user_understanding_auto_facts', 0)}")

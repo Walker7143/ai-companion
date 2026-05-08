@@ -565,9 +565,11 @@ class SemanticStore:
         # 并行执行所有抽取
         fact_task = try_extract_json(self.EXTRACT_PROMPT.format(
             user_input=user_input, bot_output=bot_output), "fact")
-        rel_task = try_extract_json(self.EXTRACT_RELATION_PROMPT.format(
-            conversation_context=conversation_context,
-            user_input=user_input, bot_output=bot_output), "relation")
+        # Relationship state is owned by RelationshipStore now. Keep the old
+        # relation prompt disabled here so a single LLM output cannot overwrite
+        # runtime_profile["relationship_to_user"] and make the stage wobble
+        # between "朋友/好朋友/暧昧中".
+        rel_task = asyncio.sleep(0, result=[])
         att_task = try_extract_attitude(self.EXTRACT_ATTITUDE_PROMPT.format(
             conversation_context=conversation_context,
             user_input=user_input, bot_output=bot_output))
@@ -602,6 +604,10 @@ class SemanticStore:
                     # 跳过 set_fact，由 _apply_attitude_delta 处理
                     continue
 
+                if key in {"relationship_to_user", "relationship_level", "relationship_label"}:
+                    logger.info(f"[Semantic]  跳过旧关系标签写入，由 RelationshipStore 接管: {res}")
+                    continue
+
                 # 其余类型直接写入
                 await self.set_fact(key, str(value), session_id=session_id)
                 written.append(res)
@@ -610,9 +616,6 @@ class SemanticStore:
                 # key_moment 追加到人格文件（去重后才写）
                 if key == "key_moment":
                     await self._append_key_moment(value)
-                # relationship_to_user 变化时更新人格文件
-                elif key == "relationship_to_user":
-                    await self._update_relationship(value)
 
         return written[0] if written else None
 

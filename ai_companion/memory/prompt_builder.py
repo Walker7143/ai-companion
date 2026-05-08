@@ -262,8 +262,29 @@ class MemoryPromptBuilder:
         label = state.get("relationship_label") or state.get("relationship_level")
         if label:
             lines.append(f"  - 关系：{label}")
+        status = str(state.get("relationship_status") or "").strip()
+        if status and status != "稳定":
+            lines.append(f"  - 当前状态：{status}")
+        score = _float(state.get("relationship_score"))
+        if score > 0:
+            lines.append(f"  - 综合关系温度：{score:.0f}/100")
+        dimension_lines = []
+        for key, title in [
+            ("intimacy_score", "亲密"),
+            ("trust_score", "信任"),
+            ("affection_score", "心动/好感"),
+            ("tension_score", "紧张"),
+        ]:
+            value = _float(state.get(key))
+            if value > 0:
+                dimension_lines.append(f"{title}{value:.0f}")
+        if dimension_lines:
+            lines.append("  - 维度：" + "，".join(dimension_lines))
+        confidence = _float(state.get("stage_confidence"))
+        if confidence > 0:
+            lines.append(f"  - 阶段稳定度：{confidence:.0%}")
         tension = _float(state.get("tension_score"))
-        if tension >= 3:
+        if tension >= 45:
             lines.append("  - 当前关系可能有紧张感，回复需要更克制、先修复情绪。")
         open_threads = state.get("open_emotional_threads") or []
         if isinstance(open_threads, list) and open_threads:

@@ -1,4 +1,9 @@
-"""Relationship state store."""
+"""Relationship state store.
+
+The relationship layer is intentionally more stable than the extractor output.
+LLMs can suggest a stage, but the store owns the durable state and applies
+hysteresis so ordinary mood shifts do not rewrite the relationship every turn.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +19,26 @@ class RelationshipStore:
     """Dynamic relationship state between one bot and one user."""
 
     DEFAULT_LABEL = "朋友"
+    DEFAULT_STATUS = "稳定"
+    SCORE_SCALE = 100
+
+    DEFAULT_SCORES = {
+        "intimacy_score": 25.0,
+        "trust_score": 35.0,
+        "tension_score": 0.0,
+        "affection_score": 30.0,
+        "attitude_score": 50.0,
+    }
+
+    STAGE_RANK = {
+        "疏远": 0,
+        "刚认识": 1,
+        "朋友": 2,
+        "好朋友": 3,
+        "暧昧中": 4,
+        "恋人": 5,
+    }
+    RANK_STAGE = {rank: stage for stage, rank in STAGE_RANK.items()}
 
     def __init__(self, db_path: str | Path, persona_backstory_path: str | None = None):
         self.db_path = str(db_path)
@@ -27,14 +52,21 @@ class RelationshipStore:
                     bot_id TEXT NOT NULL,
                     user_id TEXT NOT NULL DEFAULT 'default_user',
                     relationship_label TEXT DEFAULT '朋友',
-                    intimacy_score REAL DEFAULT 0,
-                    trust_score REAL DEFAULT 0,
+                    relationship_status TEXT DEFAULT '稳定',
+                    intimacy_score REAL DEFAULT 25,
+                    trust_score REAL DEFAULT 35,
                     tension_score REAL DEFAULT 0,
-                    affection_score REAL DEFAULT 0,
-                    attitude_score REAL DEFAULT 0,
+                    affection_score REAL DEFAULT 30,
+                    attitude_score REAL DEFAULT 50,
+                    relationship_score REAL DEFAULT 35,
+                    stage_confidence REAL DEFAULT 0.55,
+                    positive_streak INTEGER DEFAULT 0,
+                    negative_streak INTEGER DEFAULT 0,
+                    score_scale INTEGER DEFAULT 100,
                     last_conflict_at TEXT,
                     last_repair_at TEXT,
                     last_meaningful_contact_at TEXT,
+                    last_stage_change_at TEXT,
                     open_emotional_threads_json TEXT,
                     key_moments_json TEXT,
                     updated_at TEXT NOT NULL,
@@ -42,15 +74,99 @@ class RelationshipStore:
                 )
                 """
             )
+            await self._ensure_schema(db)
             await db.commit()
+
+    async def _ensure_schema(self, db):
+        cursor = await db.execute("PRAGMA table_info(relationship_state)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        added_score_scale = False
+        migrations = [
+            ("relationship_status", "ALTER TABLE relationship_state ADD COLUMN relationship_status TEXT DEFAULT '稳定'"),
+            ("relationship_score", "ALTER TABLE relationship_state ADD COLUMN relationship_score REAL DEFAULT 35"),
+            ("stage_confidence", "ALTER TABLE relationship_state ADD COLUMN stage_confidence REAL DEFAULT 0.55"),
+            ("positive_streak", "ALTER TABLE relationship_state ADD COLUMN positive_streak INTEGER DEFAULT 0"),
+            ("negative_streak", "ALTER TABLE relationship_state ADD COLUMN negative_streak INTEGER DEFAULT 0"),
+            ("score_scale", "ALTER TABLE relationship_state ADD COLUMN score_scale INTEGER DEFAULT 10"),
+            ("last_stage_change_at", "ALTER TABLE relationship_state ADD COLUMN last_stage_change_at TEXT"),
+        ]
+        for name, ddl in migrations:
+            if name not in columns:
+                await db.execute(ddl)
+                if name == "score_scale":
+                    added_score_scale = True
+
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM relationship_state WHERE COALESCE(score_scale, 10) != ?",
+            (self.SCORE_SCALE,),
+        )
+        needs_migration = (await cursor.fetchone())[0] > 0
+        if added_score_scale or needs_migration:
+            await self._migrate_legacy_scores(db)
+
+    async def _migrate_legacy_scores(self, db):
+        cursor = await db.execute(
+            """
+            SELECT bot_id, user_id, relationship_label, intimacy_score, trust_score,
+                   tension_score, affection_score, attitude_score, key_moments_json,
+                   updated_at
+            FROM relationship_state
+            WHERE COALESCE(score_scale, 10) != ?
+            """,
+            (self.SCORE_SCALE,),
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            bot_id, user_id, label, intimacy, trust, tension, affection, attitude, moments_json, updated_at = row
+            state = {
+                "relationship_label": _normalize_stage(label) or self.DEFAULT_LABEL,
+                "relationship_status": self.DEFAULT_STATUS,
+                "intimacy_score": _legacy_dimension_to_100(intimacy),
+                "trust_score": _legacy_dimension_to_100(trust),
+                "tension_score": _legacy_tension_to_100(tension),
+                "affection_score": _legacy_dimension_to_100(affection),
+                "attitude_score": _legacy_score_to_100(attitude),
+                "key_moments": _load_json_list(moments_json),
+            }
+            state["relationship_score"] = self._calculate_relationship_score(state)
+            state["relationship_status"] = self._derive_status(state)
+            await db.execute(
+                """
+                UPDATE relationship_state
+                SET relationship_label = ?, relationship_status = ?, intimacy_score = ?,
+                    trust_score = ?, tension_score = ?, affection_score = ?,
+                    attitude_score = ?, relationship_score = ?, stage_confidence = ?,
+                    positive_streak = COALESCE(positive_streak, 0),
+                    negative_streak = COALESCE(negative_streak, 0),
+                    score_scale = ?, last_stage_change_at = COALESCE(last_stage_change_at, ?)
+                WHERE bot_id = ? AND user_id = ?
+                """,
+                (
+                    state["relationship_label"],
+                    state["relationship_status"],
+                    state["intimacy_score"],
+                    state["trust_score"],
+                    state["tension_score"],
+                    state["affection_score"],
+                    state["attitude_score"],
+                    state["relationship_score"],
+                    0.65,
+                    self.SCORE_SCALE,
+                    updated_at,
+                    bot_id,
+                    user_id,
+                ),
+            )
 
     async def get_state(self, *, bot_id: str, user_id: str = "default_user") -> dict:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                SELECT relationship_label, intimacy_score, trust_score, tension_score,
-                       affection_score, attitude_score, last_conflict_at, last_repair_at,
-                       last_meaningful_contact_at, open_emotional_threads_json,
+                SELECT relationship_label, relationship_status, intimacy_score, trust_score,
+                       tension_score, affection_score, attitude_score, relationship_score,
+                       stage_confidence, positive_streak, negative_streak, score_scale,
+                       last_conflict_at, last_repair_at, last_meaningful_contact_at,
+                       last_stage_change_at, open_emotional_threads_json,
                        key_moments_json, updated_at
                 FROM relationship_state
                 WHERE bot_id = ? AND user_id = ?
@@ -60,25 +176,35 @@ class RelationshipStore:
             row = await cursor.fetchone()
         if not row:
             return self._default_state(bot_id, user_id)
-        open_threads = _load_json_list(row[9])
-        key_moments = _load_json_list(row[10])
-        return {
+
+        state = {
             "bot_id": bot_id,
             "user_id": user_id,
-            "relationship_label": row[0] or self.DEFAULT_LABEL,
-            "relationship_level": row[0] or self.DEFAULT_LABEL,
-            "intimacy_score": float(row[1] or 0),
-            "trust_score": float(row[2] or 0),
-            "tension_score": float(row[3] or 0),
-            "affection_score": float(row[4] or 0),
-            "attitude_score": float(row[5] or 0),
-            "last_conflict_at": row[6],
-            "last_repair_at": row[7],
-            "last_meaningful_contact_at": row[8],
-            "open_emotional_threads": open_threads,
-            "key_moments": key_moments,
-            "updated_at": row[11],
+            "relationship_label": _normalize_stage(row[0]) or self.DEFAULT_LABEL,
+            "relationship_status": row[1] or self.DEFAULT_STATUS,
+            "intimacy_score": _score(row[2], self.DEFAULT_SCORES["intimacy_score"]),
+            "trust_score": _score(row[3], self.DEFAULT_SCORES["trust_score"]),
+            "tension_score": _score(row[4], self.DEFAULT_SCORES["tension_score"]),
+            "affection_score": _score(row[5], self.DEFAULT_SCORES["affection_score"]),
+            "attitude_score": _score(row[6], self.DEFAULT_SCORES["attitude_score"]),
+            "relationship_score": _score(row[7], 0.0),
+            "stage_confidence": _clamp(_score(row[8], 0.55), 0, 1),
+            "positive_streak": int(row[9] or 0),
+            "negative_streak": int(row[10] or 0),
+            "score_scale": int(row[11] or self.SCORE_SCALE),
+            "last_conflict_at": row[12],
+            "last_repair_at": row[13],
+            "last_meaningful_contact_at": row[14],
+            "last_stage_change_at": row[15],
+            "open_emotional_threads": _load_json_list(row[16]),
+            "key_moments": _load_json_list(row[17]),
+            "updated_at": row[18],
         }
+        if state["score_scale"] != self.SCORE_SCALE:
+            state = self._normalize_legacy_state(state)
+        if not state["relationship_score"]:
+            state["relationship_score"] = self._calculate_relationship_score(state)
+        return self._with_derived_fields(state)
 
     async def apply_event(
         self,
@@ -96,20 +222,34 @@ class RelationshipStore:
     ) -> dict:
         state = await self.get_state(bot_id=bot_id, user_id=user_id)
         now = datetime.now().isoformat()
+        previous_label = _normalize_stage(state.get("relationship_label")) or self.DEFAULT_LABEL
+        label_hint = _normalize_stage(label)
 
-        state["relationship_label"] = label or state.get("relationship_label") or self.DEFAULT_LABEL
-        state["intimacy_score"] = _clamp(float(state.get("intimacy_score", 0)) + intimacy_delta, -10, 10)
-        state["trust_score"] = _clamp(float(state.get("trust_score", 0)) + trust_delta, -10, 10)
-        state["tension_score"] = _clamp(float(state.get("tension_score", 0)) + tension_delta, 0, 10)
-        state["affection_score"] = _clamp(float(state.get("affection_score", 0)) + affection_delta, -10, 10)
-        state["attitude_score"] = _clamp(float(state.get("attitude_score", 0)) + attitude_delta, -10, 10)
-        state["updated_at"] = now
-        if tension_delta > 0:
+        deltas = {
+            "intimacy_delta": _dimension_delta(intimacy_delta),
+            "trust_delta": _dimension_delta(trust_delta),
+            "tension_delta": _dimension_delta(tension_delta),
+            "affection_delta": _dimension_delta(affection_delta),
+            "attitude_delta": _attitude_delta(attitude_delta),
+        }
+
+        state["intimacy_score"] = _clamp(float(state.get("intimacy_score", 0)) + deltas["intimacy_delta"], 0, 100)
+        state["trust_score"] = _clamp(float(state.get("trust_score", 0)) + deltas["trust_delta"], 0, 100)
+        state["tension_score"] = _clamp(float(state.get("tension_score", 0)) + deltas["tension_delta"], 0, 100)
+        state["affection_score"] = _clamp(float(state.get("affection_score", 0)) + deltas["affection_delta"], 0, 100)
+        state["attitude_score"] = _clamp(float(state.get("attitude_score", 0)) + deltas["attitude_delta"], 0, 100)
+
+        if deltas["tension_delta"] <= 0 and (
+            deltas["trust_delta"] > 0 or deltas["intimacy_delta"] > 0 or deltas["affection_delta"] > 0
+        ):
+            repair_bonus = min(6.0, (max(deltas["trust_delta"], 0) + max(deltas["intimacy_delta"], 0)) / 2)
+            state["tension_score"] = _clamp(state["tension_score"] - repair_bonus, 0, 100)
+
+        if deltas["tension_delta"] > 0:
             state["last_conflict_at"] = now
-        if tension_delta < 0 or trust_delta > 0:
+        if deltas["tension_delta"] < 0 or deltas["trust_delta"] > 0:
             state["last_repair_at"] = now
-        if any([label, intimacy_delta, trust_delta, affection_delta, key_moment, open_thread]):
-            state["last_meaningful_contact_at"] = now
+
         if open_thread:
             threads = list(state.get("open_emotional_threads") or [])
             if open_thread not in threads:
@@ -121,34 +261,77 @@ class RelationshipStore:
                 moments.append(key_moment)
             state["key_moments"] = moments[-20:]
 
+        event = self._event_profile(
+            label_hint=label_hint,
+            key_moment=key_moment,
+            open_thread=open_thread,
+            deltas=deltas,
+        )
+        self._update_streaks(state, event)
+        state["relationship_score"] = self._calculate_relationship_score(state)
+        state["relationship_status"] = self._derive_status(state)
+        state["relationship_label"] = self._choose_stable_stage(previous_label, label_hint, state, event)
+        state["stage_confidence"] = self._next_confidence(
+            float(state.get("stage_confidence", 0.55)),
+            previous_label=previous_label,
+            current_label=state["relationship_label"],
+            event=event,
+        )
+        state["updated_at"] = now
+        state["score_scale"] = self.SCORE_SCALE
+        if state["relationship_label"] != previous_label:
+            state["last_stage_change_at"] = now
+        if any(
+            [
+                label_hint,
+                key_moment,
+                open_thread,
+                deltas["intimacy_delta"],
+                deltas["trust_delta"],
+                deltas["affection_delta"],
+                deltas["attitude_delta"],
+            ]
+        ):
+            state["last_meaningful_contact_at"] = now
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """
                 INSERT OR REPLACE INTO relationship_state (
-                    bot_id, user_id, relationship_label, intimacy_score, trust_score,
-                    tension_score, affection_score, attitude_score, last_conflict_at,
-                    last_repair_at, last_meaningful_contact_at, open_emotional_threads_json,
-                    key_moments_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    bot_id, user_id, relationship_label, relationship_status,
+                    intimacy_score, trust_score, tension_score, affection_score,
+                    attitude_score, relationship_score, stage_confidence,
+                    positive_streak, negative_streak, score_scale, last_conflict_at,
+                    last_repair_at, last_meaningful_contact_at, last_stage_change_at,
+                    open_emotional_threads_json, key_moments_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     bot_id,
                     user_id,
                     state["relationship_label"],
+                    state["relationship_status"],
                     state["intimacy_score"],
                     state["trust_score"],
                     state["tension_score"],
                     state["affection_score"],
                     state["attitude_score"],
+                    state["relationship_score"],
+                    state["stage_confidence"],
+                    state["positive_streak"],
+                    state["negative_streak"],
+                    self.SCORE_SCALE,
                     state.get("last_conflict_at"),
                     state.get("last_repair_at"),
                     state.get("last_meaningful_contact_at"),
+                    state.get("last_stage_change_at"),
                     json.dumps(state.get("open_emotional_threads", []), ensure_ascii=False),
                     json.dumps(state.get("key_moments", []), ensure_ascii=False),
                     now,
                 ),
             )
             await db.commit()
+        state = self._with_derived_fields(state)
         self._sync_runtime_profile(state)
         return state
 
@@ -167,23 +350,247 @@ class RelationshipStore:
             return max(cursor.rowcount or 0, 0)
 
     def _default_state(self, bot_id: str, user_id: str) -> dict:
-        return {
+        state = {
             "bot_id": bot_id,
             "user_id": user_id,
             "relationship_label": self.DEFAULT_LABEL,
-            "relationship_level": self.DEFAULT_LABEL,
-            "intimacy_score": 0.0,
-            "trust_score": 0.0,
-            "tension_score": 0.0,
-            "affection_score": 0.0,
-            "attitude_score": 0.0,
+            "relationship_status": self.DEFAULT_STATUS,
+            "intimacy_score": self.DEFAULT_SCORES["intimacy_score"],
+            "trust_score": self.DEFAULT_SCORES["trust_score"],
+            "tension_score": self.DEFAULT_SCORES["tension_score"],
+            "affection_score": self.DEFAULT_SCORES["affection_score"],
+            "attitude_score": self.DEFAULT_SCORES["attitude_score"],
+            "relationship_score": 0.0,
+            "stage_confidence": 0.55,
+            "positive_streak": 0,
+            "negative_streak": 0,
+            "score_scale": self.SCORE_SCALE,
             "last_conflict_at": None,
             "last_repair_at": None,
             "last_meaningful_contact_at": None,
+            "last_stage_change_at": None,
             "open_emotional_threads": [],
             "key_moments": [],
             "updated_at": datetime.now().isoformat(),
         }
+        state["relationship_score"] = self._calculate_relationship_score(state)
+        return self._with_derived_fields(state)
+
+    def _normalize_legacy_state(self, state: dict) -> dict:
+        state = dict(state)
+        for key in ("intimacy_score", "trust_score", "affection_score"):
+            state[key] = _legacy_dimension_to_100(state.get(key))
+        state["attitude_score"] = _legacy_score_to_100(state.get("attitude_score"))
+        state["tension_score"] = _legacy_tension_to_100(state.get("tension_score"))
+        state["relationship_score"] = self._calculate_relationship_score(state)
+        state["relationship_status"] = self._derive_status(state)
+        state["score_scale"] = self.SCORE_SCALE
+        return state
+
+    def _with_derived_fields(self, state: dict) -> dict:
+        state = dict(state)
+        state["relationship_label"] = _normalize_stage(state.get("relationship_label")) or self.DEFAULT_LABEL
+        state["relationship_level"] = state["relationship_label"]
+        state["relationship_stage"] = state["relationship_label"]
+        state["relationship_score"] = round(float(state.get("relationship_score", 0)), 1)
+        state["relationship_score_100"] = state["relationship_score"]
+        state["relationship_level_index"] = self._relationship_level_index(state)
+        state["score_scale"] = self.SCORE_SCALE
+        return state
+
+    def _calculate_relationship_score(self, state: dict) -> float:
+        score = (
+            _score(state.get("intimacy_score"), 0) * 0.30
+            + _score(state.get("trust_score"), 0) * 0.25
+            + _score(state.get("affection_score"), 0) * 0.25
+            + _score(state.get("attitude_score"), 0) * 0.20
+            - _score(state.get("tension_score"), 0) * 0.25
+        )
+        return round(_clamp(score, 0, 100), 1)
+
+    def _derive_status(self, state: dict) -> str:
+        tension = _score(state.get("tension_score"), 0)
+        score = _score(state.get("relationship_score"), self._calculate_relationship_score(state))
+        if tension >= 65:
+            return "紧张"
+        if score <= 20:
+            return "疏远"
+        return self.DEFAULT_STATUS
+
+    def _base_stage_from_scores(self, state: dict) -> str:
+        score = _score(state.get("relationship_score"), self._calculate_relationship_score(state))
+        intimacy = _score(state.get("intimacy_score"), 0)
+        affection = _score(state.get("affection_score"), 0)
+        trust = _score(state.get("trust_score"), 0)
+        if score >= 85 and intimacy >= 72 and affection >= 75 and trust >= 65:
+            return "恋人"
+        if score >= 68 and intimacy >= 55 and affection >= 60:
+            return "暧昧中"
+        if score >= 50 and trust >= 42:
+            return "好朋友"
+        if score >= 28:
+            return "朋友"
+        if score >= 18:
+            return "刚认识"
+        return "疏远"
+
+    def _choose_stable_stage(self, current_label: str, label_hint: str, state: dict, event: dict) -> str:
+        current = _normalize_stage(current_label) or self.DEFAULT_LABEL
+        score_stage = self._base_stage_from_scores(state)
+
+        if event["rupture_signal"] and (label_hint == "疏远" or _score(state.get("relationship_score"), 0) < 28):
+            return "疏远"
+
+        candidate = score_stage
+        if label_hint:
+            if label_hint == "紧张":
+                candidate = current
+            elif _rank(label_hint) > _rank(current):
+                if self._has_promotion_evidence(label_hint, state, event):
+                    candidate = label_hint
+                else:
+                    candidate = current
+            elif _rank(label_hint) < _rank(current):
+                if self._has_demotion_evidence(state, event):
+                    candidate = label_hint
+                else:
+                    candidate = current
+            else:
+                candidate = current
+
+        return self._guard_transition(current, candidate, state, event)
+
+    def _guard_transition(self, current: str, candidate: str, state: dict, event: dict) -> str:
+        current_rank = _rank(current)
+        candidate_rank = _rank(candidate)
+        if candidate_rank == current_rank:
+            return current
+
+        if candidate_rank > current_rank:
+            if not self._has_promotion_evidence(candidate, state, event):
+                return current
+            if event["explicit_commitment"] or (candidate == "暧昧中" and event["romantic_signal"]):
+                return candidate
+            # Let affection grow visibly, but do not skip several relationship
+            # stages because one extraction pass got over-excited.
+            return self.RANK_STAGE[min(candidate_rank, current_rank + 1)]
+
+        if self._has_demotion_evidence(state, event):
+            return candidate
+        return current
+
+    def _has_promotion_evidence(self, target: str, state: dict, event: dict) -> bool:
+        if event["explicit_commitment"]:
+            return True
+        if not event["positive_signal"]:
+            return False
+        score = _score(state.get("relationship_score"), 0)
+        if target == "好朋友":
+            return event["meaningful"] or score >= 48 or int(state.get("positive_streak", 0)) >= 2
+        if target == "暧昧中":
+            return (
+                event["romantic_signal"]
+                or score >= 66
+                or (_score(state.get("affection_score"), 0) >= 58 and _score(state.get("intimacy_score"), 0) >= 52)
+            )
+        if target == "恋人":
+            return event["explicit_commitment"] or (
+                score >= 86 and _score(state.get("trust_score"), 0) >= 68 and event["romantic_signal"]
+            )
+        return event["positive_signal"]
+
+    def _has_demotion_evidence(self, state: dict, event: dict) -> bool:
+        return (
+            event["rupture_signal"]
+            or int(state.get("negative_streak", 0)) >= 2
+            or (_score(state.get("tension_score"), 0) >= 72 and event["negative_signal"])
+            or (_score(state.get("relationship_score"), 0) < 18 and event["negative_signal"])
+        )
+
+    def _event_profile(
+        self,
+        *,
+        label_hint: str,
+        key_moment: Optional[str],
+        open_thread: Optional[str],
+        deltas: dict[str, float],
+    ) -> dict:
+        text = " ".join(str(item or "") for item in [label_hint, key_moment, open_thread])
+        positive_amount = (
+            max(deltas["intimacy_delta"], 0)
+            + max(deltas["trust_delta"], 0)
+            + max(deltas["affection_delta"], 0)
+            + max(deltas["attitude_delta"], 0)
+            + max(-deltas["tension_delta"], 0)
+        )
+        negative_amount = (
+            max(-deltas["intimacy_delta"], 0)
+            + max(-deltas["trust_delta"], 0)
+            + max(-deltas["affection_delta"], 0)
+            + max(-deltas["attitude_delta"], 0)
+            + max(deltas["tension_delta"], 0)
+        )
+        explicit_commitment = any(word in text for word in ["在一起", "确认关系", "恋人", "情侣", "交往", "成为伴侣"])
+        romantic_signal = explicit_commitment or any(word in text for word in ["暧昧", "表白", "喜欢", "心动", "吃醋", "牵手"])
+        rupture_signal = any(word in text for word in ["分手", "断联", "拉黑", "绝交", "不想见", "结束关系", "严重伤害"])
+        meaningful = bool(key_moment) or positive_amount >= 8 or romantic_signal or explicit_commitment
+        positive_signal = positive_amount >= 4 or romantic_signal or explicit_commitment
+        negative_signal = negative_amount >= 6 or rupture_signal or label_hint in {"紧张", "疏远"}
+        repair_signal = deltas["tension_delta"] < 0 or deltas["trust_delta"] > 0 or any(
+            word in text for word in ["道歉", "和好", "修复", "解释清楚", "原谅"]
+        )
+        return {
+            "positive_amount": positive_amount,
+            "negative_amount": negative_amount,
+            "positive_signal": positive_signal,
+            "negative_signal": negative_signal,
+            "repair_signal": repair_signal,
+            "meaningful": meaningful,
+            "romantic_signal": romantic_signal,
+            "explicit_commitment": explicit_commitment,
+            "rupture_signal": rupture_signal,
+        }
+
+    def _update_streaks(self, state: dict, event: dict):
+        positive = int(state.get("positive_streak", 0) or 0)
+        negative = int(state.get("negative_streak", 0) or 0)
+        if event["negative_signal"] and event["negative_amount"] > event["positive_amount"]:
+            state["negative_streak"] = min(10, negative + 1)
+            state["positive_streak"] = max(0, positive - 1)
+        elif event["positive_signal"] and event["positive_amount"] >= event["negative_amount"]:
+            state["positive_streak"] = min(10, positive + 1)
+            state["negative_streak"] = max(0, negative - 1)
+        elif event["repair_signal"]:
+            state["negative_streak"] = max(0, negative - 1)
+            state["positive_streak"] = positive
+        else:
+            state["positive_streak"] = positive
+            state["negative_streak"] = negative
+
+    def _next_confidence(self, current: float, *, previous_label: str, current_label: str, event: dict) -> float:
+        confidence = current
+        if previous_label == current_label:
+            if event["meaningful"]:
+                confidence += 0.03
+        else:
+            confidence = 0.64 if event["explicit_commitment"] or event["rupture_signal"] else 0.58
+        if event["negative_signal"] and not event["rupture_signal"]:
+            confidence -= 0.02
+        return round(_clamp(confidence, 0.35, 0.95), 2)
+
+    def _relationship_level_index(self, state: dict) -> int:
+        label = _normalize_stage(state.get("relationship_label")) or self.DEFAULT_LABEL
+        if label == "恋人":
+            return 10
+        if label == "暧昧中":
+            return max(8, min(9, round(_score(state.get("relationship_score"), 70) / 10)))
+        if label == "好朋友":
+            return max(6, min(7, round(_score(state.get("relationship_score"), 55) / 10)))
+        if label == "朋友":
+            return max(4, min(5, round(_score(state.get("relationship_score"), 35) / 10)))
+        if label == "刚认识":
+            return max(2, min(3, round(_score(state.get("relationship_score"), 20) / 10)))
+        return 1
 
     def _runtime_profile_path(self) -> Optional[Path]:
         if not self._persona_backstory_path:
@@ -199,7 +606,17 @@ class RelationshipStore:
         except Exception:
             data = {}
         data["relationship_to_user"] = state.get("relationship_label", self.DEFAULT_LABEL)
-        data["attitude_score"] = state.get("attitude_score", 0)
+        data["attitude_score"] = state.get("attitude_score", 50)
+        data["relationship_state"] = {
+            "stage": state.get("relationship_label", self.DEFAULT_LABEL),
+            "status": state.get("relationship_status", self.DEFAULT_STATUS),
+            "relationship_score": state.get("relationship_score", 0),
+            "intimacy_score": state.get("intimacy_score", 0),
+            "trust_score": state.get("trust_score", 0),
+            "affection_score": state.get("affection_score", 0),
+            "tension_score": state.get("tension_score", 0),
+            "score_scale": self.SCORE_SCALE,
+        }
         if state.get("key_moments"):
             data["key_moments"] = state["key_moments"]
         data["updated_at"] = datetime.now().isoformat()
@@ -222,6 +639,95 @@ def _load_json_list(value: str | None) -> list[str]:
     if not isinstance(data, list):
         return []
     return [str(item) for item in data if str(item).strip()]
+
+
+def _normalize_stage(label: object) -> str:
+    text = str(label or "").strip()
+    if not text:
+        return ""
+    aliases = {
+        "陌生": "刚认识",
+        "陌生网友": "刚认识",
+        "初识": "刚认识",
+        "普通朋友": "朋友",
+        "好友": "好朋友",
+        "亲密朋友": "好朋友",
+        "暧昧": "暧昧中",
+        "暧昧关系": "暧昧中",
+        "情侣": "恋人",
+        "伴侣": "恋人",
+        "男朋友": "恋人",
+        "女朋友": "恋人",
+        "恋爱中": "恋人",
+        "疏离": "疏远",
+        "关系紧张": "紧张",
+    }
+    if text in aliases:
+        return aliases[text]
+    if text in {"刚认识", "朋友", "好朋友", "暧昧中", "恋人", "疏远", "紧张"}:
+        return text
+    for keyword, stage in [
+        ("恋人", "恋人"),
+        ("情侣", "恋人"),
+        ("伴侣", "恋人"),
+        ("暧昧", "暧昧中"),
+        ("好朋友", "好朋友"),
+        ("好友", "好朋友"),
+        ("朋友", "朋友"),
+        ("紧张", "紧张"),
+        ("疏远", "疏远"),
+        ("疏离", "疏远"),
+        ("陌生", "刚认识"),
+    ]:
+        if keyword in text:
+            return stage
+    return text if text in RelationshipStore.STAGE_RANK else ""
+
+
+def _rank(label: str) -> int:
+    return RelationshipStore.STAGE_RANK.get(_normalize_stage(label), RelationshipStore.STAGE_RANK[RelationshipStore.DEFAULT_LABEL])
+
+
+def _dimension_delta(value: object) -> float:
+    number = _number(value)
+    if abs(number) <= 1:
+        number *= 8
+    return _clamp(number, -20, 20)
+
+
+def _attitude_delta(value: object) -> float:
+    number = _number(value)
+    if abs(number) <= 5:
+        number *= 4
+    return _clamp(number, -20, 20)
+
+
+def _legacy_score_to_100(value: object) -> float:
+    number = _number(value)
+    return round(_clamp((number + 10) * 5, 0, 100), 1)
+
+
+def _legacy_dimension_to_100(value: object) -> float:
+    number = _number(value)
+    return round(_clamp(number * 10, 0, 100), 1)
+
+
+def _legacy_tension_to_100(value: object) -> float:
+    return round(_clamp(_number(value) * 10, 0, 100), 1)
+
+
+def _number(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _score(value: object, default: float) -> float:
+    try:
+        return _clamp(float(value), 0, 100)
+    except (TypeError, ValueError):
+        return default
 
 
 def _clamp(value: float, low: float, high: float) -> float:

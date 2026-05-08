@@ -233,6 +233,7 @@ class SystemTestSuite:
         self._run_case("T40", "User understanding manual override wins", self.case_user_understanding_manual_override)
         self._run_case("T41", "Intent retriever trims task emotional memory", self.case_memory_retriever_intent_filtering)
         self._run_case("T42", "Relationship state is separate from semantic facts", self.case_relationship_state_separate)
+        self._run_case("T42b", "Relationship stage is stable and multi-dimensional", self.case_relationship_stage_stability)
         self._run_case("T43", "Admin memory API supports new memory schema", self.case_admin_memory_api_schema_compatibility)
         self._run_case("T44", "User understanding v3 captures deep relationship insight", self.case_user_understanding_v3_deep_projection)
         self._run_case("T45", "Response style polisher removes AI tone", self.case_response_style_polisher)
@@ -2506,9 +2507,61 @@ class SystemTestSuite:
             relationship = await engine.relationship.get_state(bot_id="rel_bot", user_id="default_user")
             await engine.close()
 
-        passed = "喜欢的音乐" not in facts and relationship.get("relationship_label") == "好朋友" and relationship.get("attitude_score") == 3
+        passed = (
+            "喜欢的音乐" not in facts
+            and relationship.get("relationship_label") == "好朋友"
+            and relationship.get("attitude_score") == 62
+            and relationship.get("relationship_score") > 35
+            and relationship.get("score_scale") == 100
+        )
         log = json.dumps({"facts": facts, "relationship": relationship}, ensure_ascii=False, indent=2)
         return passed, f"relationship={relationship.get('relationship_label')}", log
+
+    async def case_relationship_stage_stability(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-relationship-stable-") as td:
+            root = Path(td)
+            engine = MemoryEngine("stable_bot", root, config={"embedding": "none"})
+            await engine.init()
+            first = await engine.relationship.apply_event(
+                bot_id="stable_bot",
+                user_id="default_user",
+                label="暧昧中",
+                intimacy_delta=20,
+                affection_delta=28,
+                trust_delta=12,
+                attitude_delta=4,
+                key_moment="用户认真表白，关系进入暧昧期",
+            )
+            second = await engine.relationship.apply_event(
+                bot_id="stable_bot",
+                user_id="default_user",
+                label="朋友",
+                intimacy_delta=0,
+                affection_delta=0,
+                trust_delta=0,
+                attitude_delta=0,
+            )
+            third = await engine.relationship.apply_event(
+                bot_id="stable_bot",
+                user_id="default_user",
+                label="朋友",
+                tension_delta=1,
+                attitude_delta=-1,
+            )
+            final = await engine.relationship.get_state(bot_id="stable_bot", user_id="default_user")
+            await engine.close()
+
+        passed = (
+            first.get("relationship_label") == "暧昧中"
+            and second.get("relationship_label") == "暧昧中"
+            and third.get("relationship_label") == "暧昧中"
+            and final.get("relationship_score") >= 45
+            and final.get("score_scale") == 100
+        )
+        log = json.dumps({"first": first, "second": second, "third": third, "final": final}, ensure_ascii=False, indent=2)
+        return passed, f"final={final.get('relationship_label')} score={final.get('relationship_score')}", log
 
     def case_admin_memory_api_schema_compatibility(self) -> tuple[bool, str, str]:
         gateway_text = (self.root / "ai_companion" / "gateway" / "cmd.py").read_text(encoding="utf-8")
@@ -2517,9 +2570,11 @@ class SystemTestSuite:
         checks = {
             "gateway_counts_v2_understanding": "_understanding_auto_count" in gateway_text,
             "gateway_reads_relationship": "relationship_state" in gateway_text,
+            "gateway_returns_relationship_state": '"relationship_state": relationship_state' in gateway_text,
             "gateway_returns_fact_metadata": '"category": r[3]' in gateway_text and '"confidence": r[4]' in gateway_text,
             "ui_fact_metadata_types": "category?: string" in types_text and "confidence?: number" in types_text,
             "ui_displays_metadata": "fact.category" in memory_ui and "fact.confidence" in memory_ui,
+            "ui_displays_relationship_dimensions": "RelationshipMetric" in memory_ui and "综合关系温度" in memory_ui,
         }
         passed = all(checks.values())
         return passed, f"checks={sum(checks.values())}/{len(checks)}", json.dumps(checks, ensure_ascii=False, indent=2)

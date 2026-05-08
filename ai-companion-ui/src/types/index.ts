@@ -132,8 +132,24 @@ export interface SemanticMemory {
   facts: Fact[];
   attitude_score: number;
   relationship_level: string;
+  relationship_state?: RelationshipState | null;
   user_understanding?: Record<string, unknown>;
   user_understanding_path?: string | null;
+}
+
+export interface RelationshipState {
+  relationship_label?: string;
+  relationship_status?: string;
+  relationship_score?: number;
+  attitude_score?: number;
+  intimacy_score?: number;
+  trust_score?: number;
+  tension_score?: number;
+  affection_score?: number;
+  stage_confidence?: number;
+  positive_streak?: number;
+  negative_streak?: number;
+  score_scale?: number;
 }
 
 export interface UnderstandingPayload {

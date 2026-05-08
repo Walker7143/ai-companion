@@ -27,6 +27,7 @@ class MemoryGovernor:
     MIN_PROJECTION_CONFIDENCE = 0.75
     MIN_EPISODE_IMPORTANCE = 0.68
     MIN_EPISODE_CONFIDENCE = 0.6
+    MIN_RELATIONSHIP_CONFIDENCE = 0.65
 
     def __init__(
         self,
@@ -151,11 +152,15 @@ class MemoryGovernor:
         user_id: str,
         result: GovernorResult,
     ):
+        if candidate.confidence < self.MIN_RELATIONSHIP_CONFIDENCE:
+            result.skipped.append((candidate, "low_confidence"))
+            return
         meta = candidate.metadata or {}
+        label = self._stable_label_hint(meta.get("label") or candidate.value or "", meta)
         await self.relationship.apply_event(
             bot_id=bot_id,
             user_id=user_id,
-            label=meta.get("label") or candidate.value or None,
+            label=label,
             intimacy_delta=_float(meta.get("intimacy_delta")),
             trust_delta=_float(meta.get("trust_delta")),
             tension_delta=_float(meta.get("tension_delta")),
@@ -165,6 +170,19 @@ class MemoryGovernor:
             open_thread=meta.get("open_thread") or None,
         )
         result.written.append(candidate)
+        result.projection_refresh = True
+
+    def _stable_label_hint(self, value: object, meta: dict) -> str | None:
+        label = str(value or "").strip()
+        if not label:
+            return None
+        normalized = _normalize_relationship_label(label)
+        # "朋友" is too often used by models as a safe default. Let the score
+        # layer keep the existing stage unless the metadata carries explicit
+        # demotion evidence.
+        if normalized == "朋友" and not _has_friend_demotion_evidence(meta):
+            return None
+        return normalized
 
     async def _apply_temporary_context(
         self,
@@ -202,3 +220,53 @@ def _float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _normalize_relationship_label(value: str) -> str:
+    aliases = {
+        "陌生": "刚认识",
+        "陌生网友": "刚认识",
+        "普通朋友": "朋友",
+        "好友": "好朋友",
+        "亲密朋友": "好朋友",
+        "暧昧": "暧昧中",
+        "暧昧关系": "暧昧中",
+        "情侣": "恋人",
+        "伴侣": "恋人",
+        "男朋友": "恋人",
+        "女朋友": "恋人",
+        "疏离": "疏远",
+        "关系紧张": "紧张",
+    }
+    value = value.strip()
+    if value in aliases:
+        return aliases[value]
+    for keyword, label in [
+        ("恋人", "恋人"),
+        ("情侣", "恋人"),
+        ("伴侣", "恋人"),
+        ("暧昧", "暧昧中"),
+        ("好朋友", "好朋友"),
+        ("好友", "好朋友"),
+        ("紧张", "紧张"),
+        ("疏远", "疏远"),
+        ("疏离", "疏远"),
+        ("陌生", "刚认识"),
+        ("朋友", "朋友"),
+    ]:
+        if keyword in value:
+            return label
+    return value
+
+
+def _has_friend_demotion_evidence(meta: dict) -> bool:
+    text = " ".join(str(meta.get(key) or "") for key in ("key_moment", "open_thread", "reason", "evidence"))
+    if any(word in text for word in ["只做朋友", "退回朋友", "分手", "结束暧昧", "不要暧昧", "拒绝表白"]):
+        return True
+    negative = (
+        max(-_float(meta.get("intimacy_delta")), 0)
+        + max(-_float(meta.get("trust_delta")), 0)
+        + max(-_float(meta.get("affection_delta")), 0)
+        + max(_float(meta.get("tension_delta")), 0)
+    )
+    return negative >= 2

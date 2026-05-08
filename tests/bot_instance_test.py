@@ -3,6 +3,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from ai_companion.bot.instance import BotInstance
+from ai_companion.persona.engine import PersonaEngine
+from ai_companion.persona.loader import PersonaLoader
 
 
 class BrokenModel:
@@ -117,6 +119,21 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await second.close()
                 await first.close()
+
+
+class PersonaEngineDefaultStyleTest(unittest.TestCase):
+    def test_system_prompt_includes_global_embodied_expression_guidance(self):
+        with TemporaryDirectory(prefix="persona-default-style-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        self.assertIn("肢体/神态表达", prompt)
+        self.assertIn("括号动作", prompt)
+        self.assertIn("不要每句都用", prompt)
 
 
 if __name__ == "__main__":

@@ -94,7 +94,7 @@ class ResponseStylePolisher:
 
     def _apply_intent_pacing(self, text: str, *, intent: str, relationship_state: dict[str, Any]) -> str:
         tension = _float(relationship_state.get("tension_score"))
-        if tension >= 3 and len(text) > 220:
+        if tension >= 45 and len(text) > 220:
             text = self._first_sentences(text, max_sentences=2)
         if intent == "emotional_support" and len(text) > 260:
             text = self._first_sentences(text, max_sentences=3)

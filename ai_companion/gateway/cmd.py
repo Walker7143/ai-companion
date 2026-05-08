@@ -756,12 +756,28 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             ]
             attitude_score = 0.0
             relationship_level = "陌生"
+            relationship_state = None
             if relationship_path and relationship_path.exists():
                 try:
                     rel_conn = sqlite3.connect(str(relationship_path))
+                    rel_cols = [r[1] for r in rel_conn.execute("PRAGMA table_info(relationship_state)").fetchall()]
+                    select_cols = [
+                        "relationship_label",
+                        "attitude_score",
+                        "intimacy_score" if "intimacy_score" in rel_cols else "0 AS intimacy_score",
+                        "trust_score" if "trust_score" in rel_cols else "0 AS trust_score",
+                        "tension_score" if "tension_score" in rel_cols else "0 AS tension_score",
+                        "affection_score" if "affection_score" in rel_cols else "0 AS affection_score",
+                        "relationship_score" if "relationship_score" in rel_cols else "attitude_score AS relationship_score",
+                        "relationship_status" if "relationship_status" in rel_cols else "'稳定' AS relationship_status",
+                        "stage_confidence" if "stage_confidence" in rel_cols else "0.55 AS stage_confidence",
+                        "positive_streak" if "positive_streak" in rel_cols else "0 AS positive_streak",
+                        "negative_streak" if "negative_streak" in rel_cols else "0 AS negative_streak",
+                        "score_scale" if "score_scale" in rel_cols else "10 AS score_scale",
+                    ]
                     rel_row = rel_conn.execute(
-                        """
-                        SELECT relationship_label, attitude_score
+                        f"""
+                        SELECT {", ".join(select_cols)}
                         FROM relationship_state
                         WHERE bot_id = ? OR bot_id = ''
                         ORDER BY updated_at DESC
@@ -773,6 +789,20 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                     if rel_row:
                         relationship_level = rel_row[0] or relationship_level
                         attitude_score = float(rel_row[1] or 0)
+                        relationship_state = {
+                            "relationship_label": relationship_level,
+                            "attitude_score": attitude_score,
+                            "intimacy_score": float(rel_row[2] or 0),
+                            "trust_score": float(rel_row[3] or 0),
+                            "tension_score": float(rel_row[4] or 0),
+                            "affection_score": float(rel_row[5] or 0),
+                            "relationship_score": float(rel_row[6] or 0),
+                            "relationship_status": rel_row[7] or "稳定",
+                            "stage_confidence": float(rel_row[8] or 0),
+                            "positive_streak": int(rel_row[9] or 0),
+                            "negative_streak": int(rel_row[10] or 0),
+                            "score_scale": int(rel_row[11] or 100),
+                        }
                 except Exception:
                     pass
             else:
@@ -784,10 +814,17 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                             pass
                     elif f["key"] in {"relationship_level", "relationship_to_user"}:
                         relationship_level = f["value"]
+                relationship_state = {
+                    "relationship_label": relationship_level,
+                    "attitude_score": attitude_score,
+                    "relationship_score": attitude_score,
+                    "score_scale": 10,
+                }
             return web.json_response({
                 "facts": facts,
                 "attitude_score": attitude_score,
                 "relationship_level": relationship_level,
+                "relationship_state": relationship_state,
                 "user_understanding": user_understanding,
                 "user_understanding_path": user_understanding_path,
             })

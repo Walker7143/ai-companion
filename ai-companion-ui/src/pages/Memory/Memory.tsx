@@ -17,6 +17,25 @@ function parseList(value?: string | null): string[] {
   }
 }
 
+function scoreValue(value?: number | null) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function RelationshipMetric({ label, value, tone }: { label: string; value: number; tone: string }) {
+  const safeValue = Math.max(0, Math.min(100, value));
+  return (
+    <div style={{ display: 'grid', gap: 6, minWidth: 140 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{label}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{safeValue.toFixed(0)}</span>
+      </div>
+      <div style={{ height: 6, borderRadius: 999, backgroundColor: 'var(--bg-tertiary)', overflow: 'hidden' }}>
+        <div style={{ width: `${safeValue}%`, height: '100%', backgroundColor: tone }} />
+      </div>
+    </div>
+  );
+}
+
 export function Memory() {
   const { currentBotId } = useBotStore();
   const toast = useToast();
@@ -312,12 +331,41 @@ export function Memory() {
               </CardTitle>
             </CardHeader>
             <CardContent style={{ padding: '16px 20px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 36, fontWeight: 700, color: 'var(--accent)' }}>{semanticMemory.attitude_score.toFixed(1)}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>好感度</div>
-                </div>
-                <Badge variant="success" style={{ fontSize: 14, padding: '6px 12px' }}>{semanticMemory.relationship_level}</Badge>
+              <div style={{ display: 'grid', gap: 18 }}>
+                {(() => {
+                  const relationship = semanticMemory.relationship_state ?? {};
+                  const score = scoreValue(relationship.relationship_score ?? semanticMemory.attitude_score);
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: 36, fontWeight: 700, color: 'var(--accent)' }}>{score.toFixed(0)}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>综合关系温度 / 100</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Badge variant="success" style={{ fontSize: 14, padding: '6px 12px' }}>
+                          {relationship.relationship_label ?? semanticMemory.relationship_level}
+                        </Badge>
+                        {relationship.relationship_status && relationship.relationship_status !== '稳定' && (
+                          <Badge variant="warning" style={{ fontSize: 14, padding: '6px 12px' }}>{relationship.relationship_status}</Badge>
+                        )}
+                        {typeof relationship.stage_confidence === 'number' && (
+                          <Badge>稳定度 {(relationship.stage_confidence * 100).toFixed(0)}%</Badge>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const relationship = semanticMemory.relationship_state ?? {};
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 14 }}>
+                      <RelationshipMetric label="亲密" value={scoreValue(relationship.intimacy_score)} tone="var(--accent)" />
+                      <RelationshipMetric label="信任" value={scoreValue(relationship.trust_score)} tone="var(--success)" />
+                      <RelationshipMetric label="心动/好感" value={scoreValue(relationship.affection_score ?? relationship.attitude_score)} tone="var(--error)" />
+                      <RelationshipMetric label="紧张" value={scoreValue(relationship.tension_score)} tone="var(--warning)" />
+                    </div>
+                  );
+                })()}
               </div>
             </CardContent>
           </Card>

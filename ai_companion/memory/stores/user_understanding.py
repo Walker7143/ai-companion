@@ -346,10 +346,10 @@ class UserUnderstandingStore:
             label = str(relationship.get("relationship_label") or "").strip()
             if label:
                 self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], f"当前关系标签：{label}")
-            if _float(relationship.get("tension_score"), 0) >= 3:
+            if _float(relationship.get("tension_score"), 0) >= 45:
                 self._append_unique(relationship_memory["things_that_created_tension"], "关系状态显示近期存在紧张，需要先修复感受再推进话题。")
                 self._append_unique(relationship_memory["repair_preferences"], "关系紧张时先放慢、承认感受、少解释。")
-            if _float(relationship.get("trust_score"), 0) > 0 or _float(relationship.get("intimacy_score"), 0) > 0:
+            if _float(relationship.get("trust_score"), 0) > 45 or _float(relationship.get("intimacy_score"), 0) > 35:
                 self._append_unique(relationship_memory["things_that_brought_them_closer"], "近期互动提升了信任或亲密感。")
             for moment in relationship.get("key_moments") or []:
                 self._append_unique(relationship_memory["things_that_brought_them_closer"], str(moment))

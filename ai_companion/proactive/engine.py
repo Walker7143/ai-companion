@@ -345,6 +345,8 @@ class ProactiveEngine:
                     user_id=getattr(self.memory, "user_id", "default_user"),
                 )
                 relationship = state.get("relationship_label", "普通朋友")
+                level = int(state.get("relationship_level_index") or 5)
+                return level, relationship
             else:
                 facts = await self.memory.semantic.get_all_facts()
                 relationship = facts.get("relationship_to_user", "普通朋友")

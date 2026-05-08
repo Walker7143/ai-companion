@@ -228,11 +228,15 @@ class RefusalEngine:
         """获取关系描述"""
         if relationship_state is None:
             return "关系一般"
-        att = relationship_state.get("attitude_score", 0)
-        rel = relationship_state.get("relationship", "")
-        if att >= 5:
-            return f"关系亲密（{rel}），好感度高"
-        elif att >= 0:
+        att = relationship_state.get("attitude_score", 50)
+        score = relationship_state.get("relationship_score", att)
+        tension = relationship_state.get("tension_score", 0)
+        rel = relationship_state.get("relationship_label") or relationship_state.get("relationship_level") or ""
+        if tension >= 45:
+            return f"关系有紧张感（{rel}），需要更克制"
+        if score >= 70:
+            return f"关系亲密（{rel}），信任和亲近度较高"
+        elif score >= 40:
             return f"关系较好（{rel}），好感度正常"
         else:
             return f"关系一般（{rel}），好感度较低"

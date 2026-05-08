@@ -66,6 +66,7 @@ class PersonaEngine:
             lines.append("  - 你的个人表达习惯：")
             for expr in speaking_style["special_expressions"]:
                 lines.append(f"    * {expr}")
+        self._append_embodied_expression_guidance(lines)
         self._append_conversation_style_rules(lines, conversation_style)
         lines.append("")
 
@@ -102,6 +103,11 @@ class PersonaEngine:
                 lines.append(f"  - {emo}: {desc}")
 
         return "\n".join(lines)
+
+    def _append_embodied_expression_guidance(self, lines: list[str]):
+        lines.append("  - 肢体/神态表达：可以偶尔用很短的括号动作或神态描写表达当下情绪和临场反应。")
+        lines.append("    * 例子：（低头看了你一眼）（把杯子推到你面前）（假装不经意地移开视线）")
+        lines.append("    * 动作要贴合你的人格、关系和当下情绪；不要每句都用，不要堆叠，也不要用动作替代正面回应。")
 
     def _append_conversation_style_rules(self, lines: list[str], rules: dict):
         if not rules:
