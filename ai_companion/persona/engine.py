@@ -2,6 +2,13 @@ from .loader import Persona
 import json
 
 
+EMBODIED_FREQUENCY_GUIDANCE = {
+    "low": "低频：只在情绪明显、亲密关心或场景转换时使用；大约每 3-5 条回复 1 次，每次 1 个短动作。",
+    "medium": "中频：日常闲聊约每 2-3 条回复 1 次；情绪陪伴、暧昧互动或关系推进时可以略高；任务型回答自动降频。",
+    "high": "高频：在日常聊天、情绪陪伴和亲密互动中明显提高出现率，多数合适回复都可以带 1 个短动作；任务型或严肃说明仍要降频。",
+}
+
+
 class PersonaEngine:
     """根据人格配置构造 system prompt，每次都重新读文件以获取最新关系/态度"""
 
@@ -66,7 +73,7 @@ class PersonaEngine:
             lines.append("  - 你的个人表达习惯：")
             for expr in speaking_style["special_expressions"]:
                 lines.append(f"    * {expr}")
-        self._append_embodied_expression_guidance(lines)
+        self._append_embodied_expression_guidance(lines, speaking_style)
         self._append_conversation_style_rules(lines, conversation_style)
         lines.append("")
 
@@ -104,10 +111,62 @@ class PersonaEngine:
 
         return "\n".join(lines)
 
-    def _append_embodied_expression_guidance(self, lines: list[str]):
-        lines.append("  - 肢体/神态表达：可以偶尔用很短的括号动作或神态描写表达当下情绪和临场反应。")
-        lines.append("    * 例子：（低头看了你一眼）（把杯子推到你面前）（假装不经意地移开视线）")
+    def _append_embodied_expression_guidance(self, lines: list[str], speaking_style: dict):
+        config = self._embodied_expression_config(speaking_style)
+        if not config["enabled"]:
+            lines.append("  - 肢体/神态表达：当前已关闭；不要主动加入括号动作、神态描写或舞台提示，除非用户明确要求。")
+            return
+
+        frequency = config["frequency"]
+        lines.append("  - 肢体/神态表达：开启。可以用很短的括号动作或神态描写表达当下情绪、身体反应和临场互动。")
+        lines.append(f"    * 频率：{EMBODIED_FREQUENCY_GUIDANCE[frequency]}")
+        lines.append("    * 描写优先具体、轻巧：眼神、表情、姿态、手部动作、距离变化、拿放物品、停顿反应等。")
+        lines.append("    * 例子：（低头看了你一眼）（把杯子推到你面前）（假装不经意地移开视线）（指尖轻轻敲了敲桌面）")
         lines.append("    * 动作要贴合你的人格、关系和当下情绪；不要每句都用，不要堆叠，也不要用动作替代正面回应。")
+
+    def _embodied_expression_config(self, speaking_style: dict) -> dict:
+        raw = speaking_style.get("embodied_expression") if isinstance(speaking_style, dict) else None
+        if isinstance(raw, bool):
+            return {"enabled": raw, "frequency": "medium"}
+        raw = raw if isinstance(raw, dict) else {}
+
+        frequency = self._normalize_embodied_frequency(raw.get("frequency", "medium"))
+        enabled = self._as_bool(raw.get("enabled"), True)
+        if str(raw.get("frequency", "")).strip().lower() in {"off", "none", "disabled", "false", "关闭", "关"}:
+            enabled = False
+
+        return {"enabled": enabled, "frequency": frequency}
+
+    def _normalize_embodied_frequency(self, value: object) -> str:
+        raw = str(value or "medium").strip().lower()
+        aliases = {
+            "低": "low",
+            "低频": "low",
+            "少": "low",
+            "中": "medium",
+            "中频": "medium",
+            "默认": "medium",
+            "高": "high",
+            "高频": "high",
+            "多": "high",
+        }
+        normalized = aliases.get(raw, raw)
+        return normalized if normalized in EMBODIED_FREQUENCY_GUIDANCE else "medium"
+
+    def _as_bool(self, value: object, default: bool = True) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on", "enable", "enabled", "开启", "开"}:
+                return True
+            if lowered in {"0", "false", "no", "off", "disable", "disabled", "关闭", "关"}:
+                return False
+        return default
 
     def _append_conversation_style_rules(self, lines: list[str], rules: dict):
         if not rules:

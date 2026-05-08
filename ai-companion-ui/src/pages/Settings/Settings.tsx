@@ -7,6 +7,7 @@ import { configApi } from '../../api';
 import type { BotConfig, LifeConfig, PlatformConfig, ProactiveConfig } from '../../types';
 
 type SectionId = 'model' | 'memory' | 'proactive' | 'life' | 'platforms' | 'persona' | 'session_reset';
+type EmbodiedFrequency = BotConfig['persona_summary']['speaking_style']['embodied_expression']['frequency'];
 type GatewayPlatformStatus = {
   state?: string;
   account_id_hint?: string;
@@ -117,6 +118,17 @@ function TextareaField({
 
 const splitList = (value: string) => value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
 const joinList = (value?: unknown[]) => (value || []).map(String).join(', ');
+const embodiedFrequencies: EmbodiedFrequency[] = ['low', 'medium', 'high'];
+
+function normalizeEmbodiedExpression(value?: Partial<BotConfig['persona_summary']['speaking_style']['embodied_expression']>) {
+  const frequency = embodiedFrequencies.includes(value?.frequency as EmbodiedFrequency)
+    ? value?.frequency as EmbodiedFrequency
+    : 'medium';
+  return {
+    enabled: value?.enabled !== false,
+    frequency,
+  };
+}
 
 function platformByName(config: BotConfig, name: string): PlatformConfig {
   return config.platforms.find((p) => p.name === name) || { name, enabled: false, config: {} };
@@ -252,6 +264,10 @@ const defaultPersona: BotConfig['persona_summary'] = {
     catchphrases: [],
     greeting_style: '',
     farewell_style: '',
+    embodied_expression: {
+      enabled: true,
+      frequency: 'medium',
+    },
   },
 };
 
@@ -304,6 +320,7 @@ function normalizeConfig(data: BotConfig): BotConfig {
         ...defaultPersona.speaking_style,
         ...(persona.speaking_style || {}),
         catchphrases: Array.isArray(persona.speaking_style?.catchphrases) ? persona.speaking_style.catchphrases : [],
+        embodied_expression: normalizeEmbodiedExpression(persona.speaking_style?.embodied_expression),
       },
     },
     diagnostics: raw.diagnostics,
@@ -423,6 +440,15 @@ export function Settings() {
 
   const patchProactive = (patch: Partial<ProactiveConfig>) => patchSection('proactive', patch);
   const patchLife = (patch: Partial<LifeConfig>) => patchSection('life', patch);
+  const patchSpeakingStyle = (patch: Partial<BotConfig['persona_summary']['speaking_style']>) => {
+    if (!draft) return;
+    patchSection('persona_summary', {
+      speaking_style: {
+        ...draft.persona_summary.speaking_style,
+        ...patch,
+      },
+    });
+  };
 
   const updatePlatform = (name: string, updater: (platform: PlatformConfig) => PlatformConfig) => {
     setDraft((prev) => {
@@ -772,8 +798,42 @@ export function Settings() {
           <TextareaField label="当前背景" value={persona.backstory.now} onChange={(value) => patchSection('persona_summary', { backstory: { ...persona.backstory, now: value } })} />
           <TextareaField label="关键经历（一行一个）" value={(persona.backstory.key_moments || []).join('\n')} onChange={(value) => patchSection('persona_summary', { backstory: { ...persona.backstory, key_moments: splitList(value) } })} />
           <TextareaField label="不可妥协原则（一行一个）" value={(persona.values.non_negotiable || []).join('\n')} onChange={(value) => patchSection('persona_summary', { values: { ...persona.values, non_negotiable: splitList(value) } })} />
-          <Input label="说话语气" value={persona.speaking_style.tone} onChange={(event) => patchSection('persona_summary', { speaking_style: { ...persona.speaking_style, tone: event.target.value } })} />
-          <Input label="口头禅" value={joinList(persona.speaking_style.catchphrases)} onChange={(event) => patchSection('persona_summary', { speaking_style: { ...persona.speaking_style, catchphrases: splitList(event.target.value) } })} />
+          <Input label="说话语气" value={persona.speaking_style.tone} onChange={(event) => patchSpeakingStyle({ tone: event.target.value })} />
+          <Input label="口头禅" value={joinList(persona.speaking_style.catchphrases)} onChange={(event) => patchSpeakingStyle({ catchphrases: splitList(event.target.value) })} />
+          <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-tertiary)', display: 'grid', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>肢体动作描写</div>
+                <FieldHint text="开启后 Bot 会在合适场景使用短括号动作和神态描写，增强临场感。" />
+              </div>
+              <Toggle
+                checked={persona.speaking_style.embodied_expression.enabled}
+                onChange={(event) => patchSpeakingStyle({
+                  embodied_expression: {
+                    ...persona.speaking_style.embodied_expression,
+                    enabled: event.target.checked,
+                  },
+                })}
+              />
+            </div>
+            <Select
+              label="动作描写频率"
+              options={[
+                { value: 'low', label: '低频' },
+                { value: 'medium', label: '中频' },
+                { value: 'high', label: '高频' },
+              ]}
+              value={persona.speaking_style.embodied_expression.frequency}
+              disabled={!persona.speaking_style.embodied_expression.enabled}
+              onChange={(event) => patchSpeakingStyle({
+                embodied_expression: {
+                  ...persona.speaking_style.embodied_expression,
+                  frequency: event.target.value as EmbodiedFrequency,
+                },
+              })}
+            />
+            <FieldHint text="高频会明显提高日常聊天和亲密互动中的动作描写，但任务型回答仍会自动克制。" />
+          </div>
         </div>
       </SectionCard>
 

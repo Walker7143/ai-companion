@@ -135,6 +135,58 @@ class PersonaEngineDefaultStyleTest(unittest.TestCase):
         self.assertIn("括号动作", prompt)
         self.assertIn("不要每句都用", prompt)
 
+    def test_system_prompt_honors_embodied_expression_frequency(self):
+        import json
+
+        with TemporaryDirectory(prefix="persona-high-style-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            style_path = root / bot_id / "persona" / "speaking_style.json"
+            style_path.write_text(
+                json.dumps(
+                    {
+                        "tone": "自然",
+                        "embodied_expression": {"enabled": True, "frequency": "high"},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        self.assertIn("肢体/神态表达：开启", prompt)
+        self.assertIn("高频", prompt)
+        self.assertIn("多数合适回复", prompt)
+
+    def test_system_prompt_can_disable_embodied_expression(self):
+        import json
+
+        with TemporaryDirectory(prefix="persona-style-off-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            style_path = root / bot_id / "persona" / "speaking_style.json"
+            style_path.write_text(
+                json.dumps(
+                    {
+                        "tone": "自然",
+                        "embodied_expression": {"enabled": False, "frequency": "high"},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        self.assertIn("肢体/神态表达：当前已关闭", prompt)
+        self.assertIn("不要主动加入括号动作", prompt)
+        self.assertNotIn("多数合适回复", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

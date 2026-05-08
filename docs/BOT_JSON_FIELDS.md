@@ -83,7 +83,7 @@ data/bots/{bot_id}/
 
 ## speaking_style.json
 
-说话风格。`PersonaEngine` 主要读取 `tone`、`口头禅`、`emotion_indicators`。
+说话风格。`PersonaEngine` 主要读取 `tone`、`口头禅`、`emotion_indicators`、`embodied_expression`。
 
 
 | 字段                    | 类型            | 必填  | 说明                                           |
@@ -94,11 +94,32 @@ data/bots/{bot_id}/
 | `farewell_style`      | string        | 否   | 告别风格。                                        |
 | `emotion_indicators`  | object        | 否   | 不同情绪下的语言表现。键可自定义，例如 `happy`、`sad`、`angry`。   |
 | `special_expressions` | array[string] | 否   | 特殊表达方式。                                      |
+| `embodied_expression` | object/boolean | 否   | 肢体动作和神态描写设置。缺省等同于开启中频；设为 `false` 可关闭。 |
 | `response_patterns`   | object        | 否   | 面对特定场景的回复模式，例如 `praise`、`complaint`、`flirt`。 |
 | `style`               | string        | 否   | 旧模板字段，表示风格类型。                                |
 | `traits`              | array[string] | 否   | 旧模板字段，表示说话特征。                                |
 | `phrases`             | object        | 否   | 旧模板字段，按场景列举短句。                               |
 | `forbidden_words`     | array[string] | 否   | 不希望 Bot 使用的词。当前核心 prompt 不强制执行，可作为素材。        |
+
+
+`embodied_expression` 子字段：
+
+
+| 字段          | 类型      | 默认值      | 说明                                                       |
+| ----------- | ------- | -------- | ---------------------------------------------------------- |
+| `enabled`   | boolean | `true`   | 是否允许 Bot 主动加入短括号动作、神态描写或临场身体反应。                    |
+| `frequency` | string  | `medium` | 动作描写频率，支持 `low`、`medium`、`high`。高频会更常出现，但任务型回答仍会降频。 |
+
+示例：
+
+```json
+{
+  "embodied_expression": {
+    "enabled": true,
+    "frequency": "high"
+  }
+}
+```
 
 
 `emotion_indicators` 常见子字段：

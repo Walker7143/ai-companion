@@ -367,6 +367,10 @@ export interface PersonaSummaryConfig {
     catchphrases: string[];
     greeting_style: string;
     farewell_style: string;
+    embodied_expression: {
+      enabled: boolean;
+      frequency: 'low' | 'medium' | 'high';
+    };
   };
 }
 

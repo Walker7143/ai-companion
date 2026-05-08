@@ -3356,7 +3356,11 @@ class SystemTestSuite:
                         "profile": {"name": "新名", "personality_tags": ["温柔", "可靠"]},
                         "backstory": {"key_moments": ["初识", "一起看展"]},
                         "values": {"non_negotiable": ["真诚", "尊重"]},
-                        "speaking_style": {"tone": "温柔", "catchphrases": ["嗯"]},
+                        "speaking_style": {
+                            "tone": "温柔",
+                            "catchphrases": ["嗯"],
+                            "embodied_expression": {"enabled": True, "frequency": "high"},
+                        },
                     },
                 },
             )
@@ -3465,6 +3469,9 @@ class SystemTestSuite:
             and main_cfg["session_reset"]["mode"] == "idle"
             and profile["name"] == "新名"
             and style["口头禅"] == ["嗯"]
+            and style["embodied_expression"]["enabled"] is True
+            and style["embodied_expression"]["frequency"] == "high"
+            and web_after["persona_summary"]["speaking_style"]["embodied_expression"]["frequency"] == "high"
             and refresh["count"] >= 2
         )
         detail = f"model={models['openai']['model']} memory={models['memory']['embedding']} refresh={refresh['count']}"

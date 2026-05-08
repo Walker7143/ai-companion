@@ -108,7 +108,7 @@ WEB_CONFIG_SCHEMA = {
             "restart": "对话前会重新读取 persona，保存后下一轮对话生效。",
             "fields": {
                 "profile": "姓名、职业、初始年龄、性格标签等基础档案。",
-                "speaking_style": "语气、口头禅和情绪表达方式。",
+                "speaking_style": "语气、口头禅、情绪表达和肢体动作描写设置。",
                 "values": "原则、底线和软边界。",
                 "backstory": "背景故事和关键经历。",
             },
@@ -128,6 +128,8 @@ LIFE_TIME_PRESETS = [
     {"id": "minute", "label": "观察测试 1440x", "time_ratio": 1440, "description": "现实 1 分钟 = Bot 1 天"},
     {"id": "stress", "label": "极速压测 86400x", "time_ratio": 86400, "description": "现实 1 秒 = Bot 1 天"},
 ]
+
+EMBODIED_EXPRESSION_FREQUENCIES = {"low", "medium", "high"}
 
 
 def mask_secret(value: str | None) -> str:
@@ -245,6 +247,34 @@ def _as_bool(value: Any, default: bool = False) -> bool:
         if lowered in {"0", "false", "no", "off"}:
             return False
     return default
+
+
+def _normalize_embodied_frequency(value: Any, default: str = "medium") -> str:
+    raw = str(value or default).strip().lower()
+    aliases = {
+        "低": "low",
+        "低频": "low",
+        "少": "low",
+        "中": "medium",
+        "中频": "medium",
+        "默认": "medium",
+        "高": "high",
+        "高频": "high",
+        "多": "high",
+    }
+    normalized = aliases.get(raw, raw)
+    return normalized if normalized in EMBODIED_EXPRESSION_FREQUENCIES else default
+
+
+def _public_embodied_expression(value: Any) -> dict:
+    if isinstance(value, bool):
+        return {"enabled": value, "frequency": "medium"}
+    data = value if isinstance(value, dict) else {}
+    enabled = _as_bool(data.get("enabled"), True)
+    frequency = _normalize_embodied_frequency(data.get("frequency"), "medium")
+    if str(data.get("frequency", "")).strip().lower() in {"off", "none", "disabled", "false", "关闭", "关"}:
+        enabled = False
+    return {"enabled": enabled, "frequency": frequency}
 
 
 def _is_masked_or_empty(value: Any) -> bool:
@@ -670,6 +700,7 @@ class ConfigAdminService:
                 "catchphrases": speaking_style.get("口头禅", []),
                 "greeting_style": speaking_style.get("greeting_style", ""),
                 "farewell_style": speaking_style.get("farewell_style", ""),
+                "embodied_expression": _public_embodied_expression(speaking_style.get("embodied_expression")),
             },
         }
 
@@ -990,6 +1021,8 @@ class ConfigAdminService:
             updates = dict(persona_data[section])
             if section == "speaking_style" and "catchphrases" in updates:
                 updates["口头禅"] = updates.pop("catchphrases")
+            if section == "speaking_style" and "embodied_expression" in updates:
+                updates["embodied_expression"] = _public_embodied_expression(updates.get("embodied_expression"))
             merged = _deep_merge(existing, updates)
             _write_json(path, merged)
             changed.append(str(path))

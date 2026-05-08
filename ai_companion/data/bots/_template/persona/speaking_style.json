@@ -11,5 +11,9 @@
   "special_expressions": [
     "她会用的特殊表达方式1",
     "她会用的特殊表达方式2"
-  ]
+  ],
+  "embodied_expression": {
+    "enabled": true,
+    "frequency": "medium"
+  }
 }
