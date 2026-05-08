@@ -21,7 +21,7 @@ class TTSSkill(Skill):
     name = "tts"
     description = "将文字转换为语音"
     capabilities = ["tts"]
-    supported_models = ["minimax", "edge_tts", "azure_tts"]
+    supported_models = ["minimax", "edge_tts", "azure_tts", "openai_tts"]
 
     def __init__(self, config: dict = None):
         super().__init__(config)

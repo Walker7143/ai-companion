@@ -5,6 +5,15 @@ bots:
   - id: lin_wanqing
     name: 林晚晴
     enabled: true
+    skills:
+      image_generation:
+        auto: true
+        provider: "minimax"
+        model: "image-01"
+      image_understanding:
+        auto: true
+        provider: "openai"
+        model: "gpt-4o"
 
   - id: shen_nian
     name: 沈念

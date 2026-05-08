@@ -10,7 +10,10 @@ from .dispatcher import SkillDispatcher
 from .registry import SkillRegistry
 from .installer import SkillInstaller
 from .image_generation import ImageGenerationSkill
+from .image_understanding import ImageUnderstandingSkill
 from .tts import TTSSkill
+from .builtin_manager import BuiltinSkillManager
+from .auto_router import AutoSkillRouter, AutoSkillRouteResult
 from .channel import (
     Channel,
     ChannelCapability,
@@ -30,7 +33,11 @@ __all__ = [
     "SkillRegistry",
     "SkillInstaller",
     "ImageGenerationSkill",
+    "ImageUnderstandingSkill",
     "TTSSkill",
+    "BuiltinSkillManager",
+    "AutoSkillRouter",
+    "AutoSkillRouteResult",
     "Channel",
     "ChannelCapability",
     "CLIChannel",

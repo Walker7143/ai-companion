@@ -20,6 +20,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_PLACEHOLDER_STRUCTURED_PARTS = (
+    "开场白/称呼",
+    "话题内容或空字符串",
+    "结尾语",
+)
+
+_PLACEHOLDER_COMBINED_MESSAGES = (
+    "开场白/称呼，话题内容或空字符串，结尾语",
+    "开场白/称呼,话题内容或空字符串,结尾语",
+    "开场白/称呼话题内容或空字符串结尾语",
+)
+
 
 # LLM 判断 Prompt
 SHOULD_CONTACT_PROMPT = """【角色】
@@ -580,10 +592,38 @@ class ProactiveEngine:
             message = self._parse_structured_message(response)
             if message:
                 return message
-            return self._clean_message(response)
+            cleaned = self._clean_message(response)
+            if (not cleaned) or self._is_placeholder_message(cleaned):
+                logger.warning("[ProactiveEngine] LLM 返回占位或空消息，使用 fallback")
+                return self._get_fallback_message(scenario)
+            return cleaned
         except Exception as e:
             logger.error(f"[ProactiveEngine] LLM 生成消息失败: {e}")
             return self._get_fallback_message(scenario)
+
+    def _normalize_message_text(self, text: str) -> str:
+        normalized = str(text or "").strip()
+        # 去掉常见包裹符号，兼容《...》/“...”/`...` 等格式
+        normalized = normalized.strip("\"'`“”‘’《》[]()（）{}")
+        # 统一空白，便于占位文本识别
+        normalized = re.sub(r"\s+", "", normalized)
+        return normalized
+
+    def _is_placeholder_part(self, value: str) -> bool:
+        normalized = self._normalize_message_text(value)
+        return normalized in _PLACEHOLDER_STRUCTURED_PARTS
+
+    def _is_placeholder_message(self, message: str) -> bool:
+        normalized = self._normalize_message_text(message)
+        if not normalized:
+            return False
+
+        if normalized in _PLACEHOLDER_COMBINED_MESSAGES:
+            return True
+
+        # 兼容模型直接回显完整结构示例或其变体
+        hit_count = sum(1 for token in _PLACEHOLDER_STRUCTURED_PARTS if token in normalized)
+        return hit_count >= 2
 
     def _parse_structured_message(self, content: str) -> Optional[str]:
         """解析结构化消息输出，组合成最终消息"""
@@ -596,20 +636,22 @@ class ProactiveEngine:
 
         try:
             data = json.loads(json_match.group())
-            opening = data.get("opening", "")
-            topic = data.get("topic", "")
-            ending = data.get("ending", "")
+            opening = str(data.get("opening", "") or "").strip()
+            topic = str(data.get("topic", "") or "").strip()
+            ending = str(data.get("ending", "") or "").strip()
 
             # 组合消息
             parts = []
-            if opening:
+            if opening and not self._is_placeholder_part(opening):
                 parts.append(opening)
-            if topic:
+            if topic and not self._is_placeholder_part(topic):
                 parts.append(topic)
-            if ending:
+            if ending and not self._is_placeholder_part(ending):
                 parts.append(ending)
 
             message = "，".join(parts) if parts else None
+            if message and self._is_placeholder_message(message):
+                return None
             return message
         except (json.JSONDecodeError, Exception) as e:
             logger.debug(f"[ProactiveEngine] 解析结构化消息失败: {e}")

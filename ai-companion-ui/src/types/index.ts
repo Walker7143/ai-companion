@@ -221,6 +221,7 @@ export interface BotConfig {
   name: string;
   schema?: WebConfigSchema;
   model: ModelConfig;
+  skills: SkillsConfig;
   memory: MemoryConfig;
   proactive: ProactiveConfig;
   life: LifeConfig;
@@ -249,6 +250,24 @@ export interface ModelConfig {
   model: string;
   temperature: number;
   max_tokens: number;
+}
+
+export interface SkillEntryConfig {
+  enabled?: boolean;
+  auto?: boolean;
+  provider?: string;
+  model?: string;
+  api_key?: string;
+  output_dir?: string;
+  max_image_size_mb?: number;
+  max_images_per_message?: number;
+  [key: string]: unknown;
+}
+
+export interface SkillsConfig {
+  global: Record<string, SkillEntryConfig>;
+  bot: Record<string, SkillEntryConfig>;
+  resolved: Record<string, SkillEntryConfig>;
 }
 
 export interface MemoryConfig {

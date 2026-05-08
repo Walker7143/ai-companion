@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,8 +16,10 @@ from ..proactive.life_state import LifeState
 from ..proactive.life_engine import LifeEngine
 from ..proactive.life_scheduler import LifeScheduler
 from ..proactive.runtime_lock import BotSchedulerRuntimeLock
-from ..skill import SkillDispatcher, SkillRegistry, ImageGenerationSkill, TTSSkill, MultimodalSender, create_channel
+from ..skill import SkillDispatcher, SkillRegistry, MultimodalSender, create_channel, BuiltinSkillManager
 from ..skill.base import SkillContext
+from ..skill.capability_resolver import build_capability_statuses, resolve_skill_config
+from ..skill.auto_router import AutoSkillRouter
 from ..skill.command import (
     contains_sensitive_token,
     execute_skill_command,
@@ -42,6 +45,7 @@ class BotInstance:
         self.name = config["name"]
         self.description = config.get("description", "")
         self.skill_config = config.get("skills", {}) if isinstance(config.get("skills", {}), dict) else {}
+        self._capability_statuses: dict[str, dict] = build_capability_statuses(self.skill_config)
 
         # 解析 data_dir：优先使用参数，其次使用 config 中的值
         if data_dir is None and "data_dir" in config:
@@ -137,6 +141,10 @@ class BotInstance:
         # ── 技能系统 ─────────────────────────────────────
         self.skill_dispatcher = SkillDispatcher()
         self._register_skills()
+        self.auto_skill_router = AutoSkillRouter(
+            self.skill_dispatcher,
+            installed_skill_planner=self._plan_installed_skill_route,
+        )
 
         self.multimodal_sender: Optional[MultimodalSender] = None
         self._channel = None
@@ -144,13 +152,9 @@ class BotInstance:
 
     def _register_skills(self):
         """注册可用技能（内置 + 已安装的）"""
-        image_config = dict(self.skill_config.get("image_generation", {}) or {})
-        tts_config = dict(self.skill_config.get("tts", {}) or {})
-
-        # 图片生成技能
-        self.skill_dispatcher.register(ImageGenerationSkill(image_config))
-        # TTS 技能
-        self.skill_dispatcher.register(TTSSkill(tts_config))
+        builtin_manager = BuiltinSkillManager(self.skill_dispatcher)
+        resolved_skill_config = resolve_skill_config({}, self.skill_config)
+        self._capability_statuses = builtin_manager.register(resolved_skill_config, self._capability_statuses)
 
         # 从注册中心加载已安装的 Skills
         self.skill_registry = SkillRegistry()
@@ -160,6 +164,25 @@ class BotInstance:
                 if skill:
                     self.skill_dispatcher.register(skill)
                     logger.info(f"[BotInstance] 加载已安装技能: {skill_info['name']}")
+                    self._capability_statuses[skill.name] = {
+                        "name": skill.name,
+                        "source": "installed",
+                        "enabled": True,
+                        "auto": bool(skill_info.get("auto", False)),
+                        "registered": True,
+                        "available": bool(skill.is_available()),
+                        "reason": "" if skill.is_available() else "unavailable_runtime_check",
+                        "provider": "",
+                        "model": getattr(skill, "default_model", "") or "",
+                        "description": getattr(skill, "description", "") or str(skill_info.get("description", "") or ""),
+                        "capabilities": list(getattr(skill, "capabilities", []) or []),
+                        "routing_keywords": (
+                            list(skill_info.get("routing_keywords", []))
+                            if isinstance(skill_info.get("routing_keywords"), list)
+                            else []
+                        ),
+                        "confidence_threshold": float(skill_info.get("confidence_threshold", 0.72) or 0.72),
+                    }
 
     def _detect_personality_type(self) -> str:
         """检测性格类型"""
@@ -544,6 +567,8 @@ class BotInstance:
             self._record_skill_command_history(user_input, response)
             return response
 
+        runtime_input = self._build_runtime_input(user_input, memory_turn_context)
+
         # 1. 拒绝检查（如果启用）
         relationship_state = None
         if self.memory:
@@ -575,6 +600,22 @@ class BotInstance:
             self._record_skill_command_history(user_input, response)
             return response
 
+        route_result = await self.auto_skill_router.try_handle(
+            runtime_input=runtime_input,
+            context=self._build_skill_context(),
+            capability_statuses=self._capability_statuses,
+        )
+        if route_result.handled:
+            response = route_result.direct_response or "能力调用已完成。"
+            self.conversation_history.append({"role": "user", "content": user_input})
+            self.conversation_history.append({"role": "assistant", "content": response})
+            return response
+
+        image_context_suffix = route_result.bot_visible_context
+        image_user_hint = route_result.user_facing_hint
+        if image_context_suffix and self.memory and isinstance(self.memory, MemoryEngine):
+            logger.info("[BotInstance] 图片理解已注入上下文")
+
         # 3. 情绪触发检测
         emotion_triggered = self._check_emotion_trigger(user_input)
         if emotion_triggered:
@@ -589,9 +630,13 @@ class BotInstance:
             ctx = await self.memory.load_context(user_input)
 
             # 3. 构建带人格的记忆增强 system prompt
+            memory_suffix = ctx.get("system_suffix")
+            if image_context_suffix:
+                memory_suffix = self._merge_memory_suffix(memory_suffix, image_context_suffix)
+
             system_prompt = self._build_system_prompt(
                 adjustment_note=adjustment_note,
-                memory_suffix=ctx.get("system_suffix"),
+                memory_suffix=memory_suffix,
             )
 
             # 4. 构建 messages
@@ -610,12 +655,16 @@ class BotInstance:
                 name="memory.on_message",
             )
         else:
-            system_prompt = self._build_system_prompt(adjustment_note=adjustment_note)
+            memory_suffix = image_context_suffix if image_context_suffix else None
+            system_prompt = self._build_system_prompt(adjustment_note=adjustment_note, memory_suffix=memory_suffix)
             messages = [{"role": "user", "content": user_input}]
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, {}, relationship_state)
+
+        if image_user_hint and image_user_hint not in response:
+            response = f"{image_user_hint}\n{response}"
 
         # 记录历史
         self.conversation_history.append({"role": "user", "content": user_input})
@@ -623,14 +672,117 @@ class BotInstance:
 
         return response
 
-    async def _handle_skill_command(self, user_input: str) -> str:
-        context = SkillContext(
+    def _build_runtime_input(self, user_input: str, memory_turn_context: dict | None) -> dict:
+        context = memory_turn_context if isinstance(memory_turn_context, dict) else {}
+        media_urls = context.get("media_urls") if isinstance(context.get("media_urls"), list) else []
+        media_types = context.get("media_types") if isinstance(context.get("media_types"), list) else []
+        return {
+            "text": user_input,
+            "media_urls": [str(item) for item in media_urls if str(item).strip()],
+            "media_types": [str(item) for item in media_types if str(item).strip()],
+        }
+
+    def _build_skill_context(self) -> SkillContext:
+        return SkillContext(
             bot_id=self.id,
             user_id=getattr(self.memory, "user_id", "default_user") if self.memory else "default_user",
             conversation_history=list(self.conversation_history),
             personality_tags=self.persona.profile.get("personality_tags", []) if self.persona else [],
         )
-        return await execute_skill_command(self.skill_dispatcher, user_input, context, self.skill_registry)
+
+    async def _plan_installed_skill_route(
+        self,
+        user_text: str,
+        candidates: list[dict],
+        context: SkillContext,
+    ) -> dict | None:
+        if not self.model or not user_text.strip() or not candidates:
+            return None
+
+        candidate_lines: list[str] = []
+        for idx, candidate in enumerate(candidates, start=1):
+            caps = candidate.get("capabilities") if isinstance(candidate.get("capabilities"), list) else []
+            keywords = candidate.get("keywords") if isinstance(candidate.get("keywords"), list) else []
+            candidate_lines.append(
+                f"{idx}. name={candidate.get('name')}, "
+                f"description={str(candidate.get('description', '')).strip() or '-'}, "
+                f"capabilities={','.join(str(item) for item in caps) or '-'}, "
+                f"keywords={','.join(str(item) for item in keywords) or '-'}"
+            )
+
+        planner_prompt = (
+            "你是技能路由器。请从候选技能中选择最匹配用户请求的一个，或返回 none。\n"
+            "必须只输出 JSON：{\"skill\":\"...|none\",\"confidence\":0~1,\"params\":{...}}。\n"
+            "规则：\n"
+            "1) 只在技能明确更适合时选择；不确定返回 none。\n"
+            "2) confidence 表示把握度；低于 0.72 视为不触发。\n"
+            "3) params 仅放技能需要的关键参数；否则给空对象。\n"
+            "4) 不要解释，不要 markdown。"
+        )
+        planner_input = (
+            "候选技能：\n"
+            + "\n".join(candidate_lines)
+            + "\n\n用户请求：\n"
+            + user_text
+        )
+
+        try:
+            raw = await self.model.chat(
+                messages=[{"role": "user", "content": planner_input}],
+                system_prompt=planner_prompt,
+                temperature=0.1,
+                max_tokens=280,
+            )
+        except Exception as exc:
+            logger.debug("[BotInstance] installed skill planner failed: %s", exc)
+            return None
+
+        plan = self._extract_json_object(raw)
+        if not isinstance(plan, dict):
+            return None
+        skill_name = str(plan.get("skill", "") or "").strip()
+        if skill_name.lower() in {"none", "null", "no"}:
+            return None
+        plan["skill"] = skill_name
+        return plan
+
+    def _extract_json_object(self, text: str) -> dict | None:
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            pass
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            data = json.loads(raw[start:end + 1])
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    def _merge_memory_suffix(self, original_suffix: str | None, extra_suffix: str) -> str:
+        base = (original_suffix or "").strip()
+        extra = (extra_suffix or "").strip()
+        if not base:
+            return extra
+        if not extra:
+            return base
+        return f"{base}\n\n{extra}"
+
+    async def _handle_skill_command(self, user_input: str) -> str:
+        context = self._build_skill_context()
+        return await execute_skill_command(
+            self.skill_dispatcher,
+            user_input,
+            context,
+            self.skill_registry,
+            capabilities=self.get_skill_capabilities(),
+        )
 
     def _record_skill_command_history(self, user_input: str, response: str) -> None:
         history_input = redact_sensitive_tokens(user_input) if contains_sensitive_token(user_input) else user_input
@@ -725,13 +877,27 @@ class BotInstance:
             "channel": None,
             "multimodal_sender": None,
         }
-        for skill in self.skill_dispatcher._skills.values():
-            capabilities["skills"][skill.name] = {
-                "name": skill.name,
-                "description": skill.description,
-                "capabilities": skill.capabilities,
-                "is_available": skill.is_available(),
-                "supported_models": getattr(skill, "supported_models", []),
+        for skill_name, status in self._capability_statuses.items():
+            skill = self.skill_dispatcher.get(skill_name)
+            if skill:
+                status["registered"] = True
+                status["available"] = bool(skill.is_available())
+                if status["available"] and status.get("reason") in {"unavailable_runtime_check", "not_registered"}:
+                    status["reason"] = ""
+                elif not status["available"] and not status.get("reason"):
+                    status["reason"] = "unavailable_runtime_check"
+            else:
+                status["registered"] = False
+                status["available"] = False
+                if status.get("enabled") and not status.get("reason"):
+                    status["reason"] = "not_registered"
+
+            capabilities["skills"][skill_name] = {
+                **status,
+                "description": getattr(skill, "description", "") if skill else "",
+                "capabilities": getattr(skill, "capabilities", []) if skill else [],
+                "is_available": bool(status.get("available", False)),
+                "supported_models": getattr(skill, "supported_models", []) if skill else [],
             }
         if self.multimodal_sender:
             capabilities["channel"] = self.multimodal_sender.get_capabilities()

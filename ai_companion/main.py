@@ -11,6 +11,7 @@ from .bot.manager import BotManager
 from .bot.instance import BotInstance
 from .cli.adapter import CLIAdapter
 from .ui_server import ensure_ui_server, release_ui_server, should_start_ui
+from .skill.config_merge import merge_skill_config
 
 
 def get_data_dir() -> Path:
@@ -102,7 +103,8 @@ async def main(bot_filter: str = None):
         if bot_filter and bot_config["id"] != bot_filter:
             continue
 
-        bot_config = {**bot_config, "data_dir": str(data_dir)}
+        merged_skills = merge_skill_config(config.models.get("skills", {}), bot_config.get("skills", {}))
+        bot_config = {**bot_config, "data_dir": str(data_dir), "skills": merged_skills}
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
         bot.set_allowed_proactive_scheduler_platforms({"cli", "webhook"})
         # CLI 模式下延迟启动后台调度器：

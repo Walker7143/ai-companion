@@ -1424,6 +1424,9 @@ fallback:
 skills:
   # 图片生成
   image_generation:
+    enabled: true
+    auto: true
+    provider: "minimax"
     model: "minimax"          # dalle/minimax/stable_diffusion/自定义
     minimax:
       model: "image-01"
@@ -1433,6 +1436,19 @@ skills:
     stable_diffusion:
       model: "stable-diffusion-xl"
       api_url: "http://localhost:7860"
+
+  # 图片理解
+  image_understanding:
+    enabled: true
+    auto: true
+    provider: "openai"        # openai/minimax/custom
+    model: "gpt-4o"
+    max_image_size_mb: 8
+    max_images_per_message: 3
+    openai:
+      model: "gpt-4o"
+      # api_key: "${OPENAI_API_KEY}"
+      # base_url: "https://api.openai.com/v1"
 
   # 视频生成
   video_generation:
@@ -1692,14 +1708,27 @@ platforms:
 
 ## 9. 技能扩展
 
-### 9.1 查看已安装技能
+### 9.1 查看运行时能力
+
+```bash
+ai-companion skill list --runtime
+ai-companion skill list --runtime --json
+```
+
+`/skills` 在对话中显示同一份运行时能力状态，包含 `enabled`、`auto`、`available` 和 `reason`。
+
+当网关收到图片消息且 `image_understanding` 处于可用状态时，会自动先做图片理解，再把结构化结果注入本轮对话上下文。若该能力未启用，会在回复里明确提示“当前未启用图片理解能力。”；若下载或缓存图片失败，会自动降级为普通文本对话，不中断回复。
+
+自动路由支持 `skills.<name>.auto=false`。关闭后，不会再因自然语言或媒体输入自动触发该能力，但 `/skill <name> ...` 显式调用仍然可用。
+
+### 9.2 查看已安装技能
 
 ```bash
 ai-companion skill list
 ai-companion skill list --json
 ```
 
-### 9.2 安装技能
+### 9.3 安装技能
 
 ```bash
 # 从本地安装
@@ -1712,13 +1741,13 @@ ai-companion skill install https://example.com/skill.zip
 ai-companion skill install ./my-skill --force
 ```
 
-### 9.3 卸载技能
+### 9.4 卸载技能
 
 ```bash
 ai-companion skill uninstall my-skill
 ```
 
-### 9.4 执行技能
+### 9.5 执行技能
 
 命令行直接执行：
 
@@ -1737,7 +1766,7 @@ ai-companion skill run my-skill text=你好
 查看技能列表
 ```
 
-### 9.5 技能包结构
+### 9.6 技能包结构
 
 ```
 skill-my-skill/
@@ -1998,6 +2027,20 @@ minimax:
 - 关系越深，越容易主动联系你
 
 保持互动即可培养关系。
+
+### Q: 为什么我说“帮我画一张…”没有自动出图？
+
+**A**: 先检查运行时能力开关和可用性：
+1. 在对话里输入 `/skills`，确认 `image_generation` 的 `enabled=true`、`auto=true`。
+2. 若 `reason` 显示缺 key（例如 `missing_api_key:MINIMAX_API_KEY`），先补齐对应 API Key。
+3. 如果你故意设置了 `auto=false`，自然语言不会自动触发，改用 `/skill image_generation ...`。
+
+### Q: 发图片后为什么没有自动理解？
+
+**A**: 常见原因：
+1. `image_understanding` 未启用或 `auto=false`。
+2. 能力不可用（例如缺少 OpenAI/MiniMax key，或 provider 配置不完整）。
+3. 图片下载/缓存失败。此时系统会自动降级为普通文本对话，不会中断回复。
 
 ---
 

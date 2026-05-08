@@ -48,30 +48,28 @@ fallback:
 
 skills:
   image_generation:
-    model: "minimax"          # 默认模型：dalle | minimax | stable_diffusion | 自定义
-
-    # --- 内置模型 ---
-    dalle:
-      model: "dall-e-3"
+    enabled: true
+    auto: true
+    provider: "minimax"
+    model: "image-01"
+    api_key: "${MINIMAX_API_KEY}"
+    output_dir: "data/bots/_images"
+    # 旧格式仍兼容：未迁移前的 provider 块会继续读取
     minimax:
       model: "image-01"
       output_dir: "data/bots/_images"
-    stable_diffusion:
-      model: "stable-diffusion-xl"
-      api_url: "http://localhost:7860"  # Stable Diffusion WebUI API
 
-    # --- 自定义模型示例 ---
-    # custom_image:
-    #   api_url: "https://api.example.com/image"
-    #   model: "my-image-model"
-    #   method: "POST"
-    #   auth_type: "bearer"  # bearer | api_key
-    #   headers:
-    #     X-Custom-Header: "value"
-    #   body_template:
-    #     prompt: "{{prompt}}"
-    #     size: "1024x1024"
-    #   response_url_field: "data.image_url"
+  image_understanding:
+    enabled: true
+    auto: true
+    provider: "openai"        # openai / minimax / custom
+    model: "gpt-4o"
+    max_image_size_mb: 8
+    max_images_per_message: 3
+    openai:
+      model: "gpt-4o"
+      # api_key: "${OPENAI_API_KEY}"
+      # base_url: "https://api.openai.com/v1"
 
   video_generation:
     model: "minimax"          # 默认模型：minimax | 自定义
@@ -101,9 +99,11 @@ skills:
     #   response_url_field: "data.video_url"
 
   tts:
-    model: "minimax"         # 默认模型：minimax | edge_tts | azure_tts | openai_tts | 自定义
-
-    # --- MiniMax TTS ---
+    enabled: true
+    auto: false
+    provider: "edge_tts"
+    model: "edge_tts"
+    # MiniMax / Edge / Azure / OpenAI 仍按旧 provider 块兼容读取
     minimax:
       model: "speech-2.8-hd"  # 可选: speech-2.8-hd | 2.6 | 02
       voice: "male-qn-qingse"  # 语音ID

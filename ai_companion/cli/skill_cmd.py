@@ -6,6 +6,7 @@ Skill CLI Commands - 技能命令行接口
 
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -13,11 +14,14 @@ from typing import Optional
 from rich.console import Console
 from rich.table import Table
 
+from ..bot.instance import BotInstance
+from ..config.loader import Config
+from ..skill.config_merge import merge_skill_config
 from ..skill.registry import SkillRegistry
 from ..skill.installer import SkillInstaller
 from ..skill.base import SkillContext
 from ..skill.dispatcher import SkillDispatcher
-from ..skill.command import format_skill_result, parse_cli_params
+from ..skill.command import format_skill_result, parse_cli_params, format_runtime_skill_capabilities
 
 
 console = Console()
@@ -39,6 +43,7 @@ def create_skill_parser(subparsers: argparse.Action = None) -> Optional[argparse
     # skill list
     list_parser = sub.add_parser("list", help="列出已安装的技能")
     list_parser.add_argument("--json", action="store_true", help="JSON 格式输出")
+    list_parser.add_argument("--runtime", action="store_true", help="显示运行时能力状态")
 
     # skill info
     info_parser = sub.add_parser("info", help="显示技能详细信息")
@@ -80,13 +85,59 @@ def create_skill_parser(subparsers: argparse.Action = None) -> Optional[argparse
     return parser
 
 
-def cmd_skill_list(json_output: bool = False):
+def _get_data_dir() -> Path:
+    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    if user_dir.exists():
+        return user_dir
+    return Path(__file__).parent.parent.parent / "data" / "bots"
+
+
+async def _collect_runtime_skill_views() -> list[dict]:
+    config = Config()
+    data_dir = _get_data_dir()
+    views: list[dict] = []
+
+    for bot_config in config.get_enabled_bots():
+        merged_skills = merge_skill_config(config.models.get("skills", {}), bot_config.get("skills", {}))
+        instance_config = {**bot_config, "data_dir": str(data_dir), "skills": merged_skills}
+        bot = BotInstance(instance_config, model=None, memory_config=None)
+        try:
+            views.append(
+                {
+                    "bot_id": bot.id,
+                    "bot_name": bot.name,
+                    "skills": bot.get_skill_capabilities().get("skills", {}),
+                }
+            )
+        finally:
+            await bot.close()
+
+    return views
+
+
+def cmd_skill_list(json_output: bool = False, runtime: bool = False):
     """列出已安装的技能"""
     registry = SkillRegistry()
     skills = registry.list_installed()
 
+    if runtime:
+        runtime_views = asyncio.run(_collect_runtime_skill_views())
+        if json_output:
+            print(json.dumps(runtime_views, ensure_ascii=False, indent=2))
+            return
+
+        if not runtime_views:
+            console.print("[dim]没有可用的运行时能力[/dim]")
+            return
+
+        for index, view in enumerate(runtime_views):
+            if index > 0:
+                console.print("")
+            console.print(f"[bold cyan]{view['bot_name']} ({view['bot_id']})[/bold cyan]")
+            console.print(format_runtime_skill_capabilities({"skills": view["skills"]}))
+        return
+
     if json_output:
-        import json
         print(json.dumps(skills, indent=2, ensure_ascii=False))
         return
 
@@ -285,7 +336,7 @@ def run_skill_command(args: list = None):
 
     try:
         {
-            "list": lambda: cmd_skill_list(parsed.json),
+            "list": lambda: cmd_skill_list(parsed.json, parsed.runtime),
             "info": lambda: cmd_skill_info(parsed.name),
             "install": lambda: cmd_skill_install(parsed.source, parsed.name, parsed.force),
             "uninstall": lambda: cmd_skill_uninstall(parsed.name, parsed.force),

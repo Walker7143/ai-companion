@@ -166,6 +166,24 @@ def format_skill_list(dispatcher: SkillDispatcher) -> str:
     return "\n".join(lines)
 
 
+def format_runtime_skill_capabilities(capabilities: dict[str, Any]) -> str:
+    skills = (capabilities or {}).get("skills") or {}
+    if not skills:
+        return "没有可用的运行时能力。"
+
+    lines = ["运行时能力："]
+    for name, status in skills.items():
+        source = status.get("source", "builtin")
+        enabled = "启用" if status.get("enabled") else "禁用"
+        auto = "自动" if status.get("auto") else "手动"
+        available = "可用" if status.get("available") else "不可用"
+        reason = status.get("reason") or "-"
+        provider = status.get("provider") or "-"
+        model = status.get("model") or "-"
+        lines.append(f"- {name}: {source} [{enabled}; {auto}; {available}; {provider}/{model}; {reason}]")
+    return "\n".join(lines)
+
+
 def format_skill_result(result: SkillResult) -> str:
     if not result.success:
         return f"[Skill Error] {result.content or '执行失败'}"
@@ -185,7 +203,14 @@ async def execute_skill_command(
     text: str,
     context: SkillContext,
     registry: SkillRegistry | None = None,
+    capabilities: dict[str, Any] | None = None,
 ) -> str:
+    stripped = (text or "").strip()
+    if stripped == "/skills":
+        if capabilities is not None:
+            return format_runtime_skill_capabilities(capabilities)
+        return format_skill_list(dispatcher)
+
     management = parse_skill_management_command(text)
     if management:
         return execute_skill_management_command(
@@ -198,6 +223,8 @@ async def execute_skill_command(
 
     skill_name, params = parse_skill_command(text)
     if skill_name in {"help", "list"}:
+        if capabilities is not None:
+            return format_runtime_skill_capabilities(capabilities)
         return format_skill_list(dispatcher)
 
     skill = dispatcher.get(skill_name)

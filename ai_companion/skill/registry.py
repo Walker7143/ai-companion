@@ -23,6 +23,7 @@ from .instruction import InstructionSkill
 logger = logging.getLogger(__name__)
 
 _VALID_SKILL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+_DEFAULT_CONFIDENCE_THRESHOLD = 0.72
 
 
 class SkillRegistry:
@@ -286,6 +287,9 @@ class SkillRegistry:
             "author": str(frontmatter.get("author", "")),
             "entry": "SKILL.md",
             "enabled": True,
+            "auto": False,
+            "routing_keywords": [],
+            "confidence_threshold": _DEFAULT_CONFIDENCE_THRESHOLD,
             "requirements": [],
             "type": "instruction",
             "config": {"instruction_file": "SKILL.md"},
@@ -384,6 +388,9 @@ class SkillRegistry:
                 "author": author,
                 "entry": f"{name}_skill.py",
                 "enabled": True,
+                "auto": False,
+                "routing_keywords": [],
+                "confidence_threshold": _DEFAULT_CONFIDENCE_THRESHOLD,
                 "requirements": [],
             }, f, indent=2, ensure_ascii=False)
 
@@ -462,6 +469,21 @@ def create_skill():
             logger.error(f"[SkillRegistry] requirements 必须是字符串数组: {name}")
             return None
 
+        routing_keywords = metadata.get("routing_keywords", [])
+        if routing_keywords is None:
+            routing_keywords = []
+        if not isinstance(routing_keywords, list) or not all(isinstance(x, str) for x in routing_keywords):
+            logger.error(f"[SkillRegistry] routing_keywords 必须是字符串数组: {name}")
+            return None
+
+        confidence_threshold = metadata.get("confidence_threshold", _DEFAULT_CONFIDENCE_THRESHOLD)
+        try:
+            confidence_threshold = float(confidence_threshold)
+        except (TypeError, ValueError):
+            logger.error(f"[SkillRegistry] confidence_threshold 非法: {name}")
+            return None
+        confidence_threshold = max(0.0, min(1.0, confidence_threshold))
+
         normalized = dict(metadata)
         normalized.update({
             "name": name,
@@ -470,6 +492,9 @@ def create_skill():
             "author": str(metadata.get("author", "")),
             "entry": entry,
             "enabled": bool(metadata.get("enabled", True)),
+            "auto": bool(metadata.get("auto", False)),
+            "routing_keywords": routing_keywords,
+            "confidence_threshold": confidence_threshold,
             "requirements": requirements,
         })
         return normalized

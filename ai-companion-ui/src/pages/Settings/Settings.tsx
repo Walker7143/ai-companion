@@ -4,9 +4,9 @@ import { BookOpen, Bot, Brain, Clock, Globe, HeartPulse, Moon, RotateCcw, Save, 
 import { Button, Card, CardContent, CardHeader, CardTitle, Input, Select, Toggle, useToast } from '../../components/ui';
 import { useBotStore, useThemeStore } from '../../stores';
 import { configApi } from '../../api';
-import type { BotConfig, LifeConfig, PlatformConfig, ProactiveConfig } from '../../types';
+import type { BotConfig, LifeConfig, PlatformConfig, ProactiveConfig, SkillEntryConfig } from '../../types';
 
-type SectionId = 'model' | 'memory' | 'proactive' | 'life' | 'platforms' | 'persona' | 'session_reset';
+type SectionId = 'model' | 'skills' | 'memory' | 'proactive' | 'life' | 'platforms' | 'persona' | 'session_reset';
 type EmbodiedFrequency = BotConfig['persona_summary']['speaking_style']['embodied_expression']['frequency'];
 type GatewayPlatformStatus = {
   state?: string;
@@ -17,6 +17,7 @@ type GatewayPlatformStatus = {
 
 const sectionIcon: Record<string, ReactNode> = {
   model: <Sparkles style={{ width: 18, height: 18, color: 'var(--accent)' }} />,
+  skills: <Zap style={{ width: 18, height: 18, color: 'var(--warning)' }} />,
   memory: <Brain style={{ width: 18, height: 18, color: 'var(--accent)' }} />,
   proactive: <Zap style={{ width: 18, height: 18, color: 'var(--warning)' }} />,
   life: <Clock style={{ width: 18, height: 18, color: 'var(--success)' }} />,
@@ -186,6 +187,12 @@ const defaultMemory: BotConfig['memory'] = {
   },
 };
 
+const defaultSkills: BotConfig['skills'] = {
+  global: {},
+  bot: {},
+  resolved: {},
+};
+
 const defaultProactive: ProactiveConfig = {
   enabled: false,
   mode: 'active',
@@ -286,6 +293,13 @@ function normalizeConfig(data: BotConfig): BotConfig {
     name: raw.name || raw.bot_id || '未命名 Bot',
     schema: raw.schema || { sections: [], sensitive_fields: [] },
     model: { ...defaultModel, ...(raw.model || {}) },
+    skills: {
+      ...defaultSkills,
+      ...(raw.skills || {}),
+      global: { ...defaultSkills.global, ...((raw.skills || {}).global || {}) },
+      bot: { ...defaultSkills.bot, ...((raw.skills || {}).bot || {}) },
+      resolved: { ...defaultSkills.resolved, ...((raw.skills || {}).resolved || {}) },
+    },
     memory: {
       ...defaultMemory,
       ...(raw.memory || {}),
@@ -380,6 +394,7 @@ export function Settings() {
     if (!savedConfig || !draft) return [];
     const sections: Array<[SectionId, keyof BotConfig]> = [
       ['model', 'model'],
+      ['skills', 'skills'],
       ['memory', 'memory'],
       ['proactive', 'proactive'],
       ['life', 'life'],
@@ -447,6 +462,39 @@ export function Settings() {
         ...draft.persona_summary.speaking_style,
         ...patch,
       },
+    });
+  };
+
+  const patchSkillLayer = (
+    layer: 'global' | 'bot',
+    skillName: string,
+    patch: Partial<SkillEntryConfig>,
+    removeWhenEmpty = false,
+  ) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const currentLayer = { ...(prev.skills?.[layer] || {}) } as Record<string, SkillEntryConfig>;
+      const current = { ...(currentLayer[skillName] || {}) };
+      const next = { ...current, ...patch } as Record<string, unknown>;
+      const compact: SkillEntryConfig = {};
+      Object.entries(next).forEach(([key, value]) => {
+        if (value === undefined || value === null) return;
+        if (typeof value === 'string' && value.trim() === '') return;
+        compact[key] = value as never;
+      });
+      if (removeWhenEmpty && Object.keys(compact).length === 0) {
+        delete currentLayer[skillName];
+      } else {
+        currentLayer[skillName] = compact;
+      }
+      return {
+        ...prev,
+        skills: {
+          ...prev.skills,
+          [layer]: currentLayer,
+          resolved: { ...(prev.skills?.resolved || {}), ...currentLayer },
+        },
+      };
     });
   };
 
@@ -539,6 +587,7 @@ export function Settings() {
       };
       const payload = {
         model: draft.model,
+        skills: draft.skills,
         memory: draft.memory,
         proactive: draft.proactive,
         life: draft.life,
@@ -659,6 +708,73 @@ export function Settings() {
             <TestTube style={{ width: 14, height: 14, marginRight: 6 }} />
             测试连接
           </Button>
+        </div>
+      </SectionCard>
+
+      <SectionCard id="skills" title={sectionMeta.skills?.title || '技能能力'} description={sectionMeta.skills?.description} restart={sectionMeta.skills?.restart}>
+        <div style={{ display: 'grid', gap: 20 }}>
+          {(['image_generation', 'image_understanding'] as const).map((skillName) => {
+            const globalCfg = (draft.skills.global[skillName] || {}) as SkillEntryConfig;
+            const botCfg = (draft.skills.bot[skillName] || {}) as SkillEntryConfig;
+            const resolved = (draft.skills.resolved[skillName] || {}) as SkillEntryConfig;
+            const isVision = skillName === 'image_understanding';
+            return (
+              <Card key={skillName}>
+                <CardContent style={{ padding: 16, display: 'grid', gap: 14 }}>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {skillName === 'image_generation' ? '图片生成' : '图片理解'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    当前生效：enabled={String(Boolean(resolved.enabled))} / auto={String(Boolean(resolved.auto))} / provider={String(resolved.provider || '-') } / model={String(resolved.model || '-') }
+                  </div>
+                  <div style={gridStyle}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>全局默认（models.yaml）</div>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>启用</span>
+                          <Toggle checked={Boolean(globalCfg.enabled)} onChange={(event) => patchSkillLayer('global', skillName, { enabled: event.target.checked })} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>自动触发</span>
+                          <Toggle checked={Boolean(globalCfg.auto)} onChange={(event) => patchSkillLayer('global', skillName, { auto: event.target.checked })} />
+                        </div>
+                        <Input label="Provider" value={String(globalCfg.provider || '')} onChange={(event) => patchSkillLayer('global', skillName, { provider: event.target.value })} />
+                        <Input label="Model" value={String(globalCfg.model || '')} onChange={(event) => patchSkillLayer('global', skillName, { model: event.target.value })} />
+                        {isVision && (
+                          <>
+                            <Input label="最大图片大小(MB)" type="number" min="1" value={Number(globalCfg.max_image_size_mb || 8)} onChange={(event) => patchSkillLayer('global', skillName, { max_image_size_mb: Number(event.target.value) })} />
+                            <Input label="单次最大图片数" type="number" min="1" value={Number(globalCfg.max_images_per_message || 3)} onChange={(event) => patchSkillLayer('global', skillName, { max_images_per_message: Number(event.target.value) })} />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>当前 Bot 覆盖（bots.yaml）</div>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>启用</span>
+                          <Toggle checked={Boolean(botCfg.enabled)} onChange={(event) => patchSkillLayer('bot', skillName, { enabled: event.target.checked }, false)} />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>自动触发</span>
+                          <Toggle checked={Boolean(botCfg.auto)} onChange={(event) => patchSkillLayer('bot', skillName, { auto: event.target.checked }, false)} />
+                        </div>
+                        <Input label="Provider" value={String(botCfg.provider || '')} onChange={(event) => patchSkillLayer('bot', skillName, { provider: event.target.value }, true)} />
+                        <Input label="Model" value={String(botCfg.model || '')} onChange={(event) => patchSkillLayer('bot', skillName, { model: event.target.value }, true)} />
+                        {isVision && (
+                          <>
+                            <Input label="最大图片大小(MB)" type="number" min="1" value={Number(botCfg.max_image_size_mb || 8)} onChange={(event) => patchSkillLayer('bot', skillName, { max_image_size_mb: Number(event.target.value) }, true)} />
+                            <Input label="单次最大图片数" type="number" min="1" value={Number(botCfg.max_images_per_message || 3)} onChange={(event) => patchSkillLayer('bot', skillName, { max_images_per_message: Number(event.target.value) }, true)} />
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       </SectionCard>
 

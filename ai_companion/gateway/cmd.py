@@ -47,6 +47,7 @@ from ai_companion.gateway.path_resolver import (
     get_data_dir as resolve_data_dir,
     get_memory_db_path as resolve_memory_db_path,
 )
+from ai_companion.skill.config_merge import merge_skill_config
 from ai_companion.ui_server import (
     UIStartResult,
     ensure_ui_server,
@@ -1557,6 +1558,8 @@ async def _run_bot_with_gateway_memory_context(bot, event, adapter_extra: dict |
         "channel_type": getattr(source, "chat_type", None),
         "chat_id": getattr(source, "chat_id", None),
         "message_id": getattr(event, "message_id", None),
+        "media_urls": list(getattr(event, "media_urls", []) or []),
+        "media_types": list(getattr(event, "media_types", []) or []),
         "metadata": {
             "thread_id": getattr(source, "thread_id", None),
             "chat_name": getattr(source, "chat_name", None),
@@ -1699,7 +1702,8 @@ async def run_gateway(daemon: bool = True):
         platform_configs_by_type["weixin"] = weixin_profiles[0]["extra"]
 
     for bot_config in config.get_enabled_bots():
-        bot_config = {**bot_config, "data_dir": str(data_dir)}
+        merged_skills = merge_skill_config(config.models.get("skills", {}), bot_config.get("skills", {}))
+        bot_config = {**bot_config, "data_dir": str(data_dir), "skills": merged_skills}
         bot = BotInstance(bot_config, model=model, memory_config=memory_config)
         bot.set_allowed_proactive_scheduler_platforms(set(platform_configs_by_type.keys()) or {"feishu"})
         proactive_platform_type = (bot.proactive_config.platform_type or "cli").lower()

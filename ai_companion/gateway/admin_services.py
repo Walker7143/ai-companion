@@ -43,6 +43,23 @@ WEB_CONFIG_SCHEMA = {
             },
         },
         {
+            "id": "skills",
+            "title": "技能能力",
+            "scope": "global+bot",
+            "description": "配置图片生成/图片理解等内置技能的启用状态、自动路由和 provider 参数。",
+            "restart": "保存后新请求生效；若 Gateway 已运行建议重启后再验证自动路由。",
+            "fields": {
+                "image_generation.enabled": "是否启用图片生成能力。",
+                "image_generation.auto": "是否允许自然语言自动触发图片生成。",
+                "image_generation.provider": "图片生成 provider，目前常用 minimax。",
+                "image_generation.model": "图片生成模型名，例如 image-01。",
+                "image_understanding.enabled": "是否启用图片理解能力。",
+                "image_understanding.auto": "是否允许图片消息自动触发理解。",
+                "image_understanding.provider": "图片理解 provider：openai / minimax / custom。",
+                "image_understanding.model": "图片理解模型名，例如 gpt-4o。",
+            },
+        },
+        {
             "id": "memory",
             "title": "记忆与上下文",
             "scope": "global",
@@ -281,6 +298,32 @@ def _is_masked_or_empty(value: Any) -> bool:
     return value in (None, "") or is_masked_secret(str(value))
 
 
+def _normalize_skill_tree(value: Any) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for skill_name, raw_cfg in value.items():
+        if not isinstance(raw_cfg, dict):
+            continue
+        cfg: dict[str, Any] = {}
+        for key, raw_val in raw_cfg.items():
+            if isinstance(raw_val, dict):
+                cfg[key] = _normalize_skill_tree({"_": raw_val}).get("_", raw_val)
+                continue
+            if isinstance(raw_val, list):
+                cfg[key] = raw_val
+                continue
+            if key in {"enabled", "auto"}:
+                cfg[key] = _as_bool(raw_val, True if key == "enabled" else False)
+                continue
+            if key in {"max_image_size_mb", "max_images_per_message"}:
+                cfg[key] = _as_int(raw_val, 8 if key == "max_image_size_mb" else 3, 1)
+                continue
+            cfg[key] = raw_val
+        result[str(skill_name)] = cfg
+    return result
+
+
 def _validate_feishu_one_to_one_binding(feishu: dict):
     if not isinstance(feishu, dict):
         return
@@ -436,6 +479,7 @@ class ConfigAdminService:
         self.config_dir = Path(config.config_dir)
         self.models_path = self.config_dir / "models.yaml"
         self.main_config_path = self.config_dir / "config.yaml"
+        self.bots_path = self.config_dir / "bots.yaml"
 
     def get_bot_config(self, bot_id: str) -> dict | None:
         bot = self.bot_manager.get_bot(bot_id) if self.bot_manager else None
@@ -456,6 +500,7 @@ class ConfigAdminService:
             "name": bot_name,
             "schema": WEB_CONFIG_SCHEMA,
             "model": public_model_config(model_cfg),
+            "skills": self._public_skills(bot_id, models_data),
             "memory": self._public_memory(models_data.get("memory", {})),
             "proactive": self._public_proactive(proactive_raw),
             "life": self._public_life(life_raw),
@@ -480,6 +525,11 @@ class ConfigAdminService:
             self._save_memory(body["memory"])
             changed.append(str(self.models_path))
             warnings.append("记忆配置对新会话立即生效，运行中的 Bot 可能需要重启 Gateway 才完全应用。")
+
+        if "skills" in body:
+            self._save_skills(bot_id, body["skills"])
+            changed.extend([str(self.models_path), str(self.bots_path)])
+            warnings.append("技能开关与自动路由建议重启 Gateway 后验证。")
 
         if "proactive" in body:
             proactive_path = persona_dir / "proactive.json"
@@ -553,6 +603,21 @@ class ConfigAdminService:
                 "summarize_after_messages": _as_int(daily.get("summarize_after_messages"), 12, 1, 500),
                 "summarize_after_chars": _as_int(daily.get("summarize_after_chars"), 3000, 200, 100000),
             },
+        }
+
+    def _public_skills(self, bot_id: str, models_data: dict) -> dict:
+        global_skills = models_data.get("skills", {}) if isinstance(models_data.get("skills"), dict) else {}
+        bots_data = _load_yaml(self.bots_path)
+        bot_skills = {}
+        for bot_cfg in bots_data.get("bots", []) if isinstance(bots_data.get("bots"), list) else []:
+            if str(bot_cfg.get("id") or "") == bot_id and isinstance(bot_cfg.get("skills"), dict):
+                bot_skills = bot_cfg.get("skills", {})
+                break
+        merged = _deep_merge(global_skills, bot_skills)
+        return {
+            "global": global_skills,
+            "bot": bot_skills,
+            "resolved": merged,
         }
 
     def _public_proactive(self, cfg: dict) -> dict:
@@ -778,6 +843,40 @@ class ConfigAdminService:
             existing["soft_limit_chars"] = max(500, existing["hard_limit_chars"] - 1000)
         models_data["memory"] = existing
         _write_yaml(self.models_path, models_data)
+
+    def _save_skills(self, bot_id: str, skills_data: dict):
+        if not isinstance(skills_data, dict):
+            return
+
+        global_skills = skills_data.get("global")
+        bot_skills = skills_data.get("bot")
+        if not isinstance(global_skills, dict):
+            global_skills = {}
+        if not isinstance(bot_skills, dict):
+            bot_skills = {}
+
+        models_data = _load_yaml(self.models_path)
+        models_data["skills"] = _normalize_skill_tree(global_skills)
+        _write_yaml(self.models_path, models_data)
+
+        bots_data = _load_yaml(self.bots_path)
+        bots = bots_data.get("bots")
+        if not isinstance(bots, list):
+            bots = []
+        target = None
+        for item in bots:
+            if isinstance(item, dict) and str(item.get("id") or "") == bot_id:
+                target = item
+                break
+        if target is None:
+            target = {"id": bot_id, "name": bot_id, "enabled": True}
+            bots.append(target)
+        if bot_skills:
+            target["skills"] = _normalize_skill_tree(bot_skills)
+        else:
+            target.pop("skills", None)
+        bots_data["bots"] = bots
+        _write_yaml(self.bots_path, bots_data)
 
     def _save_proactive(self, path: Path, proactive_data: dict):
         from ai_companion.proactive.config import ProactiveConfig
