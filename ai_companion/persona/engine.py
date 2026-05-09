@@ -121,8 +121,85 @@ class PersonaEngine:
         lines.append("  - 肢体/神态表达：开启。可以用很短的括号动作或神态描写表达当下情绪、身体反应和临场互动。")
         lines.append(f"    * 频率：{EMBODIED_FREQUENCY_GUIDANCE[frequency]}")
         lines.append("    * 描写优先具体、轻巧：眼神、表情、姿态、手部动作、距离变化、拿放物品、停顿反应等。")
-        lines.append("    * 例子：（低头看了你一眼）（把杯子推到你面前）（假装不经意地移开视线）（指尖轻轻敲了敲桌面）")
         lines.append("    * 动作要贴合你的人格、关系和当下情绪；不要每句都用，不要堆叠，也不要用动作替代正面回应。")
+        lines.append("    * 动作必须由你根据当前场景自行推理生成，不要套用固定词库；避免反复使用同一动作词（如“停顿/小声/打字”）。")
+
+    def build_embodied_expression_turn_prompt(
+        self,
+        *,
+        user_input: str,
+        intent: str = "casual_chat",
+        recent_actions: list[str] | None = None,
+        relationship_state: dict | None = None,
+    ) -> str:
+        """Build per-turn guidance so body language is generated in the main response."""
+        speaking_style = self._load_json(self.persona.persona_dir / "speaking_style.json")
+        profile = self._load_json(self.persona.persona_dir / "profile.json")
+        conversation_style = self._load_json(self.persona.persona_dir / "conversation_style_rules.json")
+        config = self._embodied_expression_config(speaking_style)
+        if not config["enabled"]:
+            return (
+                "【本轮肢体/神态表达】\n"
+                "- 当前配置：关闭。除非用户明确要求描写动作，否则本轮不要主动加入括号动作、神态描写或舞台提示。"
+            )
+
+        frequency = config["frequency"]
+        scene = self._embodied_scene_label(intent, user_input)
+        action_policy = self._embodied_turn_policy(frequency, intent, user_input)
+        tone = str(speaking_style.get("tone", "") or "自然").strip()
+        traits = "、".join(str(item) for item in profile.get("personality_tags", []) if str(item).strip())
+        relation = str(profile.get("relationship_to_user", "") or "").strip()
+        recent = [str(item).strip() for item in (recent_actions or []) if str(item).strip()]
+        recent_text = "、".join(recent[:6]) if recent else "无"
+        tension = ""
+        if isinstance(relationship_state, dict) and relationship_state.get("tension_score") is not None:
+            tension = f"\n- 当前关系张力：{relationship_state.get('tension_score')}，动作要注意分寸，不要用动作掩盖正面回应。"
+
+        natural_patterns = conversation_style.get("natural_patterns")
+        style_line = ""
+        if isinstance(natural_patterns, list) and natural_patterns:
+            joined = "；".join(str(item) for item in natural_patterns[:3] if str(item).strip())
+            if joined:
+                style_line = f"\n- 自然表达参考：{joined}"
+
+        return (
+            "【本轮肢体/神态表达】\n"
+            f"- 当前配置：{frequency}。{action_policy}\n"
+            f"- 当前场景：{scene}。\n"
+            f"- 人物基调：{tone}；性格：{traits or '未特别标注'}；关系：{relation or '未特别标注'}。{style_line}\n"
+            f"- 最近已用过的动作：{recent_text}。本轮避免复用这些动作及同类表达。{tension}\n"
+            "- 如果写动作，只能写成当下可感知的具体微动作，例如眼神、表情、姿态、手部细节、距离变化、物品互动、呼吸或语速变化。\n"
+            "- 禁止使用“（消息）”“（打字）”“（停顿）”“（小声）”这类标签词；不要把动作写成旁白模板。"
+        )
+
+    def _embodied_scene_label(self, intent: str, user_input: str) -> str:
+        raw_intent = str(intent or "casual_chat")
+        text = str(user_input or "")
+        if raw_intent == "task_request":
+            return "任务请求，优先把事情办清楚"
+        if raw_intent == "emotional_support":
+            return "情绪陪伴，动作可以更轻、更慢，但不要过度表演"
+        if raw_intent == "relationship_repair":
+            return "关系修复，动作要克制、真诚，避免调侃"
+        if any(token in text for token in ("想你", "抱抱", "喜欢", "陪我", "难过", "累", "委屈")):
+            return "亲密或情绪明显的聊天"
+        return "日常闲聊"
+
+    def _embodied_turn_policy(self, frequency: str, intent: str, user_input: str) -> str:
+        raw_intent = str(intent or "casual_chat")
+        text = str(user_input or "")
+        emotional = raw_intent in {"emotional_support", "relationship_repair"} or any(
+            token in text for token in ("难过", "累", "委屈", "害怕", "想你", "抱抱", "喜欢")
+        )
+        if raw_intent == "task_request":
+            if frequency == "high":
+                return "任务型回答也要降频；只有确实自然时才加入 0-1 个很短动作。"
+            return "任务型回答默认不加入动作，除非用户情绪很明显。"
+        if frequency == "low":
+            return "低频：本轮只有在情绪明显、亲密关心或场景转换时才加入 0-1 个动作。" if emotional else "低频：本轮倾向不加动作。"
+        if frequency == "high":
+            return "高频：本轮可以自然加入 0-1 个具体动作；情绪强时最多 2 个，但不能堆叠。"
+        return "中频：本轮可按场景决定是否加入 0-1 个具体动作；不需要每次都写。"
 
     def _embodied_expression_config(self, speaking_style: dict) -> dict:
         raw = speaking_style.get("embodied_expression") if isinstance(speaking_style, dict) else None

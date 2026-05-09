@@ -538,14 +538,52 @@ class BotInstance:
         """公开方法：确保后台调度器已启动。"""
         await self._ensure_schedulers_started()
 
-    def _build_system_prompt(self, adjustment_note: str = "", memory_suffix: str | None = None) -> str:
+    def _build_system_prompt(
+        self,
+        adjustment_note: str = "",
+        memory_suffix: str | None = None,
+        *,
+        user_input: str = "",
+        memory_context: dict | None = None,
+        relationship_state: dict | None = None,
+    ) -> str:
         life_context = self.life_engine.get_status() if self.life_engine else None
         system_prompt = self.persona_engine.build_system_prompt(life_context=life_context)
+        embodied_prompt = self._build_embodied_expression_prompt(
+            user_input=user_input,
+            memory_context=memory_context or {},
+            relationship_state=relationship_state or {},
+        )
+        if embodied_prompt:
+            system_prompt = system_prompt + "\n\n" + embodied_prompt
         if memory_suffix:
             system_prompt = system_prompt + "\n\n" + memory_suffix
         if adjustment_note:
             system_prompt = system_prompt + adjustment_note
         return system_prompt
+
+    def _build_embodied_expression_prompt(
+        self,
+        *,
+        user_input: str,
+        memory_context: dict | None,
+        relationship_state: dict | None,
+    ) -> str:
+        if not self.persona:
+            return ""
+        recent_assistant_replies = [
+            str(item.get("content", "") or "")
+            for item in self.conversation_history[-12:]
+            if isinstance(item, dict) and item.get("role") == "assistant"
+        ]
+        recent_actions = self.response_polisher.list_recent_actions(recent_assistant_replies, limit=6)
+        memory_intent = str((memory_context or {}).get("memory_intent", "casual_chat") or "casual_chat")
+        return self.persona_engine.build_embodied_expression_turn_prompt(
+            user_input=user_input,
+            intent=memory_intent,
+            recent_actions=recent_actions,
+            relationship_state=relationship_state or {},
+        )
 
     async def handle_message(self, user_input: str, memory_turn_context: dict | None = None) -> str:
         """处理用户消息，返回回复"""
@@ -638,6 +676,9 @@ class BotInstance:
             system_prompt = self._build_system_prompt(
                 adjustment_note=adjustment_note,
                 memory_suffix=memory_suffix,
+                user_input=user_input,
+                memory_context=ctx,
+                relationship_state=relationship_state,
             )
 
             # 4. 构建 messages
@@ -657,7 +698,13 @@ class BotInstance:
             )
         else:
             memory_suffix = image_context_suffix if image_context_suffix else None
-            system_prompt = self._build_system_prompt(adjustment_note=adjustment_note, memory_suffix=memory_suffix)
+            system_prompt = self._build_system_prompt(
+                adjustment_note=adjustment_note,
+                memory_suffix=memory_suffix,
+                user_input=user_input,
+                memory_context={},
+                relationship_state=relationship_state,
+            )
             messages = [{"role": "user", "content": user_input}]
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:

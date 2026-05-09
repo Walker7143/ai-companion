@@ -29,6 +29,8 @@ class ResponseStylePolisher:
         "总之，",
     ]
 
+    ACTION_TEXT_RE = re.compile(r"[（(]([^（）()\n]{1,40})[）)]")
+
     def polish(
         self,
         text: str,
@@ -47,6 +49,17 @@ class ResponseStylePolisher:
         text = self._apply_interaction_style(text, user_understanding or {})
         text = self._apply_intent_pacing(text, intent=intent, relationship_state=relationship_state or {})
         return text.strip()
+
+    def list_recent_actions(self, recent_replies: list[str], *, limit: int = 6) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for reply in recent_replies[-limit:]:
+            for match in self.ACTION_TEXT_RE.finditer(str(reply or "")):
+                normalized = self._normalize_action(match.group(1))
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    ordered.append(str(match.group(1) or "").strip())
+        return ordered
 
     def _remove_ai_disclaimers(self, text: str) -> str:
         for phrase in self.AI_PHRASES:
@@ -111,6 +124,11 @@ class ResponseStylePolisher:
         manual_style = manual.get("interaction_style") if isinstance(manual.get("interaction_style"), dict) else {}
         auto_style = auto.get("interaction_style") if isinstance(auto.get("interaction_style"), dict) else {}
         return {**auto_style, **manual_style}
+
+    def _normalize_action(self, action_text: str) -> str:
+        raw = str(action_text or "").strip().lower()
+        raw = re.sub(r"[，。,.!！?？:：;；~～…·\s]+", "", raw)
+        return raw
 
 
 def _float(value: object) -> float:

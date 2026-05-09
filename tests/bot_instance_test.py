@@ -199,6 +199,91 @@ class PersonaEngineDefaultStyleTest(unittest.TestCase):
         self.assertIn("肢体/神态表达：当前已关闭", prompt)
         self.assertIn("不要主动加入括号动作", prompt)
         self.assertNotIn("多数合适回复", prompt)
+        self.assertNotIn("避免反复使用同一动作词", prompt)
+
+    def test_system_prompt_mentions_embodied_expression_variety(self):
+        with TemporaryDirectory(prefix="persona-style-variety-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        self.assertIn("避免反复使用同一动作词", prompt)
+
+
+class ResponseStyleEmbodiedActionPolishTest(unittest.TestCase):
+    def test_extracts_recent_actions_for_turn_prompt(self):
+        from ai_companion.bot.response_style import ResponseStylePolisher
+
+        polisher = ResponseStylePolisher()
+        recent = [
+            "（低头看了你一眼）嗯，我在听。",
+            "（指尖轻轻敲了敲桌面）你继续说。",
+            "（低头看了你一眼）别急。",
+        ]
+        actions = polisher.list_recent_actions(recent)
+
+        self.assertEqual(actions, ["低头看了你一眼", "指尖轻轻敲了敲桌面"])
+
+    def test_does_not_rewrite_actions_in_post_polish(self):
+        from ai_companion.bot.response_style import ResponseStylePolisher
+
+        polisher = ResponseStylePolisher()
+        raw = "（消息）我在。 （停顿）你慢慢讲。"
+        polished = polisher.polish(raw)
+
+        self.assertIn("（消息）", polished)
+        self.assertIn("（停顿）", polished)
+
+
+class BotInstanceEmbodiedPromptTest(unittest.IsolatedAsyncioTestCase):
+    async def test_main_generation_prompt_includes_dynamic_embodied_context(self):
+        class PromptCaptureModel:
+            provider = "test"
+            model = "prompt-capture"
+
+            def __init__(self):
+                self.system_prompts = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                self.system_prompts.append(system_prompt)
+                return "ok"
+
+        with TemporaryDirectory(prefix="bot-embodied-prompt-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            style_path = root / bot_id / "persona" / "speaking_style.json"
+            style_path.write_text(
+                json.dumps(
+                    {
+                        "tone": "安静、克制",
+                        "embodied_expression": {"enabled": True, "frequency": "high"},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            model = PromptCaptureModel()
+            bot = BotInstance({"id": bot_id, "name": "测试 Bot", "data_dir": str(root)}, model=model, data_dir=root, refusal_enabled=False)
+            bot._initialized = True
+            bot._schedulers_started = True
+            bot.conversation_history.append({"role": "assistant", "content": "（低头看了你一眼）嗯。"})
+            try:
+                response = await bot.handle_message("有点累，陪我说会儿话")
+            finally:
+                await bot.close()
+
+            self.assertEqual(response, "ok")
+            self.assertEqual(len(model.system_prompts), 1)
+            prompt = model.system_prompts[0]
+            self.assertIn("【本轮肢体/神态表达】", prompt)
+            self.assertIn("当前配置：high", prompt)
+            self.assertIn("最近已用过的动作：低头看了你一眼", prompt)
+            self.assertIn("禁止使用“（消息）”“（打字）”“（停顿）”“（小声）”", prompt)
+            self.assertNotIn("对话润色器", prompt)
 
 
 class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
