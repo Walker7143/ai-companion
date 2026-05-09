@@ -3379,7 +3379,13 @@ class SystemTestSuite:
                         "speaking_style": {
                             "tone": "温柔",
                             "catchphrases": ["嗯"],
-                            "embodied_expression": {"enabled": True, "frequency": "high"},
+                            "embodied_expression": {
+                                "enabled": True,
+                                "frequency": "high",
+                                "action_style": "动作轻一点，偏照顾感",
+                                "action_examples": ["把杯子往你手边推近一点"],
+                                "avoid_actions": ["夸张拥抱"],
+                            },
                         },
                     },
                 },
@@ -3491,7 +3497,11 @@ class SystemTestSuite:
             and style["口头禅"] == ["嗯"]
             and style["embodied_expression"]["enabled"] is True
             and style["embodied_expression"]["frequency"] == "high"
+            and style["embodied_expression"]["action_style"] == "动作轻一点，偏照顾感"
+            and style["embodied_expression"]["action_examples"] == ["把杯子往你手边推近一点"]
+            and style["embodied_expression"]["avoid_actions"] == ["夸张拥抱"]
             and web_after["persona_summary"]["speaking_style"]["embodied_expression"]["frequency"] == "high"
+            and web_after["persona_summary"]["speaking_style"]["embodied_expression"]["action_examples"] == ["把杯子往你手边推近一点"]
             and refresh["count"] >= 2
         )
         detail = f"model={models['openai']['model']} memory={models['memory']['embedding']} refresh={refresh['count']}"

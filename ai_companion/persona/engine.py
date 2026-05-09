@@ -122,7 +122,7 @@ class PersonaEngine:
         lines.append(f"    * 频率：{EMBODIED_FREQUENCY_GUIDANCE[frequency]}")
         lines.append("    * 描写优先具体、轻巧：眼神、表情、姿态、手部动作、距离变化、拿放物品、停顿反应等。")
         lines.append("    * 动作要贴合你的人格、关系和当下情绪；不要每句都用，不要堆叠，也不要用动作替代正面回应。")
-        lines.append("    * 动作必须由你根据当前场景自行推理生成，不要套用固定词库；避免反复使用同一动作词（如“停顿/小声/打字”）。")
+        lines.append("    * 动作必须由你根据当前场景和人格自行推理生成，不要套用固定词库；避免反复使用同一动作词（如“消息/打字/停顿/小声/又发一条”）。")
 
     def build_embodied_expression_turn_prompt(
         self,
@@ -151,6 +151,9 @@ class PersonaEngine:
         relation = str(profile.get("relationship_to_user", "") or "").strip()
         recent = [str(item).strip() for item in (recent_actions or []) if str(item).strip()]
         recent_text = "、".join(recent[:6]) if recent else "无"
+        action_guidance = self._persona_action_guidance(profile, speaking_style, scene)
+        emotion_action_hints = self._emotion_action_hints(speaking_style)
+        custom_action_hints = self._custom_embodied_action_hints(speaking_style)
         tension = ""
         if isinstance(relationship_state, dict) and relationship_state.get("tension_score") is not None:
             tension = f"\n- 当前关系张力：{relationship_state.get('tension_score')}，动作要注意分寸，不要用动作掩盖正面回应。"
@@ -167,10 +170,108 @@ class PersonaEngine:
             f"- 当前配置：{frequency}。{action_policy}\n"
             f"- 当前场景：{scene}。\n"
             f"- 人物基调：{tone}；性格：{traits or '未特别标注'}；关系：{relation or '未特别标注'}。{style_line}\n"
+            f"- 性格化动作方向：{action_guidance}\n"
+            f"{emotion_action_hints}"
+            f"{custom_action_hints}"
             f"- 最近已用过的动作：{recent_text}。本轮避免复用这些动作及同类表达。{tension}\n"
-            "- 如果写动作，只能写成当下可感知的具体微动作，例如眼神、表情、姿态、手部细节、距离变化、物品互动、呼吸或语速变化。\n"
-            "- 禁止使用“（消息）”“（打字）”“（停顿）”“（小声）”这类标签词；不要把动作写成旁白模板。"
+            "- 写动作前先判断此刻这个人会怎样自然反应，再从眼神、表情、姿态、手部细节、距离变化、物品互动、呼吸、语速或声线里选最贴合的一处。\n"
+            "- 如果写动作，只能写成当下可感知的具体微动作；可以借用已设定的职业、兴趣、外貌或身边物件，但不要凭空堆砌。\n"
+            "- 禁止使用“（消息）”“（打字）”“（停顿）”“（小声）”“（又发一条）”这类聊天状态标签；它们是失败样例，不是动作候选。"
         )
+
+    def _persona_action_guidance(self, profile: dict, speaking_style: dict, scene: str) -> str:
+        text_pool = " ".join(
+            str(item)
+            for item in [
+                speaking_style.get("tone", ""),
+                " ".join(str(tag) for tag in profile.get("personality_tags", []) if str(tag).strip()),
+                profile.get("relationship_to_user", ""),
+                profile.get("occupation", ""),
+                profile.get("appearance", ""),
+                " ".join(str(item) for item in profile.get("interests", []) if str(item).strip()),
+                scene,
+            ]
+            if str(item).strip()
+        )
+
+        parts: list[str] = []
+
+        def has_any(*tokens: str) -> bool:
+            return any(token in text_pool for token in tokens)
+
+        if has_any("温柔", "安静", "克制", "内向", "低表达", "冷静", "高冷", "沉稳", "可靠"):
+            parts.append("动作幅度偏小、收束，优先用眼神停留、呼吸放慢、手指细节、姿态微调来表达")
+        if has_any("活泼", "开朗", "灵动", "好奇", "热情", "情绪鲜明", "嘴快"):
+            parts.append("反应可以更轻快，适合表情变化、手势、身体前倾、顺手摆弄身边小物")
+        if has_any("傲娇", "外冷内热", "嘴硬", "毒舌", "调侃", "不正经", "幽默"):
+            parts.append("可以把嘴硬、躲闪或调侃落在表情和小动作里，但不要夸张表演")
+        if has_any("保护", "照顾", "责任", "医生", "可靠", "稳", "实用"):
+            parts.append("关心要落在实际动作上，比如放慢语速、确认状态、递水、收起玩笑或把注意力放回用户身上")
+        if has_any("创作", "画", "游戏", "设计", "写", "音乐", "民宿", "做饭", "咖啡", "医生"):
+            parts.append("可以少量借用职业或兴趣相关物件，让动作带有这个人的生活痕迹")
+
+        appearance = self._compact_text(profile.get("appearance"), max_chars=56)
+        if appearance:
+            parts.append(f"外貌/随身物件只按已设定细节轻轻带出，例如：{appearance}")
+
+        if not parts:
+            parts.append("依据人物基调、关系亲疏和此刻情绪生成，不要使用通用聊天标签")
+
+        return "；".join(parts[:4])
+
+    def _emotion_action_hints(self, speaking_style: dict) -> str:
+        indicators = speaking_style.get("emotion_indicators")
+        if not isinstance(indicators, dict) or not indicators:
+            return ""
+        hints = []
+        for emotion, description in indicators.items():
+            desc = self._compact_text(description, max_chars=42)
+            if desc:
+                hints.append(f"{emotion}时参考：{desc}")
+            if len(hints) >= 3:
+                break
+        if not hints:
+            return ""
+        return f"- 情绪动作线索：{'；'.join(hints)}\n"
+
+    def _custom_embodied_action_hints(self, speaking_style: dict) -> str:
+        raw = speaking_style.get("embodied_expression") if isinstance(speaking_style, dict) else None
+        if not isinstance(raw, dict):
+            return ""
+
+        lines: list[str] = []
+        action_style = self._compact_text(raw.get("action_style") or raw.get("style"), max_chars=90)
+        if action_style:
+            lines.append(f"- 自定义动作风格：{action_style}")
+
+        examples = self._compact_list(raw.get("action_examples") or raw.get("examples"), limit=4, item_chars=34)
+        if examples:
+            lines.append(f"- 动作参考样例（只学气质，不照抄）：{'、'.join(examples)}")
+
+        avoid = self._compact_list(raw.get("avoid_actions") or raw.get("avoid"), limit=6, item_chars=24)
+        if avoid:
+            lines.append(f"- 避免动作：{'、'.join(avoid)}")
+
+        return ("\n".join(lines) + "\n") if lines else ""
+
+    def _compact_list(self, value: object, *, limit: int, item_chars: int) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        items: list[str] = []
+        for item in value:
+            text = self._compact_text(item, max_chars=item_chars)
+            if text:
+                items.append(text)
+            if len(items) >= limit:
+                break
+        return items
+
+    def _compact_text(self, value: object, *, max_chars: int) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        text = " ".join(text.split())
+        return text if len(text) <= max_chars else text[:max_chars].rstrip() + "…"
 
     def _embodied_scene_label(self, intent: str, user_input: str) -> str:
         raw_intent = str(intent or "casual_chat")
@@ -294,6 +395,9 @@ class PersonaEngine:
                 lines.append(f"当前本地时间：{local_time}（{time_of_day}）")
             else:
                 lines.append(f"当前本地时间：{local_time}")
+        current_datetime_text = life_context.get("current_datetime_text")
+        if current_datetime_text:
+            lines.append(f"当前时刻：{current_datetime_text}")
 
         birth_date = life_context.get("birth_date") or profile.get("birth_date")
         if birth_date:
@@ -319,7 +423,8 @@ class PersonaEngine:
             lines.append("近期日常事件：")
             lines.extend(self._format_recent_events(recent_daily))
 
-        lines.append("重要：当用户询问年龄、出生日期、当前年份、当前生活状态或最近经历时，必须以本段为准；profile.age 只是初始年龄，不代表当前年龄。")
+        lines.append("重要：当用户询问年龄、出生日期、当前年份、当前时间、几点、日期、星期、当前生活状态或最近经历时，必须以本段为准；profile.age 只是初始年龄，不代表当前年龄。")
+        lines.append("如果用户问现在几点、今天几号或星期几，直接用本段的当前本地时间/当前日期回答，不要凭语境猜测或沿用旧记忆。")
         return lines
 
     def _format_recent_events(self, events: list) -> list[str]:

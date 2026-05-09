@@ -2657,6 +2657,7 @@ class LifeEngine:
         major_events = self.state.major_life_events
         real_age = self._calc_real_age()
         local_now = self._get_local_now()
+        time_of_day = self._time_of_day_label(local_now.hour)
         return {
             "bot_mood": self.state.bot_mood,
             "bot_current_activity": self.state.bot_current_activity,
@@ -2671,7 +2672,11 @@ class LifeEngine:
             "year": self.state.year,
             "is_weekend": self.state.is_weekend,
             "local_time": local_now.strftime("%H:%M"),
-            "time_of_day": self._time_of_day_label(local_now.hour),
+            "time_of_day": time_of_day,
+            "current_datetime_text": (
+                f"{self.state.current_date or '未知'} {local_now.strftime('%H:%M')} "
+                f"（{self.state.day_of_week or '周一'}，{time_of_day}）"
+            ),
             "life_stage": self._calc_life_stage(real_age),
             "life_events_count": len(life_events),
             "major_events_count": len(major_events),

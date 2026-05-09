@@ -291,7 +291,19 @@ def _public_embodied_expression(value: Any) -> dict:
     frequency = _normalize_embodied_frequency(data.get("frequency"), "medium")
     if str(data.get("frequency", "")).strip().lower() in {"off", "none", "disabled", "false", "关闭", "关"}:
         enabled = False
-    return {"enabled": enabled, "frequency": frequency}
+    result: dict[str, Any] = {"enabled": enabled, "frequency": frequency}
+
+    for key in ("action_style", "style"):
+        if str(data.get(key) or "").strip():
+            result[key] = str(data[key]).strip()
+    for key in ("action_examples", "examples", "avoid_actions", "avoid"):
+        raw_items = data.get(key)
+        if not isinstance(raw_items, list):
+            continue
+        items = [str(item).strip() for item in raw_items if str(item).strip()]
+        if items:
+            result[key] = items
+    return result
 
 
 def _is_masked_or_empty(value: Any) -> bool:

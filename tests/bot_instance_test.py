@@ -212,6 +212,58 @@ class PersonaEngineDefaultStyleTest(unittest.TestCase):
 
         self.assertIn("避免反复使用同一动作词", prompt)
 
+    def test_turn_prompt_derives_action_guidance_from_persona(self):
+        with TemporaryDirectory(prefix="persona-action-guidance-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            profile_path = root / bot_id / "persona" / "profile.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "id": bot_id,
+                        "name": "测试 Bot",
+                        "age": 24,
+                        "occupation": "急诊科医生",
+                        "personality_tags": ["冷静可靠", "低表达", "保护欲强"],
+                        "relationship_to_user": "很熟悉的人",
+                        "appearance": "常穿深色外套，手指骨节明显",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            style_path = root / bot_id / "persona" / "speaking_style.json"
+            style_path.write_text(
+                json.dumps(
+                    {
+                        "tone": "简洁、沉稳、直接",
+                        "emotion_indicators": {"tender": "关心会藏在行动里"},
+                        "embodied_expression": {
+                            "enabled": True,
+                            "frequency": "medium",
+                            "action_examples": ["把杯子往你手边推近一点"],
+                            "avoid_actions": ["夸张拥抱"],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_embodied_expression_turn_prompt(
+                user_input="我有点不舒服",
+                intent="emotional_support",
+                recent_actions=["低头看了你一眼"],
+            )
+
+        self.assertIn("性格化动作方向", prompt)
+        self.assertIn("动作幅度偏小", prompt)
+        self.assertIn("关心要落在实际动作上", prompt)
+        self.assertIn("动作参考样例", prompt)
+        self.assertIn("避免动作：夸张拥抱", prompt)
+
 
 class ResponseStyleEmbodiedActionPolishTest(unittest.TestCase):
     def test_extracts_recent_actions_for_turn_prompt(self):
@@ -231,11 +283,15 @@ class ResponseStyleEmbodiedActionPolishTest(unittest.TestCase):
         from ai_companion.bot.response_style import ResponseStylePolisher
 
         polisher = ResponseStylePolisher()
-        raw = "（消息）我在。 （停顿）你慢慢讲。"
+        raw = "（消息）我在。 （停顿）你慢慢讲。 （又发一条）（小声）"
         polished = polisher.polish(raw)
 
         self.assertIn("（消息）", polished)
         self.assertIn("（停顿）", polished)
+        self.assertIn("（又发一条）", polished)
+        self.assertIn("（小声）", polished)
+        self.assertIn("我在。", polished)
+        self.assertIn("你慢慢讲。", polished)
 
 
 class BotInstanceEmbodiedPromptTest(unittest.IsolatedAsyncioTestCase):
@@ -260,6 +316,7 @@ class BotInstanceEmbodiedPromptTest(unittest.IsolatedAsyncioTestCase):
                 json.dumps(
                     {
                         "tone": "安静、克制",
+                        "emotion_indicators": {"sad": "回复会短一点，语气放慢"},
                         "embodied_expression": {"enabled": True, "frequency": "high"},
                     },
                     ensure_ascii=False,
@@ -282,8 +339,56 @@ class BotInstanceEmbodiedPromptTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("【本轮肢体/神态表达】", prompt)
             self.assertIn("当前配置：high", prompt)
             self.assertIn("最近已用过的动作：低头看了你一眼", prompt)
-            self.assertIn("禁止使用“（消息）”“（打字）”“（停顿）”“（小声）”", prompt)
+            self.assertIn("性格化动作方向", prompt)
+            self.assertIn("动作幅度偏小", prompt)
+            self.assertIn("情绪动作线索", prompt)
+            self.assertIn("禁止使用“（消息）”“（打字）”“（停顿）”“（小声）”“（又发一条）”", prompt)
             self.assertNotIn("对话润色器", prompt)
+
+
+class BotInstanceDirectTimeQueryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_time_question_injects_local_clock_into_generation_prompt(self):
+        class TimeCaptureModel:
+            provider = "test"
+            model = "time-capture"
+
+            def __init__(self):
+                self.calls = 0
+                self.system_prompts = []
+                self.messages = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                self.calls += 1
+                self.messages.append(messages)
+                self.system_prompts.append(system_prompt)
+                return "现在是 16:58（下午）。"
+
+        with TemporaryDirectory(prefix="bot-time-query-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            model = TimeCaptureModel()
+            bot = BotInstance({"id": bot_id, "name": "测试 Bot", "data_dir": str(root)}, model=model, data_dir=root, refusal_enabled=False)
+            bot._initialized = True
+            bot._schedulers_started = True
+            bot.life_engine.get_status = lambda: {
+                "current_date": "2026-05-09",
+                "day_of_week": "周六",
+                "local_time": "16:58",
+                "time_of_day": "下午",
+                "current_datetime_text": "2026-05-09 16:58（周六，下午）",
+            }
+
+            try:
+                response = await bot.handle_message("现在几点")
+            finally:
+                await bot.close()
+
+            self.assertEqual(model.calls, 1)
+            self.assertIn("当前本地时间：16:58（下午）", model.system_prompts[0])
+            self.assertIn("当前时刻：2026-05-09 16:58（周六，下午）", model.system_prompts[0])
+            self.assertIn("直接用本段的当前本地时间/当前日期回答", model.system_prompts[0])
+            self.assertEqual(response, "现在是 16:58（下午）。")
 
 
 class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
