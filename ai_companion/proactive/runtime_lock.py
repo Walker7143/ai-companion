@@ -21,6 +21,9 @@ _IS_WINDOWS = sys.platform == "win32"
 class BotSchedulerRuntimeLock:
     """A non-blocking lock that elects one scheduler owner for a bot."""
 
+    _WINDOWS_LOCK_OFFSET = 0
+    _WINDOWS_RECORD_OFFSET = 1
+
     def __init__(self, lock_path: Path, *, bot_id: str, metadata: Optional[dict[str, Any]] = None):
         self.lock_path = Path(lock_path)
         self.bot_id = bot_id
@@ -36,7 +39,8 @@ class BotSchedulerRuntimeLock:
             return True
 
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = open(self.lock_path, "a+", encoding="utf-8")
+        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        handle = os.fdopen(fd, "r+b", buffering=0)
         if not self._try_lock(handle):
             handle.close()
             return False
@@ -58,7 +62,10 @@ class BotSchedulerRuntimeLock:
 
     def read_owner(self) -> Optional[dict[str, Any]]:
         try:
-            raw = self.lock_path.read_text(encoding="utf-8").strip()
+            with open(self.lock_path, "rb") as handle:
+                if _IS_WINDOWS:
+                    handle.seek(self._WINDOWS_RECORD_OFFSET)
+                raw = handle.read().decode("utf-8", errors="replace").strip()
         except OSError:
             return None
         if not raw:
@@ -81,9 +88,10 @@ class BotSchedulerRuntimeLock:
             "acquired_at": datetime.now(timezone.utc).isoformat(),
             "metadata": self.metadata,
         }
-        self._handle.seek(0)
-        self._handle.truncate()
-        json.dump(record, self._handle, ensure_ascii=False)
+        offset = self._WINDOWS_RECORD_OFFSET if _IS_WINDOWS else 0
+        self._handle.seek(offset)
+        self._handle.truncate(offset)
+        self._handle.write(json.dumps(record, ensure_ascii=False).encode("utf-8"))
         self._handle.flush()
         try:
             os.fsync(self._handle.fileno())
@@ -95,9 +103,9 @@ class BotSchedulerRuntimeLock:
             if _IS_WINDOWS:
                 handle.seek(0, os.SEEK_END)
                 if handle.tell() == 0:
-                    handle.write("\n")
+                    handle.write(b"\n")
                     handle.flush()
-                handle.seek(0)
+                handle.seek(self._WINDOWS_LOCK_OFFSET)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -108,7 +116,7 @@ class BotSchedulerRuntimeLock:
     def _unlock(self, handle) -> None:
         try:
             if _IS_WINDOWS:
-                handle.seek(0)
+                handle.seek(self._WINDOWS_LOCK_OFFSET)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

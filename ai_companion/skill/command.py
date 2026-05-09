@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,11 @@ _SENSITIVE_TOKEN_PATTERNS = (
     _SK_TOKEN_PATTERN,
     re.compile(r"(?i)(?:api[_ -]?key|secret|token|密钥|令牌)\s*(?:是|=|:|：)?\s*[A-Za-z0-9][A-Za-z0-9_-]{23,}"),
 )
+
+
+def _shell_split(text: str) -> list[str]:
+    contains_windows_path = bool(re.search(r"(?<![A-Za-z0-9_])[A-Za-z]:[\\/]", text or ""))
+    return shlex.split(text, posix=(sys.platform != "win32" and not contains_windows_path))
 
 
 def is_skill_command(text: str) -> bool:
@@ -77,13 +83,13 @@ def parse_skill_management_command(text: str) -> tuple[str, dict[str, Any]] | No
         return None
 
     if lowered.startswith("/skills"):
-        parts = shlex.split(stripped)
+        parts = _shell_split(stripped)
         if len(parts) == 1:
             return ("list", {})
         return _parse_management_tokens(parts[1:])
 
     if lowered.startswith("/skill "):
-        parts = shlex.split(stripped)
+        parts = _shell_split(stripped)
         if len(parts) >= 2 and parts[1].lower() in {"install", "uninstall", "remove", "enable", "disable", "list", "ls", "info"}:
             return _parse_management_tokens(parts[1:])
         rest = stripped[len("/skill"):].strip()
@@ -352,7 +358,7 @@ def parse_cli_params(raw_args: list[str]) -> dict[str, Any]:
         return data
 
     parsed: dict[str, Any] = {"input": joined, "text": joined, "prompt": joined}
-    for token in shlex.split(joined):
+    for token in _shell_split(joined):
         if "=" in token:
             key, value = token.split("=", 1)
             if key:
@@ -497,7 +503,7 @@ def _extract_source(text: str) -> str:
             continue
         if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", token) and "github" in text.lower():
             return f"https://github.com/{token}.git"
-        if token.startswith(("./", "../", "/", "~", "http://", "https://", "git@", "ssh://")):
+        if _looks_like_local_path(token) or token.startswith(("http://", "https://", "git@", "ssh://")):
             return _normalize_github_repo_url(token)
         if lowered.endswith((".zip", ".tar.gz", ".tgz", ".git")):
             return token
@@ -506,7 +512,17 @@ def _extract_source(text: str) -> str:
 
 def _clean_source_token(token: str) -> str:
     cleaned = token.strip()
-    return cleaned.strip(" \t\r\n，,。；;：:）)】]>")
+    return cleaned.strip(" \t\r\n\"'，,。；;：:）)】]>")
+
+
+def _looks_like_local_path(token: str) -> bool:
+    if token.startswith(("./", "../", "/", "~")):
+        return True
+    if re.match(r"^[A-Za-z]:[\\/]", token):
+        return True
+    if token.startswith(("\\\\", "//")):
+        return True
+    return False
 
 
 def _normalize_github_repo_url(source: str) -> str:
@@ -526,8 +542,8 @@ def _looks_like_bare_install_source(rest: str) -> bool:
     lowered = rest.lower()
     if lowered.startswith(("github -", "github:", "github：")):
         return True
-    first = _clean_source_token(shlex.split(rest)[0] if rest else "")
-    if first.startswith(("./", "../", "/", "~", "git@", "ssh://")):
+    first = _clean_source_token(_shell_split(rest)[0] if rest else "")
+    if _looks_like_local_path(first) or first.startswith(("git@", "ssh://")):
         return True
     if first.startswith(("http://", "https://")):
         return first.endswith((".zip", ".tar.gz", ".tgz", ".git")) or _is_github_repo_url(first)
@@ -535,7 +551,7 @@ def _looks_like_bare_install_source(rest: str) -> bool:
 
 
 def _extract_name_after_action(text: str, actions: tuple[str, ...]) -> str:
-    tokens = shlex.split(text)
+    tokens = _shell_split(text)
     if not tokens:
         return ""
     lowered_actions = {x.lower() for x in actions}

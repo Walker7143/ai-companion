@@ -15,6 +15,7 @@ import os
 import random
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -113,6 +114,8 @@ class SystemTestSuite:
                 env=run_env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
             )
             return proc.returncode, proc.stdout, proc.stderr, False
@@ -451,6 +454,11 @@ class SystemTestSuite:
 
             github_parsed = parse_skill_management_command("/skill GitHub - MiniMax-AI/cli: Generate text")
             github_ok = github_parsed == ("install", {"source": "https://github.com/MiniMax-AI/cli.git", "force": False})
+            windows_path = r"D:\data\个人\ai-girl-friend\.artifacts\system-test\skill-natural\skill-mmx-cli"
+            windows_natural_parsed = parse_skill_management_command(f"帮我安装 skill {windows_path}")
+            windows_explicit_parsed = parse_skill_management_command(f"/skill install {windows_path} --force")
+            windows_path_ok = windows_natural_parsed == ("install", {"source": windows_path, "force": False})
+            windows_explicit_ok = windows_explicit_parsed == ("install", {"force": True, "source": windows_path})
             secret_text = "帮我安装 skill ./demo 我的密钥是 sk-cp-" + ("A" * 32)
             secret_ok = contains_sensitive_token(secret_text) and "sk-cp-" not in redact_sensitive_tokens(secret_text)
 
@@ -464,12 +472,15 @@ class SystemTestSuite:
                 and instruction_skill.get_capabilities() == ["instruction"]
                 and bool(nested_installed)
                 and github_ok
+                and windows_path_ok
+                and windows_explicit_ok
                 and secret_ok
             )
             detail = (
                 f"installed={bool(installed)} loaded={bool(skill)} rejected_bad_entry={rejected} "
                 f"instruction={bool(instruction_skill)} nested={bool(nested_installed)} "
-                f"github_parse={github_ok} secret_redact={secret_ok}"
+                f"github_parse={github_ok} win_path={windows_path_ok and windows_explicit_ok} "
+                f"secret_redact={secret_ok}"
             )
             log = json.dumps(
                 {
@@ -481,6 +492,10 @@ class SystemTestSuite:
                     "instruction_skill_name": getattr(instruction_skill, "name", None),
                     "nested_installed": nested_installed,
                     "github_parsed": github_parsed,
+                    "windows_natural_parsed": windows_natural_parsed,
+                    "windows_explicit_parsed": windows_explicit_parsed,
+                    "windows_path_ok": windows_path_ok,
+                    "windows_explicit_ok": windows_explicit_ok,
                     "secret_ok": secret_ok,
                 },
                 ensure_ascii=False,
@@ -3096,34 +3111,35 @@ class SystemTestSuite:
             )._extract_chunk(selected[0][0], selected[0][1])
             bad_shape_log = (bad_shape_out / "run.log").read_text(encoding="utf-8")
 
-        passed = (
-            target.bot_id == "lin_daiyu"
-            and target.aliases == ["黛玉", "林妹妹"]
-            and resolved_relative == book.resolve()
-            and resolved_file_url == book.resolve()
-            and gbk_document.encoding in {"gb18030", "gbk"}
-            and "杨思思" in gbk_document.sections[0].text
-            and len(chunks) >= 2
-            and len(selected) == 1
-            and model.calls == 2
-            and "chunk_skip_completed" in run_log
-            and "llm_call_success" in run_log
-            and manifest["chunks"]["resume"] is True
-            and result.applied_bot_ids == ["lin_daiyu"]
-            and profile["name"] == "林黛玉"
-            and "林黛玉" in bots_yaml
-            and failure_raised
-            and fail_model.calls == 2
-            and "llm_call_give_up" in fail_log
-            and repair_model.calls == 2
-            and repair_data["characters"][0]["bot_id"] == "lin_daiyu"
-            and "llm_json_repair_success" in repair_log
-            and len(invalid_json_files) == 1
-            and bad_shape_model.calls == 2
-            and bad_shape_data["chunk_id"] == "s0000_c0000"
-            and "llm_call_error" in bad_shape_log
-            and "顶层类型=list" in bad_shape_log
-        )
+        checks = {
+            "target_bot_id": target.bot_id == "lin_daiyu",
+            "target_aliases": target.aliases == ["黛玉", "林妹妹"],
+            "resolved_relative": resolved_relative == book.resolve(),
+            "resolved_file_url": resolved_file_url == book.resolve(),
+            "gbk_encoding": gbk_document.encoding in {"gb18030", "gbk"},
+            "gbk_text": "杨思思" in gbk_document.sections[0].text,
+            "chunk_count": len(chunks) >= 2,
+            "selected_count": len(selected) == 1,
+            "resume_model_calls": model.calls == 2,
+            "run_log_skip": "chunk_skip_completed" in run_log,
+            "run_log_success": "llm_call_success" in run_log,
+            "manifest_resume": manifest["chunks"]["resume"] is True,
+            "applied_bot": result.applied_bot_ids == ["lin_daiyu"],
+            "profile_name": profile["name"] == "林黛玉",
+            "bots_yaml_name": "林黛玉" in bots_yaml,
+            "failure_raised": failure_raised,
+            "fail_calls": fail_model.calls == 2,
+            "fail_log_give_up": "llm_call_give_up" in fail_log,
+            "repair_calls": repair_model.calls == 2,
+            "repair_bot": repair_data["characters"][0]["bot_id"] == "lin_daiyu",
+            "repair_log_success": "llm_json_repair_success" in repair_log,
+            "invalid_json_count": len(invalid_json_files) == 1,
+            "bad_shape_calls": bad_shape_model.calls == 2,
+            "bad_shape_chunk": bad_shape_data["chunk_id"] == "s0000_c0000",
+            "bad_shape_log_error": "llm_call_error" in bad_shape_log,
+            "bad_shape_log_type": "顶层类型=list" in bad_shape_log,
+        }
+        passed = all(checks.values())
         timeout_adapter = ModelFactory.create_from_runtime_config(
             {"provider": "minimax", "api_key": "fake", "timeout": 180},
             provider="minimax",
@@ -3132,7 +3148,7 @@ class SystemTestSuite:
             timeout_total = timeout_adapter.timeout.total
         finally:
             await timeout_adapter.close()
-        passed = passed and timeout_total == 180
+        checks["timeout_total"] = timeout_total == 180
         from ai_companion.gateway.cmd import build_memory_config_for_provider
 
         class _Cfg:
@@ -3146,13 +3162,17 @@ class SystemTestSuite:
 
         mimo_memory_cfg = build_memory_config_for_provider(_Cfg(), "mimo")
         mimo_model_context = mimo_memory_cfg["context"]["compressor"]["model_context"]
-        passed = passed and mimo_model_context == 1048576
+        checks["mimo_model_context"] = mimo_model_context == 1048576
+        passed = all(checks.values())
+        failed_checks = [name for name, ok in checks.items() if not ok]
         detail = (
             f"chunks={len(chunks)} selected={len(selected)} calls={model.calls} "
             f"resume={manifest['chunks'].get('resume')} failure_raised={failure_raised} "
             f"repair_calls={repair_model.calls} bad_shape_calls={bad_shape_model.calls} "
             f"timeout_total={timeout_total} mimo_context={mimo_model_context}"
         )
+        if failed_checks:
+            detail += f" failed_checks={','.join(failed_checks)}"
         log = json.dumps(
             {
                 "target": target.to_dict(),
@@ -3176,6 +3196,7 @@ class SystemTestSuite:
                 "bad_shape_log": bad_shape_log,
                 "timeout_total": timeout_total,
                 "mimo_model_context": mimo_model_context,
+                "checks": checks,
             },
             ensure_ascii=False,
             indent=2,
@@ -3801,7 +3822,10 @@ class SystemTestSuite:
         return passed, detail, text
 
     def case_frontend_build(self) -> tuple[bool, str, str]:
-        cmd = ["npm", "run", "build"]
+        npm = shutil.which("npm")
+        if not npm:
+            return False, "npm not found", "Node.js/npm is required for frontend production build."
+        cmd = [npm, "run", "build"]
         rc, out, err, to = self._run_cmd(cmd, cwd=self.root / "ai-companion-ui", timeout=300)
         passed = rc == 0
         detail = "build success" if passed else "build failed"
