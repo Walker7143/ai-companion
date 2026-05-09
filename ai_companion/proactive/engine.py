@@ -17,6 +17,7 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
     from ..memory.engine import MemoryEngine
+    from .motives import ProactiveMotive
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,31 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 输出一个 JSON 对象：
 {{"opening": "开场白/称呼", "topic": "话题内容或空字符串", "ending": "结尾语"}}
 
+只输出 JSON，不要其他内容。"""
+
+GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
+你是{bot_name}，性格：{personality_tags}
+
+【Bot 时间线】
+{bot_time_context}
+
+【主动联系原因】
+{motive_reason}
+
+【必须接上的上下文】
+{motive_context}
+
+【当前关系】
+{relationship_desc}
+
+【要求】
+- 自然接上之前的话题，不要像重新开一个话题。
+- 如果这是稍后回复，要表现为你回来履行承诺。
+- 不要使用“在吗”“最近怎么样”这类无上下文开场。
+- 只写一条适合直接发送的短消息。
+
+【输出格式】
+输出 JSON：{{"opening":"开头","topic":"主体","ending":"结尾"}}
 只输出 JSON，不要其他内容。"""
 
 # 性格消息模板（fallback 用）
@@ -608,6 +634,51 @@ class ProactiveEngine:
             logger.error(f"[ProactiveEngine] LLM 生成消息失败: {e}")
             return self._get_fallback_message(scenario)
 
+    async def generate_contextual_message(self, motive: "ProactiveMotive") -> str:
+        """根据主动动机上下文生成消息。"""
+        if self.model is None:
+            return self._fallback_contextual_message(motive)
+
+        personality_type = self._get_personality_type()
+        rel_desc = await self._get_relationship_desc()
+        prompt = GENERATE_CONTEXTUAL_MESSAGE_PROMPT.format(
+            bot_name=getattr(self, "bot_name", self.bot_id),
+            personality_tags=personality_type,
+            bot_time_context=self._build_bot_time_context(),
+            motive_reason=motive.reason,
+            motive_context=motive.prompt_context,
+            relationship_desc=rel_desc,
+        )
+
+        try:
+            response = await self.model.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=None,
+            )
+            message = self._parse_structured_message(response)
+            if message:
+                return message
+            cleaned = self._clean_message(response)
+            if cleaned and not self._is_placeholder_message(cleaned):
+                return cleaned
+        except Exception as e:
+            logger.error(f"[ProactiveEngine] 上下文主动消息生成失败: {e}")
+        return self._fallback_contextual_message(motive)
+
+    async def send_contextual_proactive_message(self, motive: "ProactiveMotive") -> bool:
+        message = await self.generate_contextual_message(motive)
+        return await self._send_proactive_message(message, target=getattr(motive, "target", None))
+
+    def _fallback_contextual_message(self, motive: "ProactiveMotive") -> str:
+        motive_type = getattr(getattr(motive, "type", None), "value", str(getattr(motive, "type", "")))
+        if motive_type == "deferred_reply":
+            return "刚才你问的那个问题，我想了一下，还是想接着跟你说。"
+        if motive_type == "topic_continuation":
+            return "刚才那个话题我还在想，想接着跟你聊聊。"
+        if motive_type == "emotion_followup":
+            return "我刚才还是有点放心不下你，想问问你现在好些了吗？"
+        return self._get_fallback_message("with_topic")
+
     def _normalize_message_text(self, text: str) -> str:
         normalized = str(text or "").strip()
         # 去掉常见包裹符号，兼容《...》/“...”/`...` 等格式
@@ -860,14 +931,20 @@ class ProactiveEngine:
         sent = await self._send_proactive_message(message)
         return message if sent else None
 
-    async def _send_proactive_message(self, message: str) -> bool:
+    async def _send_proactive_message(self, message: str, target: dict | None = None) -> bool:
         """发送主动消息并更新状态"""
         if not self._platform_sender:
             logger.warning(f"[ProactiveEngine] 未配置 platform_sender，消息未发送: {message[:50]}...")
             return False
 
         try:
-            sent = await self._platform_sender(message)
+            if target is not None:
+                try:
+                    sent = await self._platform_sender(message, target=target)
+                except TypeError:
+                    sent = await self._platform_sender(message)
+            else:
+                sent = await self._platform_sender(message)
             if sent is False:
                 logger.warning(f"[ProactiveEngine] 平台返回发送失败: {message[:50]}...")
                 return False

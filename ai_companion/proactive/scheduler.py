@@ -81,6 +81,13 @@ class ProactiveScheduler:
         self.engine.state._state["last_check_time"] = datetime.now().isoformat()
         self.engine.state.save()
 
+        orchestrator = getattr(self.engine, "orchestrator", None)
+        if orchestrator is not None:
+            sent = await orchestrator.tick()
+            if sent:
+                logger.info("[ProactiveScheduler] 已通过 motive orchestrator 发送主动消息")
+                return
+
         # 检查空闲触发（主动消息发送受黄金时段限制）
         if self.config.idle_reminder_enabled and self.config.is_active:
             if self._is_golden_hour():

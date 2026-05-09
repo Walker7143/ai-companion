@@ -32,6 +32,12 @@ const gridStyle: CSSProperties = {
   gap: 16,
 };
 
+const compactGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+  gap: 14,
+};
+
 const providerOptions = [
   { value: 'minimax', label: 'MiniMax' },
   { value: 'openai', label: 'OpenAI' },
@@ -213,6 +219,22 @@ const defaultProactive: ProactiveConfig = {
   platform_type: 'cli',
   webhook_url: '',
   home_channel: '',
+  continuity_enabled: true,
+  deferred_reply_enabled: true,
+  deferred_reply_delay_minutes: 8,
+  deferred_reply_min_delay_minutes: 2,
+  deferred_reply_max_delay_minutes: 60,
+  deferred_reply_expires_hours: 24,
+  deferred_reply_bypass_idle_threshold: true,
+  topic_continuation_enabled: true,
+  topic_continuation_idle_after_minutes: 45,
+  topic_continuation_expires_hours: 12,
+  topic_continuation_min_score: 0.55,
+  emotion_followup_enabled: true,
+  emotion_followup_delay_minutes: 20,
+  emotion_followup_expires_hours: 24,
+  life_event_motive_enabled: true,
+  idle_ping_enabled: true,
 };
 
 const defaultLife: LifeConfig = {
@@ -428,6 +450,12 @@ export function Settings() {
     }
     if (draft.proactive.enabled && draft.proactive.min_interval_hours < 1) {
       items.push('主动唤醒最小间隔小于 1 小时，可能造成消息过于频繁。');
+    }
+    if (draft.proactive.enabled && draft.proactive.continuity_enabled && !draft.proactive.deferred_reply_enabled) {
+      items.push('已关闭延迟回复履约：Bot 说“稍后回复你”后不会自动回来继续。');
+    }
+    if (draft.proactive.enabled && draft.proactive.idle_ping_enabled && !draft.proactive.topic_continuation_enabled) {
+      items.push('已关闭接上文续聊但保留普通问候，主动消息可能更像定时问候。');
     }
     return items;
   }, [draft]);
@@ -802,6 +830,58 @@ export function Settings() {
             <FieldHint text="关闭后 Bot 不会主动发送消息，但仍会保留状态。" />
           </div>
           <Toggle checked={draft.proactive.enabled} onChange={(event) => patchProactive({ enabled: event.target.checked })} />
+        </div>
+        <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 8, padding: 16, marginBottom: 16, backgroundColor: 'var(--bg-secondary)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>对话连续性</div>
+              <FieldHint text="每次 Bot 回复后会立即记录可能的后续动机；真正发送会等动机到期，并在下一次后台检查时执行。" />
+              <FieldHint text="主动消息会优先履行“稍后回复”、接上未完成话题，再考虑生活事件或普通问候。" />
+            </div>
+            <Toggle checked={draft.proactive.continuity_enabled} onChange={(event) => patchProactive({ continuity_enabled: event.target.checked })} />
+          </div>
+
+          <div style={{ ...compactGridStyle, marginTop: 16 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>延迟回复履约</div>
+              <Toggle checked={draft.proactive.deferred_reply_enabled} onChange={(event) => patchProactive({ deferred_reply_enabled: event.target.checked })} />
+              <FieldHint text="Bot 说“一会儿回复你/我想想晚点告诉你”后，到期会回到同一会话继续。" />
+            </div>
+            <Input label="默认延迟（分钟）" type="number" min="1" value={draft.proactive.deferred_reply_delay_minutes} onChange={(event) => patchProactive({ deferred_reply_delay_minutes: Number(event.target.value) })} />
+            <Input label="最短延迟（分钟）" type="number" min="1" value={draft.proactive.deferred_reply_min_delay_minutes} onChange={(event) => patchProactive({ deferred_reply_min_delay_minutes: Number(event.target.value) })} />
+            <Input label="最长延迟（分钟）" type="number" min="1" value={draft.proactive.deferred_reply_max_delay_minutes} onChange={(event) => patchProactive({ deferred_reply_max_delay_minutes: Number(event.target.value) })} />
+            <Input label="任务过期（小时）" type="number" min="1" value={draft.proactive.deferred_reply_expires_hours} onChange={(event) => patchProactive({ deferred_reply_expires_hours: Number(event.target.value) })} />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>延迟回复绕过空闲阈值</div>
+              <Toggle checked={draft.proactive.deferred_reply_bypass_idle_threshold} onChange={(event) => patchProactive({ deferred_reply_bypass_idle_threshold: event.target.checked })} />
+              <FieldHint text="建议开启。否则 Bot 承诺稍后回复也要等空闲阈值。" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>接上文续聊</div>
+              <Toggle checked={draft.proactive.topic_continuation_enabled} onChange={(event) => patchProactive({ topic_continuation_enabled: event.target.checked })} />
+              <FieldHint text="用户沉默后，Bot 可继续最近未收尾的话题，而不是突兀问候。" />
+            </div>
+            <Input label="续聊等待（分钟）" type="number" min="1" value={draft.proactive.topic_continuation_idle_after_minutes} onChange={(event) => patchProactive({ topic_continuation_idle_after_minutes: Number(event.target.value) })} />
+            <Input label="续聊过期（小时）" type="number" min="1" value={draft.proactive.topic_continuation_expires_hours} onChange={(event) => patchProactive({ topic_continuation_expires_hours: Number(event.target.value) })} />
+            <Input label="续聊最低分" type="number" min="0" max="1" step="0.01" value={draft.proactive.topic_continuation_min_score} onChange={(event) => patchProactive({ topic_continuation_min_score: Number(event.target.value) })} />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>情绪跟进</div>
+              <Toggle checked={draft.proactive.emotion_followup_enabled} onChange={(event) => patchProactive({ emotion_followup_enabled: event.target.checked })} />
+              <FieldHint text="用户提到累、难过、烦等状态后，Bot 可隔一段时间自然关心。" />
+            </div>
+            <Input label="情绪跟进延迟（分钟）" type="number" min="1" value={draft.proactive.emotion_followup_delay_minutes} onChange={(event) => patchProactive({ emotion_followup_delay_minutes: Number(event.target.value) })} />
+            <Input label="情绪跟进过期（小时）" type="number" min="1" value={draft.proactive.emotion_followup_expires_hours} onChange={(event) => patchProactive({ emotion_followup_expires_hours: Number(event.target.value) })} />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>生活事件分享</div>
+              <Toggle checked={draft.proactive.life_event_motive_enabled} onChange={(event) => patchProactive({ life_event_motive_enabled: event.target.checked })} />
+              <FieldHint text="允许 Bot 分享自己生活里具体发生的事。" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>普通陪伴问候</div>
+              <Toggle checked={draft.proactive.idle_ping_enabled} onChange={(event) => patchProactive({ idle_ping_enabled: event.target.checked })} />
+              <FieldHint text="最低优先级。关闭后，没有具体动机时 Bot 不会只发“在吗”。" />
+            </div>
+          </div>
         </div>
         <div style={gridStyle}>
           <Select label="模式" options={[{ value: 'active', label: '主动' }, { value: 'silent', label: '静默' }]} value={draft.proactive.mode} onChange={(event) => patchProactive({ mode: event.target.value })} />

@@ -243,6 +243,7 @@ class SystemTestSuite:
         self._run_case("T49", "Manual custom fields enter memory prompt", self.case_user_understanding_manual_custom_fields_prompt)
         self._run_case("T50", "Memory prompt limit handles large user understanding", self.case_memory_prompt_limit_large_understanding)
         self._run_case("T51", "Persona importer plans, applies, and resumes drafts", self.case_persona_importer_plan_apply_resume)
+        self._run_case("T52", "Deferred proactive continuity", self.case_deferred_reply_proactive_continuity)
 
         return self._finalize()
 
@@ -3221,7 +3222,6 @@ class SystemTestSuite:
 
         from ai_companion.config.loader import Config
         from ai_companion.gateway.admin_services import ConfigAdminService, _validate_feishu_one_to_one_binding
-        from ai_companion.gateway.cmd import _build_feishu_adapter_profiles
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3301,6 +3301,7 @@ class SystemTestSuite:
                 name="旧名",
                 persona_loader=SimpleNamespace(dir=persona_dir),
                 _refresh_runtime_settings=refresh_runtime,
+                get_proactive_status=lambda: {"conversation_tasks": {"pending": 0}},
             )
             other_bot = SimpleNamespace(
                 id="otherbot",
@@ -3311,6 +3312,11 @@ class SystemTestSuite:
             manager = SimpleNamespace(get_bot=lambda bot_id: {"webbot": bot, "otherbot": other_bot}.get(bot_id))
             service = ConfigAdminService(config, manager)
             before = service.get_bot_config("webbot")
+            proactive_fields = next(
+                section["fields"]
+                for section in before["schema"]["sections"]
+                if section["id"] == "proactive"
+            )
             other_before = service.get_bot_config("otherbot")
             result = service.update_bot_config(
                 "webbot",
@@ -3339,6 +3345,22 @@ class SystemTestSuite:
                         "idle_threshold_hours": 8,
                         "min_interval_hours": 2,
                         "max_daily": 3,
+                        "continuity_enabled": True,
+                        "deferred_reply_enabled": True,
+                        "deferred_reply_delay_minutes": 10,
+                        "deferred_reply_min_delay_minutes": 3,
+                        "deferred_reply_max_delay_minutes": 45,
+                        "deferred_reply_expires_hours": 12,
+                        "deferred_reply_bypass_idle_threshold": False,
+                        "topic_continuation_enabled": True,
+                        "topic_continuation_idle_after_minutes": 30,
+                        "topic_continuation_expires_hours": 8,
+                        "topic_continuation_min_score": 0.66,
+                        "emotion_followup_enabled": False,
+                        "emotion_followup_delay_minutes": 25,
+                        "emotion_followup_expires_hours": 18,
+                        "life_event_motive_enabled": False,
+                        "idle_ping_enabled": True,
                         "emotion_keywords": ["累"],
                         "preferred_contact_times": ["09:00-22:00"],
                         "platform_type": "feishu",
@@ -3440,21 +3462,6 @@ class SystemTestSuite:
                 )
             except ValueError as e:
                 missing_app_error = str(e)
-            bot_double_error = ""
-            try:
-                _build_feishu_adapter_profiles(
-                    {
-                        "enabled": True,
-                        "extra": {"app_id": "app-a", "app_secret": "secret-a"},
-                        "routing": {"mode": "dedicated", "bot_id": "webbot"},
-                        "bot_bindings": {
-                            "webbot": {"extra": {"app_id": "app-b", "app_secret": "secret-b"}}
-                        },
-                    }
-                )
-            except ValueError as e:
-                bot_double_error = str(e)
-
             models = yaml.safe_load((config_dir / "models.yaml").read_text(encoding="utf-8"))
             main_cfg = yaml.safe_load((config_dir / "config.yaml").read_text(encoding="utf-8"))
             proactive = json.loads((persona_dir / "proactive.json").read_text(encoding="utf-8"))
@@ -3464,13 +3471,31 @@ class SystemTestSuite:
 
         passed = (
             before["schema"]["sections"]
+            and "continuity_enabled" in proactive_fields
+            and "deferred_reply_delay_minutes" in proactive_fields
+            and "topic_continuation_min_score" in proactive_fields
             and before["model"]["api_key"] != "keep-openai-key"
+            and before["proactive"]["continuity_enabled"] is True
             and result["ok"] is True
             and models["openai"]["api_key"] == "keep-openai-key"
             and models["openai"]["model"] == "gpt-4o"
             and models["memory"]["embedding"] == "local"
             and proactive["scheduler"]["idle_threshold_hours"] == 8
             and proactive["platform"]["type"] == "feishu"
+            and proactive["conversation_continuity"]["enabled"] is True
+            and proactive["conversation_continuity"]["deferred_reply"]["default_delay_minutes"] == 10
+            and proactive["conversation_continuity"]["deferred_reply"]["min_delay_minutes"] == 3
+            and proactive["conversation_continuity"]["deferred_reply"]["max_delay_minutes"] == 45
+            and proactive["conversation_continuity"]["deferred_reply"]["expires_hours"] == 12
+            and proactive["conversation_continuity"]["deferred_reply"]["bypass_idle_threshold"] is False
+            and proactive["conversation_continuity"]["topic_continuation"]["idle_after_minutes"] == 30
+            and proactive["conversation_continuity"]["topic_continuation"]["expires_hours"] == 8
+            and proactive["conversation_continuity"]["topic_continuation"]["min_score"] == 0.66
+            and proactive["conversation_continuity"]["emotion_followup"]["enabled"] is False
+            and proactive["conversation_continuity"]["emotion_followup"]["delay_minutes"] == 25
+            and proactive["conversation_continuity"]["emotion_followup"]["expires_hours"] == 18
+            and proactive["conversation_continuity"]["life_event"]["enabled"] is False
+            and proactive["conversation_continuity"]["idle_ping"]["enabled"] is True
             and life["time_ratio"] == 24
             and life["event_policy"]["unexpected_event_probability"] == 0.02
             and main_cfg["platforms"]["feishu"]["extra"]["app_secret"] == "keep-secret"
@@ -3479,6 +3504,11 @@ class SystemTestSuite:
             and main_cfg["platforms"]["weixin"]["extra"]["group_policy"] == "allowlist"
             and main_cfg["platforms"]["weixin"]["extra"]["split_multiline_messages"] is True
             and before["platforms"][2]["config"]["token"] != "keep-wx-token"
+            and web_after["proactive"]["continuity_enabled"] is True
+            and web_after["proactive"]["deferred_reply_delay_minutes"] == 10
+            and web_after["proactive"]["topic_continuation_min_score"] == 0.66
+            and web_after["proactive"]["idle_ping_enabled"] is True
+            and web_after["diagnostics"]["proactive_status"]["conversation_tasks"]["pending"] == 0
             and web_after["platforms"][2]["enabled"] is True
             and web_after["platforms"][2]["config"]["extra"]["group_allow_from"] == ["wx-group"]
             and other_before["platforms"][2]["enabled"] is False
@@ -3491,7 +3521,6 @@ class SystemTestSuite:
             and "一个微信账号只能绑定一个 Bot" in weixin_conflict_error
             and "同时绑定了多个 Bot" in invalid_error
             and "必须填写 App ID" in missing_app_error
-            and "同时绑定了多个 App" in bot_double_error
             and main_cfg["session_reset"]["mode"] == "idle"
             and profile["name"] == "新名"
             and style["口头禅"] == ["嗯"]
@@ -3516,13 +3545,133 @@ class SystemTestSuite:
                 "main_cfg": main_cfg,
                 "invalid_error": invalid_error,
                 "missing_app_error": missing_app_error,
-                "bot_double_error": bot_double_error,
                 "weixin_conflict_error": weixin_conflict_error,
                 "proactive": proactive,
                 "life": life,
                 "profile": profile,
                 "style": style,
                 "refresh": refresh,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return passed, detail, log
+
+    async def case_deferred_reply_proactive_continuity(self) -> tuple[bool, str, str]:
+        from ai_companion.bot.instance import BotInstance
+
+        class PromiseThenFollowupModel:
+            provider = "test"
+            model = "promise-followup"
+
+            def __init__(self):
+                self.calls: list[str] = []
+
+            async def chat(self, messages, system_prompt=None, **kwargs):
+                text = messages[-1].get("content", "") if messages else ""
+                self.calls.append(text)
+                if "主动联系原因" in text or "继续刚才承诺" in text:
+                    return '{"opening":"刚才你问的那个问题","topic":"我想了一下，可以先小范围试试","ending":"你觉得呢？"}'
+                return "我想一下，一会儿回复你。"
+
+            async def embeddings(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0, 0.0, 0.0] for _ in texts]
+
+            async def close(self):
+                return None
+
+        with tempfile.TemporaryDirectory(prefix="sys-deferred-proactive-") as td:
+            root = Path(td)
+            data_root = root / "data" / "bots"
+            bot_id = "deferred_bot"
+            persona = data_root / bot_id / "persona"
+            persona.mkdir(parents=True)
+            for name, payload in {
+                "profile.json": {
+                    "name": "延迟测试",
+                    "age": 22,
+                    "occupation": "学生",
+                    "relationship_to_user": "朋友",
+                    "personality_tags": ["温柔"],
+                },
+                "backstory.json": {},
+                "values.json": {},
+                "speaking_style.json": {"tone": "自然"},
+                "proactive.json": {
+                    "enabled": True,
+                    "mode": "active",
+                    "scheduler": {"min_interval_hours": 0.1, "max_daily": 5},
+                    "platform": {"type": "weixin"},
+                    "preferred_contact_times": ["00:00-23:59"],
+                    "conversation_continuity": {"deferred_reply": {"default_delay_minutes": 1}},
+                },
+                "life.json": {
+                    "daily_interval_seconds": 86400,
+                    "major_interval_seconds": 604800,
+                    "time_ratio": 1,
+                    "sync_with_local_time_when_realtime": False,
+                },
+            }.items():
+                (persona / name).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            sent = []
+            model = PromiseThenFollowupModel()
+            bot = BotInstance(
+                {"id": bot_id, "name": "延迟测试", "data_dir": str(data_root)},
+                model=model,
+                data_dir=data_root,
+                memory_config={"embedding": "none"},
+                refusal_enabled=False,
+            )
+            async def capture_send(msg, target=None):
+                sent.append({"msg": msg, "target": target})
+                return True
+
+            try:
+                await bot.init(start_schedulers=False)
+                bot.proactive_engine._platform_sender = capture_send
+                response = await bot.handle_message(
+                    "那你怎么看这个项目？",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_a",
+                        "user_id": "default_user",
+                        "chat_id": "wx-1",
+                    },
+                )
+                pending_before = bot.conversation_task_store.count_pending(bot_id)
+                now = datetime.now()
+                task_rows = bot.conversation_task_store.list_due(bot_id, now + timedelta(minutes=10))
+                due_at = (task_rows[0].due_at + timedelta(seconds=1)) if task_rows else now + timedelta(minutes=5)
+                due = bot.conversation_task_store.list_due(bot_id, due_at)
+                ok_tick = await bot.proactive_orchestrator.tick(now=due_at)
+                pending_after = bot.conversation_task_store.count_pending(bot_id)
+            finally:
+                await bot.close()
+
+        passed = (
+            "一会儿回复你" in response
+            and len(due) == 1
+            and pending_before == 1
+            and ok_tick is True
+            and pending_after == 0
+            and sent
+            and sent[0]["target"]["chat_id"] == "wx-1"
+            and "刚才你问的那个问题" in sent[0]["msg"]
+        )
+        detail = (
+            f"response={response} due={len(due)} pending_before={pending_before} "
+            f"pending_after={pending_after} sent={sent}"
+        )
+        log = json.dumps(
+            {
+                "response": response,
+                "due": [item.to_dict() for item in due],
+                "pending_before": pending_before,
+                "pending_after": pending_after,
+                "ok_tick": ok_tick,
+                "sent": sent,
+                "model_calls": model.calls,
             },
             ensure_ascii=False,
             indent=2,

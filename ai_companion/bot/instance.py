@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -16,6 +17,10 @@ from ..proactive.life_state import LifeState
 from ..proactive.life_engine import LifeEngine
 from ..proactive.life_scheduler import LifeScheduler
 from ..proactive.runtime_lock import BotSchedulerRuntimeLock
+from ..proactive.conversation_task_store import ConversationTaskStore
+from ..proactive.deferred_detector import DeferredReplyDetector
+from ..proactive.motives import ConversationTask, ConversationTaskStatus, ConversationTaskType
+from ..proactive.orchestrator import ProactiveOrchestrator
 from ..skill import SkillDispatcher, SkillRegistry, MultimodalSender, create_channel, BuiltinSkillManager
 from ..skill.base import SkillContext
 from ..skill.capability_resolver import build_capability_statuses, resolve_skill_config
@@ -110,6 +115,12 @@ class BotInstance:
             memory=self.memory,
             personality_type=self._detect_personality_type(),
         )
+        self.conversation_task_store = ConversationTaskStore(self._data_dir / self.id)
+        self.proactive_orchestrator = ProactiveOrchestrator(
+            engine=self.proactive_engine,
+            task_store=self.conversation_task_store,
+        )
+        self.proactive_engine.orchestrator = self.proactive_orchestrator
         self.proactive_scheduler: Optional[ProactiveScheduler] = None
         self._proactive_platform = None
         self._schedulers_started = False
@@ -316,18 +327,28 @@ class BotInstance:
                 adapter_platform.value if hasattr(adapter_platform, "value") else str(adapter_platform or "gateway")
             )
             self._proactive_platform = gateway_adapter
-            self.proactive_engine._platform_sender = lambda msg: self._wrap_gateway_send(msg, gateway_adapter, str(ptype).lower())
+            self.proactive_engine._platform_sender = lambda msg, target=None: self._wrap_gateway_send(
+                msg,
+                gateway_adapter,
+                str(ptype).lower(),
+                target=target,
+            )
             return
 
         if feishu_adapter:
             self._proactive_platform = feishu_adapter
-            self.proactive_engine._platform_sender = lambda msg: self._wrap_gateway_send(msg, feishu_adapter, "feishu")
+            self.proactive_engine._platform_sender = lambda msg, target=None: self._wrap_gateway_send(
+                msg,
+                feishu_adapter,
+                "feishu",
+                target=target,
+            )
             return
 
         ptype = platform_type or self.proactive_config.platform_type
         self._proactive_platform = create_platform(ptype, **kwargs)
         # 设置回调
-        self.proactive_engine._platform_sender = lambda msg: self._proactive_platform.send(self.id, msg)
+        self.proactive_engine._platform_sender = lambda msg, target=None: self._proactive_platform.send(self.id, msg)
 
     def set_allowed_proactive_scheduler_platforms(self, platforms: Optional[set[str] | list[str] | tuple[str, ...]]):
         """限制当前运行入口允许启动哪些平台的主动唤醒调度器。"""
@@ -357,10 +378,21 @@ class BotInstance:
 
         self.set_proactive_platform("cli")
 
-    async def _wrap_gateway_send(self, message: str, adapter, platform_type: str) -> bool:
+    async def _wrap_gateway_send(self, message: str, adapter, platform_type: str, target: dict | None = None) -> bool:
         """包装 gateway adapter 发送（适配 proactive 引擎的接口）"""
         try:
             chat_id = getattr(self, f"_{platform_type}_chat_id", None)
+            send_metadata: dict[str, object] = {}
+            if isinstance(target, dict):
+                explicit_chat_id = target.get("chat_id")
+                if explicit_chat_id:
+                    chat_id = explicit_chat_id
+                explicit_thread_id = target.get("thread_id")
+                if explicit_thread_id:
+                    send_metadata["thread_id"] = explicit_thread_id
+                target_metadata = target.get("metadata")
+                if isinstance(target_metadata, dict):
+                    send_metadata.update(target_metadata)
             proactive_cfg = self.proactive_config.to_dict() if hasattr(self.proactive_config, "to_dict") else {}
             if not chat_id:
                 home_channel = proactive_cfg.get("home_channel")
@@ -378,7 +410,16 @@ class BotInstance:
             if not chat_id:
                 logger.warning("[BotInstance] %s 未配置 home_channel，无法发送主动消息", platform_type)
                 return False
-            result = await adapter.send(chat_id=chat_id, content=message)
+            send_kwargs = {"chat_id": chat_id, "content": message}
+            if send_metadata:
+                send_kwargs["metadata"] = send_metadata
+            try:
+                result = await adapter.send(**send_kwargs)
+            except TypeError as exc:
+                if "metadata" not in send_kwargs or "unexpected keyword" not in str(exc):
+                    raise
+                send_kwargs.pop("metadata", None)
+                result = await adapter.send(**send_kwargs)
             success = result.success if hasattr(result, 'success') else result
             if not success:
                 error = getattr(result, "error", "unknown") if result is not None else "unknown"
@@ -692,6 +733,7 @@ class BotInstance:
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, ctx, relationship_state)
+            self._run_proactive_closeout_analysis(user_input, response, memory_turn_context)
 
             # 6. 异步写入记忆
             self._track_background_task(
@@ -712,6 +754,7 @@ class BotInstance:
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, {}, relationship_state)
+            self._run_proactive_closeout_analysis(user_input, response, memory_turn_context)
 
         if image_user_hint and image_user_hint not in response:
             response = f"{image_user_hint}\n{response}"
@@ -893,6 +936,58 @@ class BotInstance:
             return base
         return f"{base}\n\n{extra}"
 
+    def _run_proactive_closeout_analysis(
+        self,
+        user_input: str,
+        response: str,
+        memory_turn_context: dict | None,
+    ) -> None:
+        if not self.proactive_config.continuity_enabled or not self.proactive_config.deferred_reply_enabled:
+            return
+
+        detector = DeferredReplyDetector(
+            default_delay_minutes=self.proactive_config.deferred_reply_default_delay_minutes,
+            min_delay_minutes=self.proactive_config.deferred_reply_min_delay_minutes,
+            max_delay_minutes=self.proactive_config.deferred_reply_max_delay_minutes,
+        )
+        detected = detector.detect(user_input, response)
+        if detected is None:
+            return
+
+        context = memory_turn_context if isinstance(memory_turn_context, dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        now = datetime.now()
+        platform = str(context.get("platform") or self.proactive_config.platform_type or "cli")
+        session_id = str(
+            context.get("session_id")
+            or getattr(getattr(self.memory, "working", None), "current_session", "")
+            or ""
+        )
+        target = {
+            "platform": platform,
+            "chat_id": str(context.get("chat_id") or ""),
+            "name": str(metadata.get("chat_name") or ""),
+        }
+        task = ConversationTask(
+            id=uuid.uuid4().hex,
+            bot_id=self.id,
+            type=ConversationTaskType.DEFERRED_REPLY,
+            status=ConversationTaskStatus.PENDING,
+            session_id=session_id,
+            user_id=str(context.get("user_id") or "default_user"),
+            platform=platform,
+            target=target,
+            created_at=now,
+            due_at=now + timedelta(minutes=detected.delay_minutes),
+            expires_at=now + timedelta(hours=self.proactive_config.deferred_reply_expires_hours),
+            source_user_message=user_input,
+            source_bot_message=response,
+            topic_summary=detected.topic_summary,
+            priority=100,
+        )
+        self.conversation_task_store.upsert(task)
+        logger.info("[BotInstance] 已记录延迟回复任务: bot=%s session=%s", self.id, session_id)
+
     async def _handle_skill_command(self, user_input: str) -> str:
         context = self._build_skill_context()
         return await execute_skill_command(
@@ -977,6 +1072,9 @@ class BotInstance:
             },
             "state": self.proactive_engine.get_status(),
             "scheduler": self.proactive_scheduler.get_status() if self.proactive_scheduler else None,
+            "conversation_tasks": {
+                "pending": self.conversation_task_store.count_pending(self.id) if self.conversation_task_store else 0,
+            },
             "scheduler_lock": {
                 "proactive": {
                     "held": bool(self._proactive_scheduler_lock and self._proactive_scheduler_lock.acquired),

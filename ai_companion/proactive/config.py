@@ -42,6 +42,34 @@ class ProactiveConfig:
             "type": "cli",  # "cli" | "feishu" | "webhook"
             "webhook_url": None,
         },
+        "conversation_continuity": {
+            "enabled": True,
+            "deferred_reply": {
+                "enabled": True,
+                "default_delay_minutes": 8,
+                "min_delay_minutes": 2,
+                "max_delay_minutes": 60,
+                "expires_hours": 24,
+                "bypass_idle_threshold": True,
+            },
+            "topic_continuation": {
+                "enabled": True,
+                "idle_after_minutes": 45,
+                "expires_hours": 12,
+                "min_score": 0.55,
+            },
+            "emotion_followup": {
+                "enabled": True,
+                "delay_minutes": 20,
+                "expires_hours": 24,
+            },
+            "life_event": {
+                "enabled": True,
+            },
+            "idle_ping": {
+                "enabled": True,
+            },
+        },
         # 黄金时段配置
         "preferred_contact_times": ["09:00-23:00"],
         "timezone": "Asia/Shanghai",
@@ -220,6 +248,76 @@ class ProactiveConfig:
     @property
     def force_contact(self) -> bool:
         return bool(self._config.get("scheduler", {}).get("force_contact", False))
+
+    def _continuity_section(self, *keys: str) -> dict:
+        current = self._config.get("conversation_continuity", {})
+        for key in keys:
+            current = current.get(key, {}) if isinstance(current, dict) else {}
+        return current if isinstance(current, dict) else {}
+
+    @property
+    def continuity_enabled(self) -> bool:
+        return bool(self._continuity_section().get("enabled", True))
+
+    @property
+    def deferred_reply_enabled(self) -> bool:
+        return bool(self._continuity_section("deferred_reply").get("enabled", True))
+
+    @property
+    def deferred_reply_default_delay_minutes(self) -> int:
+        return int(self._continuity_section("deferred_reply").get("default_delay_minutes", 8))
+
+    @property
+    def deferred_reply_min_delay_minutes(self) -> int:
+        return int(self._continuity_section("deferred_reply").get("min_delay_minutes", 2))
+
+    @property
+    def deferred_reply_max_delay_minutes(self) -> int:
+        return int(self._continuity_section("deferred_reply").get("max_delay_minutes", 60))
+
+    @property
+    def deferred_reply_expires_hours(self) -> int:
+        return int(self._continuity_section("deferred_reply").get("expires_hours", 24))
+
+    @property
+    def deferred_reply_bypass_idle_threshold(self) -> bool:
+        return bool(self._continuity_section("deferred_reply").get("bypass_idle_threshold", True))
+
+    @property
+    def topic_continuation_enabled(self) -> bool:
+        return bool(self._continuity_section("topic_continuation").get("enabled", True))
+
+    @property
+    def topic_continuation_idle_after_minutes(self) -> int:
+        return int(self._continuity_section("topic_continuation").get("idle_after_minutes", 45))
+
+    @property
+    def topic_continuation_expires_hours(self) -> int:
+        return int(self._continuity_section("topic_continuation").get("expires_hours", 12))
+
+    @property
+    def topic_continuation_min_score(self) -> float:
+        return float(self._continuity_section("topic_continuation").get("min_score", 0.55))
+
+    @property
+    def emotion_followup_enabled(self) -> bool:
+        return bool(self._continuity_section("emotion_followup").get("enabled", True))
+
+    @property
+    def emotion_followup_delay_minutes(self) -> int:
+        return int(self._continuity_section("emotion_followup").get("delay_minutes", 20))
+
+    @property
+    def emotion_followup_expires_hours(self) -> int:
+        return int(self._continuity_section("emotion_followup").get("expires_hours", 24))
+
+    @property
+    def life_event_motive_enabled(self) -> bool:
+        return bool(self._continuity_section("life_event").get("enabled", True))
+
+    @property
+    def idle_ping_enabled(self) -> bool:
+        return bool(self._continuity_section("idle_ping").get("enabled", True))
 
     @property
     def idle_reminder_enabled(self) -> bool:

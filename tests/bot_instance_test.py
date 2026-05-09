@@ -1,6 +1,7 @@
 import unittest
 import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -36,6 +37,14 @@ class EchoModel:
 
     async def chat(self, messages, system_prompt="", **kwargs):
         return "ok"
+
+
+class PromiseModel:
+    provider = "test"
+    model = "promise-model"
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        return "我想一下，一会儿回复你。"
 
 
 def _write_test_persona(root: Path, bot_id: str) -> None:
@@ -132,6 +141,53 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await second.close()
                 await first.close()
+
+
+class BotInstanceProactiveCloseoutTest(unittest.IsolatedAsyncioTestCase):
+    async def test_deferred_reply_promise_records_conversation_task(self):
+        from ai_companion.proactive.motives import ConversationTaskType
+
+        with TemporaryDirectory(prefix="bot-deferred-task-") as td:
+            root = Path(td)
+            bot_id = "promise_bot"
+            _write_test_persona(root, bot_id)
+            proactive_path = root / bot_id / "persona" / "proactive.json"
+            proactive_payload = json.loads(proactive_path.read_text(encoding="utf-8"))
+            proactive_payload["conversation_continuity"] = {
+                "deferred_reply": {"default_delay_minutes": 8},
+            }
+            proactive_path.write_text(json.dumps(proactive_payload, ensure_ascii=False), encoding="utf-8")
+
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=PromiseModel(),
+                data_dir=root,
+                memory_config={"embedding": "none"},
+                refusal_enabled=False,
+            )
+            try:
+                await bot.init(start_schedulers=False)
+                await bot.handle_message(
+                    "那你怎么看？",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_abc",
+                        "user_id": "default_user",
+                        "chat_id": "wx-1",
+                        "metadata": {"chat_name": "微信私聊"},
+                    },
+                )
+
+                due = bot.conversation_task_store.list_due(
+                    bot_id,
+                    datetime.now() + timedelta(minutes=9),
+                )
+            finally:
+                await bot.close()
+
+            self.assertEqual(len(due), 1)
+            self.assertEqual(due[0].type, ConversationTaskType.DEFERRED_REPLY)
+            self.assertEqual(due[0].target["chat_id"], "wx-1")
 
 
 class PersonaEngineDefaultStyleTest(unittest.TestCase):

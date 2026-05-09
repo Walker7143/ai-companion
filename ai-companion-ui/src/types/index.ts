@@ -311,6 +311,22 @@ export interface ProactiveConfig {
   platform_type: string;
   webhook_url: string;
   home_channel: string;
+  continuity_enabled: boolean;
+  deferred_reply_enabled: boolean;
+  deferred_reply_delay_minutes: number;
+  deferred_reply_min_delay_minutes: number;
+  deferred_reply_max_delay_minutes: number;
+  deferred_reply_expires_hours: number;
+  deferred_reply_bypass_idle_threshold: boolean;
+  topic_continuation_enabled: boolean;
+  topic_continuation_idle_after_minutes: number;
+  topic_continuation_expires_hours: number;
+  topic_continuation_min_score: number;
+  emotion_followup_enabled: boolean;
+  emotion_followup_delay_minutes: number;
+  emotion_followup_expires_hours: number;
+  life_event_motive_enabled: boolean;
+  idle_ping_enabled: boolean;
 }
 
 export interface LifeConfig {

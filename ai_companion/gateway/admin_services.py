@@ -84,6 +84,22 @@ WEB_CONFIG_SCHEMA = {
                 "idle_threshold_hours": "用户空闲多久后考虑主动联系。",
                 "max_daily": "每日主动消息上限。",
                 "preferred_contact_times": "允许主动联系的时间段，格式 HH:MM-HH:MM。",
+                "continuity_enabled": "是否启用上下文连续性编排。",
+                "deferred_reply_enabled": "是否记录并履约 Bot 承诺稍后回复的任务。",
+                "deferred_reply_delay_minutes": "Bot 承诺稍后回复后的默认等待分钟数。",
+                "deferred_reply_min_delay_minutes": "延迟回复任务允许的最短等待分钟数。",
+                "deferred_reply_max_delay_minutes": "延迟回复任务允许的最长等待分钟数。",
+                "deferred_reply_expires_hours": "延迟回复任务过期小时数，过期后不再发送。",
+                "deferred_reply_bypass_idle_threshold": "延迟回复是否允许绕过普通空闲阈值。",
+                "topic_continuation_enabled": "是否在用户沉默后接上未完话题继续聊。",
+                "topic_continuation_idle_after_minutes": "最近话题未完时，用户沉默多久后可触发续聊。",
+                "topic_continuation_expires_hours": "未完话题续聊动机的有效小时数。",
+                "topic_continuation_min_score": "话题续聊最低置信分，范围 0-1。",
+                "emotion_followup_enabled": "是否允许负面情绪后的关心回访动机。",
+                "emotion_followup_delay_minutes": "情绪回访默认等待分钟数。",
+                "emotion_followup_expires_hours": "情绪回访动机过期小时数。",
+                "life_event_motive_enabled": "是否允许生活事件分享作为主动动机。",
+                "idle_ping_enabled": "是否允许没有更高质量动机时发送普通陪伴问候。",
             },
         },
         {
@@ -638,6 +654,18 @@ class ConfigAdminService:
         emotion = triggers.get("emotion_trigger", {})
         idle = triggers.get("idle_reminder", {})
         platform = cfg.get("platform", {})
+        continuity = cfg.get("conversation_continuity", {})
+        continuity = continuity if isinstance(continuity, dict) else {}
+        deferred = continuity.get("deferred_reply", {})
+        deferred = deferred if isinstance(deferred, dict) else {}
+        topic = continuity.get("topic_continuation", {})
+        topic = topic if isinstance(topic, dict) else {}
+        emotion_followup = continuity.get("emotion_followup", {})
+        emotion_followup = emotion_followup if isinstance(emotion_followup, dict) else {}
+        life_event = continuity.get("life_event", {})
+        life_event = life_event if isinstance(life_event, dict) else {}
+        idle_ping = continuity.get("idle_ping", {})
+        idle_ping = idle_ping if isinstance(idle_ping, dict) else {}
         return {
             "enabled": bool(cfg.get("enabled", True)),
             "mode": cfg.get("mode", "active"),
@@ -658,6 +686,22 @@ class ConfigAdminService:
             "platform_type": platform.get("type", "cli"),
             "webhook_url": platform.get("webhook_url") or "",
             "home_channel": cfg.get("home_channel") or platform.get("home_channel") or platform.get("chat_id") or "",
+            "continuity_enabled": _as_bool(continuity.get("enabled"), True),
+            "deferred_reply_enabled": _as_bool(deferred.get("enabled"), True),
+            "deferred_reply_delay_minutes": _as_int(deferred.get("default_delay_minutes"), 8, 1),
+            "deferred_reply_min_delay_minutes": _as_int(deferred.get("min_delay_minutes"), 2, 1),
+            "deferred_reply_max_delay_minutes": _as_int(deferred.get("max_delay_minutes"), 60, 1),
+            "deferred_reply_expires_hours": _as_int(deferred.get("expires_hours"), 24, 1),
+            "deferred_reply_bypass_idle_threshold": _as_bool(deferred.get("bypass_idle_threshold"), True),
+            "topic_continuation_enabled": _as_bool(topic.get("enabled"), True),
+            "topic_continuation_idle_after_minutes": _as_int(topic.get("idle_after_minutes"), 45, 1),
+            "topic_continuation_expires_hours": _as_int(topic.get("expires_hours"), 12, 1),
+            "topic_continuation_min_score": _as_float(topic.get("min_score"), 0.55, 0, 1),
+            "emotion_followup_enabled": _as_bool(emotion_followup.get("enabled"), True),
+            "emotion_followup_delay_minutes": _as_int(emotion_followup.get("delay_minutes"), 20, 1),
+            "emotion_followup_expires_hours": _as_int(emotion_followup.get("expires_hours"), 24, 1),
+            "life_event_motive_enabled": _as_bool(life_event.get("enabled"), True),
+            "idle_ping_enabled": _as_bool(idle_ping.get("enabled"), True),
         }
 
     def _public_life(self, cfg: dict) -> dict:
@@ -788,6 +832,12 @@ class ConfigAdminService:
                 life_status = bot.life_engine.get_status()
             except Exception:
                 life_status = {}
+        proactive_status = {}
+        if bot is not None and hasattr(bot, "get_proactive_status"):
+            try:
+                proactive_status = bot.get_proactive_status()
+            except Exception:
+                proactive_status = {}
         gateway_status = {}
         try:
             from ai_companion.gateway.status import read_runtime_status
@@ -798,6 +848,7 @@ class ConfigAdminService:
         return {
             "requires_restart": [],
             "life_status": life_status,
+            "proactive_status": proactive_status,
             "gateway_status": gateway_status,
         }
 
@@ -899,6 +950,23 @@ class ConfigAdminService:
         idle = triggers.setdefault("idle_reminder", {})
         emotion = triggers.setdefault("emotion_trigger", {})
         platform = existing.setdefault("platform", {})
+        continuity = existing.setdefault("conversation_continuity", {})
+        if not isinstance(continuity, dict):
+            continuity = {}
+            existing["conversation_continuity"] = continuity
+
+        def _continuity_child(name: str) -> dict:
+            child = continuity.get(name)
+            if not isinstance(child, dict):
+                child = {}
+                continuity[name] = child
+            return child
+
+        deferred = _continuity_child("deferred_reply")
+        topic = _continuity_child("topic_continuation")
+        emotion_followup = _continuity_child("emotion_followup")
+        life_event = _continuity_child("life_event")
+        idle_ping = _continuity_child("idle_ping")
         existing["enabled"] = bool(proactive_data.get("enabled", existing.get("enabled", True)))
         existing["mode"] = proactive_data.get("mode", existing.get("mode", "active"))
         scheduler["check_interval_seconds"] = _as_int(proactive_data.get("check_interval_seconds"), scheduler.get("check_interval_seconds", 600), 10)
@@ -919,6 +987,53 @@ class ConfigAdminService:
         platform["webhook_url"] = proactive_data.get("webhook_url", platform.get("webhook_url"))
         if proactive_data.get("home_channel"):
             platform["home_channel"] = proactive_data.get("home_channel")
+
+        continuity["enabled"] = _as_bool(proactive_data.get("continuity_enabled"), _as_bool(continuity.get("enabled"), True))
+
+        deferred["enabled"] = _as_bool(proactive_data.get("deferred_reply_enabled"), _as_bool(deferred.get("enabled"), True))
+        deferred_min = _as_int(proactive_data.get("deferred_reply_min_delay_minutes"), deferred.get("min_delay_minutes", 2), 1)
+        deferred_max = _as_int(proactive_data.get("deferred_reply_max_delay_minutes"), deferred.get("max_delay_minutes", 60), deferred_min)
+        deferred_delay = _as_int(
+            proactive_data.get("deferred_reply_delay_minutes"),
+            deferred.get("default_delay_minutes", 8),
+            deferred_min,
+            deferred_max,
+        )
+        deferred["default_delay_minutes"] = deferred_delay
+        deferred["min_delay_minutes"] = deferred_min
+        deferred["max_delay_minutes"] = deferred_max
+        deferred["expires_hours"] = _as_int(proactive_data.get("deferred_reply_expires_hours"), deferred.get("expires_hours", 24), 1)
+        deferred["bypass_idle_threshold"] = _as_bool(
+            proactive_data.get("deferred_reply_bypass_idle_threshold"),
+            _as_bool(deferred.get("bypass_idle_threshold"), True),
+        )
+
+        topic["enabled"] = _as_bool(proactive_data.get("topic_continuation_enabled"), _as_bool(topic.get("enabled"), True))
+        topic["idle_after_minutes"] = _as_int(
+            proactive_data.get("topic_continuation_idle_after_minutes"),
+            topic.get("idle_after_minutes", 45),
+            1,
+        )
+        topic["expires_hours"] = _as_int(proactive_data.get("topic_continuation_expires_hours"), topic.get("expires_hours", 12), 1)
+        topic["min_score"] = _as_float(proactive_data.get("topic_continuation_min_score"), topic.get("min_score", 0.55), 0, 1)
+
+        emotion_followup["enabled"] = _as_bool(
+            proactive_data.get("emotion_followup_enabled"),
+            _as_bool(emotion_followup.get("enabled"), True),
+        )
+        emotion_followup["delay_minutes"] = _as_int(
+            proactive_data.get("emotion_followup_delay_minutes"),
+            emotion_followup.get("delay_minutes", 20),
+            1,
+        )
+        emotion_followup["expires_hours"] = _as_int(
+            proactive_data.get("emotion_followup_expires_hours"),
+            emotion_followup.get("expires_hours", 24),
+            1,
+        )
+
+        life_event["enabled"] = _as_bool(proactive_data.get("life_event_motive_enabled"), _as_bool(life_event.get("enabled"), True))
+        idle_ping["enabled"] = _as_bool(proactive_data.get("idle_ping_enabled"), _as_bool(idle_ping.get("enabled"), True))
         _write_json(path, existing)
 
     def _save_life(self, path: Path, life_data: dict) -> list[str]:

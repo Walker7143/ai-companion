@@ -19,6 +19,19 @@ class StaticModel:
         return self.response
 
 
+class CaptureModel:
+    provider = "test"
+    model = "capture-model"
+
+    def __init__(self, response: str):
+        self.response = response
+        self.calls = []
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        self.calls.append({"messages": messages, "system_prompt": system_prompt, "kwargs": kwargs})
+        return self.response
+
+
 def _build_engine(root: Path, response: str) -> ProactiveEngine:
     persona_dir = root / "persona"
     persona_dir.mkdir(parents=True, exist_ok=True)
@@ -65,3 +78,39 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("话题内容或空字符串", message)
             self.assertNotIn("结尾语", message)
 
+
+class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_contextual_message_prompt_includes_motive_and_prior_topic(self):
+        from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
+
+        with TemporaryDirectory(prefix="proactive-contextual-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = CaptureModel(
+                '{"opening":"刚才你问的那个问题","topic":"我想了一下，可以先从小范围试试","ending":"你觉得呢？"}'
+            )
+            engine = ProactiveEngine(
+                bot_id="context_bot",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("context_bot", root / "runtime"),
+                model=model,
+            )
+            motive = ProactiveMotive(
+                type=ProactiveMotiveType.DEFERRED_REPLY,
+                priority=100,
+                reason="继续刚才承诺的回复",
+                prompt_context="用户问：那你怎么看？\nBot 之前说：我想一下，一会儿回复你",
+                bypass_idle_threshold=True,
+            )
+            message = await engine.generate_contextual_message(motive)
+
+            prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("继续刚才承诺的回复", prompt)
+            self.assertIn("那你怎么看", prompt)
+            self.assertIn("不要像重新开一个话题", prompt)
+            self.assertIn("刚才你问的那个问题", message)
+
+
+if __name__ == "__main__":
+    unittest.main()
