@@ -210,6 +210,13 @@ class PersonaEngine:
                 lines.append(f"当前日期：{current_date}（{day_of_week}）")
             else:
                 lines.append(f"当前日期：{current_date}")
+        local_time = life_context.get("local_time")
+        time_of_day = life_context.get("time_of_day")
+        if local_time:
+            if time_of_day:
+                lines.append(f"当前本地时间：{local_time}（{time_of_day}）")
+            else:
+                lines.append(f"当前本地时间：{local_time}")
 
         birth_date = life_context.get("birth_date") or profile.get("birth_date")
         if birth_date:

@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "daily_interval_seconds": REALTIME_DAILY_INTERVAL_SECONDS,  # 现实 1 天 = Bot 1 天
     "major_interval_seconds": REALTIME_MAJOR_INTERVAL_SECONDS,  # 默认每 7 个 Bot 日检查人生大事
     "time_ratio": 1,                    # 默认 1:1
+    "sync_with_local_time_when_realtime": True,  # time_ratio=1 时对齐部署机器本地时间
     "time_ratio_warning_threshold": 500,
     "daily_event_min_gap_days": 2,      # 至少每 N 天产出 1 个日常事件
     "major_event_fixed_probability": 0.05,  # 每个 Bot 日的大事固定概率（0-1）
@@ -64,6 +65,7 @@ class LifeConfig:
     daily_interval_seconds: int = REALTIME_DAILY_INTERVAL_SECONDS
     major_interval_seconds: int = REALTIME_MAJOR_INTERVAL_SECONDS
     time_ratio: int = 1
+    sync_with_local_time_when_realtime: bool = True
     time_ratio_warning_threshold: int = 500
     daily_event_min_gap_days: int = 2
     major_event_fixed_probability: float = 0.05
@@ -117,6 +119,10 @@ class LifeConfig:
                 self.daily_interval_seconds = self._config.get("daily_interval_seconds", REALTIME_DAILY_INTERVAL_SECONDS)
                 self.major_interval_seconds = self._config.get("major_interval_seconds", REALTIME_MAJOR_INTERVAL_SECONDS)
                 self.time_ratio = self._config.get("time_ratio", 1)
+                self.sync_with_local_time_when_realtime = self._as_bool(
+                    self._config.get("sync_with_local_time_when_realtime", True),
+                    default=True,
+                )
                 self.time_ratio_warning_threshold = self._config.get("time_ratio_warning_threshold", 500)
                 self.daily_event_min_gap_days = max(1, int(self._config.get("daily_event_min_gap_days", 2)))
                 self.major_event_fixed_probability = min(
@@ -192,6 +198,22 @@ class LifeConfig:
             else:
                 result[key] = value
         return result
+
+    @staticmethod
+    def _as_bool(value: object, default: bool = True) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on", "enable", "enabled", "开启", "开"}:
+                return True
+            if lowered in {"0", "false", "no", "off", "disable", "disabled", "关闭", "关"}:
+                return False
+        return default
 
     @property
     def persona_dir(self) -> Optional[Path]:

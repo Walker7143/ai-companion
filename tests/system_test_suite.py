@@ -1220,6 +1220,7 @@ class SystemTestSuite:
                 daily_interval_seconds=86400,
                 major_interval_seconds=604800,
                 time_ratio=1,
+                sync_with_local_time_when_realtime=False,
                 milestones=[
                     {"event": "缺少 age 的坏配置"},
                     {"age": "21", "event": "合法里程碑"},
@@ -1276,6 +1277,7 @@ class SystemTestSuite:
                 daily_interval_seconds=1,
                 major_interval_seconds=999999,
                 time_ratio=1,
+                sync_with_local_time_when_realtime=False,
                 scenario_cooldown_days=30,
             )
             engine = LifeEngine("life_cooldown_bot", cfg, state, model=FakeModel())
@@ -1349,7 +1351,7 @@ class SystemTestSuite:
                 (persona_dir / name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
             state = LifeState("persona_patch_bot", root)
-            cfg = LifeConfig()
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
             engine = LifeEngine("persona_patch_bot", cfg, state, model=_PatchModel(), persona_dir=persona_dir)
             event = MajorLifeEvent(
                 description="做出了一个长期规划上的关键决定",
@@ -1442,7 +1444,13 @@ class SystemTestSuite:
                 )
             )
 
-            engine = LifeEngine("life_prompt_bot", LifeConfig(), state, model=FakeModel(), persona_dir=persona_dir)
+            engine = LifeEngine(
+                "life_prompt_bot",
+                LifeConfig(sync_with_local_time_when_realtime=False),
+                state,
+                model=FakeModel(),
+                persona_dir=persona_dir,
+            )
             engine.set_bot_info("轨迹实验君", 24, "产品设计师", "理性, 敏感")
             status = engine.get_status()
             prompt = PersonaEngine(PersonaLoader(persona_dir).load()).build_system_prompt(life_context=status)
@@ -1482,6 +1490,7 @@ class SystemTestSuite:
                     "daily_interval_seconds": 999999,
                     "major_interval_seconds": 999999,
                     "time_ratio": 1,
+                    "sync_with_local_time_when_realtime": False,
                     "birth_date": profile.get("birth_date"),
                 },
             }
@@ -1610,7 +1619,7 @@ class SystemTestSuite:
             root = Path(td)
             state = LifeState("life_lenient_json_bot", root)
             state.current_date = "2024-01-01"
-            cfg = LifeConfig()
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
             engine = LifeEngine("life_lenient_json_bot", cfg, state, model=_BrokenJsonModel())
             event = await engine.generate_daily_event()
 
@@ -1684,7 +1693,7 @@ class SystemTestSuite:
             state.prune_events(max_events=1000, max_context_bits=999999)
             after_prune = state.to_dict().get("life_events", [])
 
-            cfg = LifeConfig(max_events=1000)
+            cfg = LifeConfig(max_events=1000, sync_with_local_time_when_realtime=False)
             state.prune_events(max_events=cfg.max_events, max_context_bits=999999)
             after_config_prune = state.to_dict().get("life_events", [])
 
@@ -1729,7 +1738,11 @@ class SystemTestSuite:
             state = LifeState("major_concrete_bot", root)
             state.current_date = "2030-05-08"
             state.bot_mood = "平静"
-            cfg = LifeConfig(major_event_fixed_probability=1.0, major_scenario_cooldown_days=0)
+            cfg = LifeConfig(
+                major_event_fixed_probability=1.0,
+                major_scenario_cooldown_days=0,
+                sync_with_local_time_when_realtime=False,
+            )
             engine = LifeEngine("major_concrete_bot", cfg, state, model=FakeModel())
             engine.set_bot_info("测试", 27, "产品设计师", "理性")
 
@@ -1792,6 +1805,7 @@ class SystemTestSuite:
                 major_scenario_cooldown_days=0,
                 unexpected_event_probability=1.0,
                 unexpected_event_cooldown_days=365,
+                sync_with_local_time_when_realtime=False,
             )
             engine = LifeEngine("unexpected_major_bot", cfg, state, model=_NoMajorModel())
             engine.set_bot_info("测试", 27, "项目经理", "理性")
@@ -1847,7 +1861,7 @@ class SystemTestSuite:
             root = Path(td)
             state = LifeState("daily_candidates_bot", root)
             state.current_date = "2030-05-08"
-            cfg = LifeConfig(llm_daily_candidate_limit=12)
+            cfg = LifeConfig(llm_daily_candidate_limit=12, sync_with_local_time_when_realtime=False)
             engine = LifeEngine("daily_candidates_bot", cfg, state, model=FakeModel())
             engine.set_bot_info("候选测试", 27, "产品经理", "内向, 敏感, 自律")
 
@@ -1949,7 +1963,12 @@ class SystemTestSuite:
             life_state.bot_current_activity = "在准备一次项目评审"
 
             major_model = _NoMajorModel()
-            life_engine = LifeEngine("timeline_prompt_bot", LifeConfig(major_event_fixed_probability=0.0), life_state, model=major_model)
+            life_engine = LifeEngine(
+                "timeline_prompt_bot",
+                LifeConfig(major_event_fixed_probability=0.0, sync_with_local_time_when_realtime=False),
+                life_state,
+                model=major_model,
+            )
             life_engine.set_bot_info("时间测试", 24, "产品设计师", "理性, 敏感")
             await life_engine.generate_major_event()
             major_prompt = major_model.chat_calls[-1]["messages"][-1]["content"]
@@ -2106,6 +2125,7 @@ class SystemTestSuite:
             and default_life.daily_interval_seconds == 86400
             and default_life.major_interval_seconds == 604800
             and default_life.daily_interval == 86400
+            and default_life.sync_with_local_time_when_realtime is True
             and "绑定飞书前必须先创建 Bot" in setup_text
             and "绑定飞书 App 时必须同时绑定 Bot" in setup_text
             and "是否为每个 Bot 单独配置主动唤醒活跃程度" in setup_text

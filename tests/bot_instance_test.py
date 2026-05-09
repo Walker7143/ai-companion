@@ -66,6 +66,7 @@ def _write_test_persona(root: Path, bot_id: str) -> None:
             "daily_interval_seconds": 86400,
             "major_interval_seconds": 604800,
             "time_ratio": 1,
+            "sync_with_local_time_when_realtime": False,
         },
     }
     for filename, data in files.items():

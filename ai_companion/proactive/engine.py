@@ -284,6 +284,13 @@ class ProactiveEngine:
                 lines.append(f"当前日期：{current_date}（{day_of_week}）")
             else:
                 lines.append(f"当前日期：{current_date}")
+        local_time = status.get("local_time")
+        time_of_day = status.get("time_of_day")
+        if local_time:
+            if time_of_day:
+                lines.append(f"当前本地时间：{local_time}（{time_of_day}）")
+            else:
+                lines.append(f"当前本地时间：{local_time}")
 
         season = status.get("current_season")
         month = status.get("current_month")

@@ -284,13 +284,14 @@ class BotInstance:
         # 初始化当前日期（如果是新 Bot 或 bot_age_days 为 0）
         # 这样重装后 bot 会从今天开始新的人生
         if not self.life_state.current_date or self.life_state.bot_age_days == 0:
-            self.life_state.current_date = datetime.now().strftime("%Y-%m-%d")
-            self.life_state.year = datetime.now().year
-            self.life_state.day_of_week = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][datetime.now().weekday()]
-            self.life_state.is_weekend = datetime.now().weekday() >= 5
+            now = datetime.now().astimezone()
+            self.life_state.current_date = now.strftime("%Y-%m-%d")
+            self.life_state.year = now.year
+            self.life_state.day_of_week = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][now.weekday()]
+            self.life_state.is_weekend = now.weekday() >= 5
 
             # 初始化季节
-            current_month = datetime.now().month
+            current_month = now.month
             self.life_state.current_month = current_month
             self.life_state.current_season = self.life_engine._get_season(current_month)
 

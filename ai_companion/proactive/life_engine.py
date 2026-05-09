@@ -19,7 +19,7 @@ import uuid
 import os
 import time
 from difflib import SequenceMatcher
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Any
 
@@ -57,6 +57,7 @@ LIFE_DAILY_PROMPT = """【Bot角色】
 季节：{season}（{month}月）
 人生阶段：{life_stage}
 日期：{current_date}，{day_of_week}
+当前本地时间：{local_time}（{time_of_day}）
 {holiday_context}
 {birthday_context}
 
@@ -100,6 +101,7 @@ LIFE_MAJOR_PROMPT = """【Bot角色】
 【当前时间背景】
 季节：{season}（{month}月）
 日期：{current_date}，{day_of_week}
+当前本地时间：{local_time}（{time_of_day}）
 人生阶段：{life_stage}
 {holiday_context}
 {birthday_context}
@@ -578,7 +580,11 @@ class LifeEngine:
             )
 
         # 先持久化日期推进结果；后续生日、里程碑或事件生成出错时，调度器不会反复重试并重复推进日期。
-        self.state.bot_age_days += max(1, len(advanced_dates))
+        if self._should_sync_realtime_with_local_time():
+            # 1:1 实时时间模式下，年龄天数只在自然跨日时递增。
+            self.state.bot_age_days += len(advanced_dates)
+        else:
+            self.state.bot_age_days += max(1, len(advanced_dates))
         self.state.last_daily_tick = tick_time
         self.state.save()
 
@@ -830,9 +836,13 @@ class LifeEngine:
 
     def _build_life_context(self) -> dict:
         """构建完整的人生上下文"""
+        if self._should_sync_realtime_with_local_time():
+            self._sync_state_to_local_now(persist=False)
         season_info = self._get_season_info()
         age_years = self._calc_real_age()
         life_stage = self._calc_life_stage(age_years)
+        local_now = self._get_local_now()
+        time_of_day = self._time_of_day_label(local_now.hour)
 
         return {
             "season": season_info["season"],
@@ -840,6 +850,12 @@ class LifeEngine:
             "life_stage": life_stage,
             "current_date": self.state.current_date or "未知",
             "day_of_week": self.state.day_of_week or "周一",
+            "local_time": local_now.strftime("%H:%M"),
+            "time_of_day": time_of_day,
+            "current_datetime_text": (
+                f"{self.state.current_date or '未知'} {local_now.strftime('%H:%M')} "
+                f"（{self.state.day_of_week or '周一'}，{time_of_day}）"
+            ),
         }
 
     def _get_season_info(self) -> dict:
@@ -949,6 +965,16 @@ class LifeEngine:
 
         每次最多推进 365 天，避免日期溢出。
         """
+        if self._should_sync_realtime_with_local_time():
+            previous_date = self._parse_state_current_date()
+            self._sync_state_to_local_now(persist=False)
+            current_date = self._parse_state_current_date()
+            if not previous_date or not current_date:
+                return []
+            if current_date <= previous_date:
+                return []
+            return [previous_date + timedelta(days=offset) for offset in range(1, (current_date - previous_date).days + 1)]
+
         if not self.state.current_date:
             # 首次初始化：从 birth_date 或当前日期开始
             if self.state.birth_date:
@@ -988,6 +1014,67 @@ class LifeEngine:
             logger.error(f"[LifeEngine] 日期推进失败: {e}")
             return []
 
+    def _should_sync_realtime_with_local_time(self) -> bool:
+        return (
+            int(getattr(self.config, "time_ratio", 1) or 1) == 1
+            and bool(getattr(self.config, "sync_with_local_time_when_realtime", True))
+        )
+
+    def _get_local_now(self) -> datetime:
+        # 使用部署机器本地时间，确保 Bot 与用户所在机器“上午/下午/晚上”一致。
+        return datetime.now().astimezone()
+
+    def _sync_state_to_local_now(self, persist: bool = True):
+        local_now = self._get_local_now()
+        local_date = local_now.date()
+        latest = {
+            "current_date": local_date.strftime("%Y-%m-%d"),
+            "year": local_date.year,
+            "day_of_week": WEEKDAYS[local_date.weekday()],
+            "is_weekend": local_date.weekday() >= 5,
+            "current_month": local_date.month,
+            "current_season": self._get_season(local_date.month),
+        }
+        raw_state = getattr(self.state, "_state", None)
+        if isinstance(raw_state, dict):
+            changed = False
+            for key, value in latest.items():
+                if raw_state.get(key) != value:
+                    raw_state[key] = value
+                    changed = True
+            if persist and changed:
+                self.state.save()
+            return
+
+        # 兜底：若状态对象实现发生变化，仍能通过属性写入同步。
+        self.state.current_date = latest["current_date"]
+        self.state.year = latest["year"]
+        self.state.day_of_week = latest["day_of_week"]
+        self.state.is_weekend = latest["is_weekend"]
+        self.state.current_month = latest["current_month"]
+        self.state.current_season = latest["current_season"]
+
+    def _parse_state_current_date(self) -> Optional[date]:
+        if not self.state.current_date:
+            return None
+        try:
+            return datetime.strptime(self.state.current_date, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    def _time_of_day_label(self, hour: int) -> str:
+        if 0 <= hour < 6:
+            return "凌晨"
+        if 6 <= hour < 11:
+            return "上午"
+        if 11 <= hour < 14:
+            return "中午"
+        if 14 <= hour < 18:
+            return "下午"
+        if 18 <= hour < 24:
+            return "晚上"
+        return "白天"
+
     async def generate_milestone_event(self, milestone: dict) -> Optional["MajorLifeEvent"]:
         """强制生成里程碑事件"""
         from .life_state import MajorLifeEvent
@@ -1021,6 +1108,8 @@ class LifeEngine:
     async def generate_birthday_event(self) -> Optional["MajorLifeEvent"]:
         """生成生日事件（每年只触发一次）"""
         from .life_state import MajorLifeEvent
+        if self._should_sync_realtime_with_local_time():
+            self._sync_state_to_local_now(persist=False)
 
         # 检查是否今年已经生成过生日事件（去重）
         if not self.state.current_date:
@@ -1061,6 +1150,8 @@ class LifeEngine:
     async def generate_major_event(self) -> Optional["MajorLifeEvent"]:
         """生成人生大事"""
         from .life_state import MajorLifeEvent
+        if self._should_sync_realtime_with_local_time():
+            self._sync_state_to_local_now(persist=False)
 
         recent = self.state.life_events[-5:] if self.state.life_events else []
         recent_str = "\n".join([
@@ -1093,6 +1184,8 @@ class LifeEngine:
             month=life_context["month"],
             current_date=life_context["current_date"],
             day_of_week=life_context["day_of_week"],
+            local_time=life_context.get("local_time", "未知"),
+            time_of_day=life_context.get("time_of_day", "白天"),
             life_stage=life_context["life_stage"],
             holiday_context=holiday_context,
             birthday_context=birthday_context,
@@ -1972,6 +2065,8 @@ class LifeEngine:
         return max(0.0, min(multiplier, 4.0))
 
     def _render_scenario_description(self, scenario: dict[str, Any]) -> str:
+        if self._should_sync_realtime_with_local_time():
+            self._sync_state_to_local_now(persist=False)
         template = random.choice(scenario.get("templates") or ["{date} 发生了一件具体的小事。"])
         values = {
             "date": self.state.current_date or "今天",
@@ -2530,6 +2625,8 @@ class LifeEngine:
         ]
 
     def _render_major_scenario_description(self, scenario: dict[str, Any]) -> str:
+        if self._should_sync_realtime_with_local_time():
+            self._sync_state_to_local_now(persist=False)
         template = random.choice(scenario.get("templates") or ["{date} 发生了一件具体的人生大事。"])
         values = {
             "date": self.state.current_date or "近期",
@@ -2554,9 +2651,12 @@ class LifeEngine:
 
     def get_status(self) -> dict:
         """获取当前状态"""
+        if self._should_sync_realtime_with_local_time():
+            self._sync_state_to_local_now(persist=False)
         life_events = self.state.life_events
         major_events = self.state.major_life_events
         real_age = self._calc_real_age()
+        local_now = self._get_local_now()
         return {
             "bot_mood": self.state.bot_mood,
             "bot_current_activity": self.state.bot_current_activity,
@@ -2570,6 +2670,8 @@ class LifeEngine:
             "day_of_week": self.state.day_of_week,
             "year": self.state.year,
             "is_weekend": self.state.is_weekend,
+            "local_time": local_now.strftime("%H:%M"),
+            "time_of_day": self._time_of_day_label(local_now.hour),
             "life_stage": self._calc_life_stage(real_age),
             "life_events_count": len(life_events),
             "major_events_count": len(major_events),

@@ -1,1 +1,1 @@
-{"kind": "ai-companion-bot-scheduler", "bot_id": "aiyue", "pid": 26693, "argv": ["tests/system_test_suite.py"], "cwd": "/Users/wangxiaowei/projects/own/ai-girl-friend", "acquired_at": "2026-05-08T07:34:04.349961+00:00", "metadata": {"bot_name": "爱月", "scheduler": "proactive"}}
+{"kind": "ai-companion-bot-scheduler", "bot_id": "aiyue", "pid": 6799, "argv": ["tests/system_test_suite.py"], "cwd": "/Users/wangxiaowei/projects/own/ai-girl-friend", "acquired_at": "2026-05-08T13:33:56.085641+00:00", "metadata": {"bot_name": "爱月", "scheduler": "proactive"}}

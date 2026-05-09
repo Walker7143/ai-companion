@@ -33,6 +33,7 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
                 daily_interval_seconds=86400,
                 major_interval_seconds=604800,
                 time_ratio=1,
+                sync_with_local_time_when_realtime=False,
                 milestones=[
                     {"event": "缺少 age 的坏配置"},
                     {"age": "21", "event": "合法里程碑"},
@@ -66,6 +67,7 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
                 daily_interval_seconds=86400,
                 major_interval_seconds=604800,
                 time_ratio=1,
+                sync_with_local_time_when_realtime=False,
                 milestones=[
                     {"event": "缺少 age 的坏配置"},
                     {"age": "二十一", "event": "中文年龄不是合法数字"},
@@ -84,6 +86,34 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(data["last_checked_age"], 21)
             self.assertEqual(data["triggered_milestones"], [])
             self.assertEqual(data["major_life_events"], [])
+
+    async def test_realtime_sync_uses_local_calendar_without_forcing_next_day(self):
+        with TemporaryDirectory(prefix="life-realtime-local-sync-") as td:
+            state = LifeState("realtime_local_sync_bot", Path(td))
+            local_now = datetime.now().astimezone()
+            state.current_date = local_now.strftime("%Y-%m-%d")
+            state.birth_date = "1990-01-01"
+            state.initial_age = 20
+            state.bot_age_days = 10
+
+            cfg = LifeConfig(
+                daily_interval_seconds=86400,
+                major_interval_seconds=604800,
+                time_ratio=1,
+                sync_with_local_time_when_realtime=True,
+            )
+            engine = LifeEngine("realtime_local_sync_bot", cfg, state, model=EmptyLifeModel())
+
+            await engine.tick_daily()
+            status = engine.get_status()
+
+            self.assertEqual(state.current_date, local_now.strftime("%Y-%m-%d"))
+            self.assertEqual(state.day_of_week, ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][local_now.weekday()])
+            self.assertEqual(state.current_month, local_now.month)
+            self.assertEqual(state.current_season, engine._get_season(local_now.month))
+            self.assertEqual(state.bot_age_days, 10)
+            self.assertEqual(status["current_date"], local_now.strftime("%Y-%m-%d"))
+            self.assertIn(status["time_of_day"], {"凌晨", "上午", "中午", "下午", "晚上", "白天"})
 
 
 if __name__ == "__main__":
