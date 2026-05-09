@@ -2867,7 +2867,7 @@ class SystemTestSuite:
     async def case_persona_importer_plan_apply_resume(self) -> tuple[bool, str, str]:
         from ai_companion.persona_importer.apply import apply_draft
         from ai_companion.persona_importer.chunker import chunk_sections, select_character_chunks
-        from ai_companion.persona_importer.paths import resolve_book_path
+        from ai_companion.persona_importer.paths import _decode_file_url_path, resolve_book_path
         from ai_companion.persona_importer.pipeline import PersonaImportPipeline
         from ai_companion.persona_importer.reader import load_book
         from ai_companion.persona_importer.schema import ImportOptions, parse_character_spec
@@ -3163,6 +3163,8 @@ class SystemTestSuite:
         mimo_memory_cfg = build_memory_config_for_provider(_Cfg(), "mimo")
         mimo_model_context = mimo_memory_cfg["context"]["compressor"]["model_context"]
         checks["mimo_model_context"] = mimo_model_context == 1048576
+        windows_file_url_path = _decode_file_url_path("/D:/data/%E4%B8%AA%E4%BA%BA/book.txt", platform="win32")
+        checks["windows_file_url_path"] = windows_file_url_path == "D:/data/个人/book.txt"
         passed = all(checks.values())
         failed_checks = [name for name, ok in checks.items() if not ok]
         detail = (
@@ -3196,6 +3198,7 @@ class SystemTestSuite:
                 "bad_shape_log": bad_shape_log,
                 "timeout_total": timeout_total,
                 "mimo_model_context": mimo_model_context,
+                "windows_file_url_path": windows_file_url_path,
                 "checks": checks,
             },
             ensure_ascii=False,
