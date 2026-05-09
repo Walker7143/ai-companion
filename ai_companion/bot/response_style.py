@@ -29,7 +29,17 @@ class ResponseStylePolisher:
         "总之，",
     ]
 
+    GENERIC_ACTION_LABELS = {
+        "消息",
+        "打字",
+        "停顿",
+        "小声",
+        "又发一条",
+        "又发了一条",
+    }
+
     ACTION_TEXT_RE = re.compile(r"[（(]([^（）()\n]{1,40})[）)]")
+    GENERIC_ACTION_TEXT_RE = re.compile(r"[（(]\s*(?:消息|打字|停顿|小声|又发(?:了)?(?:一)?条)\s*[）)]")
 
     def polish(
         self,
@@ -56,10 +66,22 @@ class ResponseStylePolisher:
         for reply in recent_replies[-limit:]:
             for match in self.ACTION_TEXT_RE.finditer(str(reply or "")):
                 normalized = self._normalize_action(match.group(1))
-                if normalized and normalized not in seen:
+                if not normalized or self._is_generic_action_label(normalized):
+                    continue
+                if normalized not in seen:
                     seen.add(normalized)
                     ordered.append(str(match.group(1) or "").strip())
         return ordered
+
+    def clean_generation_context(self, text: str) -> str:
+        """Remove failed action-label examples before they are shown to the LLM again."""
+        text = str(text or "")
+        if not text:
+            return text
+        text = self.GENERIC_ACTION_TEXT_RE.sub("", text)
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
 
     def _remove_ai_disclaimers(self, text: str) -> str:
         for phrase in self.AI_PHRASES:
@@ -129,6 +151,13 @@ class ResponseStylePolisher:
         raw = str(action_text or "").strip().lower()
         raw = re.sub(r"[，。,.!！?？:：;；~～…·\s]+", "", raw)
         return raw
+
+    def _is_generic_action_label(self, action_text: str) -> bool:
+        normalized = self._normalize_action(action_text)
+        return bool(normalized) and (
+            normalized in self.GENERIC_ACTION_LABELS
+            or re.fullmatch(r"又发(?:了)?(?:一)?条", normalized) is not None
+        )
 
 
 def _float(value: object) -> float:

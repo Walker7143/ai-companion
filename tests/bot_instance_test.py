@@ -391,6 +391,111 @@ class BotInstanceDirectTimeQueryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response, "现在是 16:58（下午）。")
 
 
+class BotInstanceRealtimeContextTest(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_time_question_does_not_include_old_time_history(self):
+        class TimeCaptureModel:
+            provider = "test"
+            model = "time-capture"
+
+            def __init__(self):
+                self.system_prompts = []
+                self.messages = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                self.messages.append(messages)
+                self.system_prompts.append(system_prompt)
+                return "\u73b0\u5728\u662f 16:58\uff08\u4e0b\u5348\uff09\u3002"
+
+        with TemporaryDirectory(prefix="bot-time-query-clean-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            model = TimeCaptureModel()
+            bot = BotInstance(
+                {"id": bot_id, "name": "\u6d4b\u8bd5 Bot", "data_dir": str(root)},
+                model=model,
+                memory_config={"embedding": "none"},
+                data_dir=root,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+            bot.life_engine.get_status = lambda: {
+                "current_date": "2026-05-09",
+                "day_of_week": "\u5468\u516d",
+                "local_time": "16:58",
+                "time_of_day": "\u4e0b\u5348",
+                "current_datetime_text": "2026-05-09 16:58\uff08\u5468\u516d\uff0c\u4e0b\u5348\uff09",
+            }
+            await bot.memory.init()
+            await bot.memory.working.append(
+                user_input="\u73b0\u5728\u51e0\u70b9",
+                bot_output="\uff08\u6d88\u606f\uff09\u4e0b\u5348\u4e09\u70b9\u591a\u3002\uff08\u6253\u5b57\uff09",
+                session_id=bot.memory.working.current_session,
+            )
+
+            try:
+                response = await bot.handle_message("\u73b0\u5728\u51e0\u70b9")
+            finally:
+                await bot.close()
+
+            sent_history = "\n".join(str(msg.get("content", "")) for msg in model.messages[0])
+            self.assertNotIn("\u4e0b\u5348\u4e09\u70b9\u591a", sent_history)
+            self.assertNotIn("\uff08\u6d88\u606f\uff09", sent_history)
+            self.assertNotIn("\u4e0b\u5348\u4e09\u70b9\u591a", model.system_prompts[0])
+            self.assertIn("16:58", model.system_prompts[0])
+            self.assertEqual(response, "\u73b0\u5728\u662f 16:58\uff08\u4e0b\u5348\uff09\u3002")
+
+
+class BotInstanceGenerationContextTest(unittest.IsolatedAsyncioTestCase):
+    async def test_old_generic_action_labels_are_removed_from_llm_history_only(self):
+        class HistoryCaptureModel:
+            provider = "test"
+            model = "history-capture"
+
+            def __init__(self):
+                self.messages = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                self.messages.append(messages)
+                return "（低头看了你一眼）我在。"
+
+        with TemporaryDirectory(prefix="bot-context-clean-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            model = HistoryCaptureModel()
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=model,
+                memory_config={"embedding": "none"},
+                data_dir=root,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+            await bot.memory.init()
+            await bot.memory.working.append(
+                user_input="你吃饭了吗",
+                bot_output="（消息）还没。（打字）准备煮点东西。（停顿）你呢？（又发一条）（小声）别又不吃。",
+                session_id=bot.memory.working.current_session,
+            )
+
+            try:
+                response = await bot.handle_message("陪我聊会儿")
+            finally:
+                await bot.close()
+
+            sent_history = "\n".join(str(msg.get("content", "")) for msg in model.messages[0])
+            self.assertNotIn("（消息）", sent_history)
+            self.assertNotIn("（打字）", sent_history)
+            self.assertNotIn("（停顿）", sent_history)
+            self.assertNotIn("（又发一条）", sent_history)
+            self.assertNotIn("（小声）", sent_history)
+            self.assertIn("准备煮点东西", sent_history)
+            self.assertEqual(response, "（低头看了你一眼）我在。")
+
+
 class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
     async def test_unconfigured_builtin_skills_are_disabled_with_reason(self):
         bot = BotInstance({"id": "shen_nian", "name": "沈念", "skills": {}}, model=None, memory_config=None)

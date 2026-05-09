@@ -669,7 +669,8 @@ class BotInstance:
             ctx = await self.memory.load_context(user_input)
 
             # 3. 构建带人格的记忆增强 system prompt
-            memory_suffix = ctx.get("system_suffix")
+            realtime_status_query = self._is_realtime_status_query(user_input)
+            memory_suffix = None if realtime_status_query else self._prepare_generation_suffix(ctx.get("system_suffix"))
             if image_context_suffix:
                 memory_suffix = self._merge_memory_suffix(memory_suffix, image_context_suffix)
 
@@ -682,7 +683,8 @@ class BotInstance:
             )
 
             # 4. 构建 messages
-            messages = ctx.get("working_history", [])
+            history = [] if realtime_status_query else ctx.get("working_history", [])
+            messages = self._prepare_generation_messages(history)
             messages.append({"role": "user", "content": user_input})
 
             # 5. 对话
@@ -719,6 +721,75 @@ class BotInstance:
         self.conversation_history.append({"role": "assistant", "content": response})
 
         return response
+
+    def _prepare_generation_messages(self, messages: list[dict]) -> list[dict]:
+        cleaned: list[dict] = []
+        for item in messages if isinstance(messages, list) else []:
+            if not isinstance(item, dict):
+                continue
+            copied = dict(item)
+            role = copied.get("role")
+            if role in {"assistant", "system"}:
+                copied["content"] = self.response_polisher.clean_generation_context(str(copied.get("content", "") or ""))
+            cleaned.append(copied)
+        return cleaned
+
+    def _prepare_generation_suffix(self, suffix: str | None) -> str | None:
+        if not suffix:
+            return suffix
+        return self.response_polisher.clean_generation_context(str(suffix))
+
+    def _is_realtime_status_query(self, text: str) -> bool:
+        compact = "".join(str(text or "").lower().split())
+        if not compact:
+            return False
+
+        english_tokens = (
+            "whattime",
+            "currenttime",
+            "localtime",
+            "whatdate",
+            "today'sdate",
+            "todaydate",
+            "whatday",
+        )
+        if any(token in compact for token in english_tokens):
+            return True
+
+        current_markers = (
+            "\u73b0\u5728",  # 现在
+            "\u5f53\u524d",  # 当前
+            "\u6b64\u523b",  # 此刻
+            "\u8fd9\u4f1a\u513f",  # 这会儿
+            "\u4eca\u5929",  # 今天
+        )
+        time_markers = (
+            "\u51e0\u70b9",  # 几点
+            "\u591a\u5c11\u70b9",  # 多少点
+            "\u4ec0\u4e48\u65f6\u95f4",  # 什么时间
+            "\u5f53\u524d\u65f6\u95f4",  # 当前时间
+            "\u73b0\u5728\u65f6\u95f4",  # 现在时间
+            "\u672c\u5730\u65f6\u95f4",  # 本地时间
+        )
+        date_markers = (
+            "\u51e0\u53f7",  # 几号
+            "\u65e5\u671f",  # 日期
+            "\u661f\u671f\u51e0",  # 星期几
+            "\u5468\u51e0",  # 周几
+            "\u793c\u62dc\u51e0",  # 礼拜几
+        )
+        has_current_marker = any(marker in compact for marker in current_markers)
+        if any(marker in compact for marker in date_markers) and has_current_marker:
+            return True
+        if any(marker in compact for marker in time_markers[2:]):
+            return True
+        if any(marker in compact for marker in time_markers[:2]) and has_current_marker:
+            return True
+        if compact in {"\u51e0\u70b9", "\u51e0\u70b9\u4e86", "\u51e0\u70b9\u5566", "\u51e0\u70b9\u5462"}:
+            return True
+        if "\u4f60\u90a3\u8fb9\u51e0\u70b9" in compact or "\u90a3\u8fb9\u51e0\u70b9" in compact:
+            return True
+        return False
 
     def _build_runtime_input(self, user_input: str, memory_turn_context: dict | None) -> dict:
         context = memory_turn_context if isinstance(memory_turn_context, dict) else {}
