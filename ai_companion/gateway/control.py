@@ -12,6 +12,8 @@ from typing import Any
 
 import psutil
 
+from ai_companion.logging_utils import get_log_max_bytes, start_log_limit_maintenance, trim_log_file
+
 # Project root
 _project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_project_root))
@@ -56,6 +58,9 @@ def is_gateway_running() -> bool:
 def ensure_log_dir() -> None:
     """Ensure log directory exists."""
     GATEWAY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    max_bytes = get_log_max_bytes()
+    trim_log_file(GATEWAY_LOG_FILE, max_bytes=max_bytes)
+    start_log_limit_maintenance(GATEWAY_LOG_FILE.parent, max_bytes=max_bytes)
 
 
 def _read_pid_file() -> int | None:
@@ -222,12 +227,15 @@ def start_gateway(sync: bool = False) -> int | None:
 
     if sync:
         print("正在启动 Gateway（前台模式）...")
+        from ai_companion.gateway.__main__ import setup_logging
         from ai_companion.gateway.cmd import run_gateway
 
+        setup_logging()
         asyncio.run(run_gateway(daemon=False))
         return None
 
     cmd.append("--daemon")
+    trim_log_file(GATEWAY_LOG_FILE, max_bytes=get_log_max_bytes())
     with open(GATEWAY_LOG_FILE, "a", encoding="utf-8") as log_file:
         process = subprocess.Popen(
             cmd,
@@ -312,6 +320,7 @@ def _format_platform_status_detail(name: str, status: dict[str, Any]) -> str:
 
 def tail_logs(lines: int = 50) -> None:
     """Print latest gateway log lines."""
+    trim_log_file(GATEWAY_LOG_FILE, max_bytes=get_log_max_bytes())
     if not GATEWAY_LOG_FILE.exists():
         print("[ERROR] 日志文件不存在")
         return

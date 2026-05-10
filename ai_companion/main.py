@@ -46,7 +46,7 @@ async def main(bot_filter: str = None):
     if bot_filter:
         selected = next((b for b in config.get_enabled_bots() if b.get("id") == bot_filter), None)
         bot_name_for_log = selected.get("name") if selected else bot_filter
-    setup_logging(bot_name=bot_name_for_log)
+    setup_logging(bot_name=bot_name_for_log, config=config.config)
 
     # 获取数据目录
     user_dir = Path.home() / ".ai-companion" / "data" / "bots"
@@ -156,12 +156,12 @@ async def main(bot_filter: str = None):
 
 def show_status():
     """显示状态"""
-    setup_logging()
+    config = Config()
+    setup_logging(config=config.config)
     data_dir = get_data_dir()
     print(f"数据目录: {data_dir}")
     print(f"配置文件: {data_dir / 'config'}")
 
-    config = Config()
     bots = config.get_enabled_bots()
     print(f"已配置 Bot: {len(bots)}")
     for b in bots:

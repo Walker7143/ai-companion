@@ -312,6 +312,7 @@ platforms:
 logging:
   level: INFO          # DEBUG/INFO/WARNING/ERROR
   file: "~/.ai-companion/logs/ai_companion.log"
+  max_file_size: "50MB" # 单个日志文件最多保留最近 50MB
 
 # 数据目录（可选）
 data_dir: "~/.ai-companion/data"

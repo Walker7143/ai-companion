@@ -15,6 +15,8 @@ import sys
 import time
 from typing import Any, Iterator
 
+from ai_companion.logging_utils import get_log_max_bytes, start_log_limit_maintenance, trim_log_file
+
 
 UI_PORT = int(os.environ.get("AI_COMPANION_UI_PORT", "1421"))
 UI_URL = f"http://localhost:{UI_PORT}"
@@ -169,8 +171,8 @@ def _ensure_dependencies(ui_dir: Path, npm_path: str) -> str | None:
     if (ui_dir / "node_modules").exists():
         return None
 
-    _ui_log_file().parent.mkdir(parents=True, exist_ok=True)
-    with open(_ui_log_file(), "a", encoding="utf-8") as log_file:
+    log_path = _prepare_ui_log_file()
+    with open(log_path, "a", encoding="utf-8") as log_file:
         try:
             result = subprocess.run(
                 [npm_path, "install"],
@@ -190,8 +192,7 @@ def _ensure_dependencies(ui_dir: Path, npm_path: str) -> str | None:
 
 
 def _spawn_ui(ui_dir: Path, npm_path: str) -> subprocess.Popen[Any]:
-    _ui_log_file().parent.mkdir(parents=True, exist_ok=True)
-    log_file = open(_ui_log_file(), "a", encoding="utf-8")
+    log_file = open(_prepare_ui_log_file(), "a", encoding="utf-8")
     cmd = [
         npm_path,
         "run",
@@ -224,6 +225,15 @@ def _spawn_ui(ui_dir: Path, npm_path: str) -> subprocess.Popen[Any]:
 def _ui_log_file() -> Path:
     log_dir = Path(os.environ.get("AI_COMPANION_LOG_DIR", _STATE_DIR / "logs"))
     return log_dir / "ui.log"
+
+
+def _prepare_ui_log_file() -> Path:
+    log_path = _ui_log_file()
+    max_bytes = get_log_max_bytes()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    trim_log_file(log_path, max_bytes=max_bytes)
+    start_log_limit_maintenance(log_path.parent, max_bytes=max_bytes)
+    return log_path
 
 
 def _is_port_open(port: int) -> bool:

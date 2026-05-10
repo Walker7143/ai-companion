@@ -8,7 +8,6 @@ import aiohttp
 import asyncio
 import json
 import logging
-import logging.handlers
 import os
 import signal
 import sys
@@ -48,6 +47,12 @@ from ai_companion.gateway.path_resolver import (
     get_memory_db_path as resolve_memory_db_path,
 )
 from ai_companion.skill.config_merge import merge_skill_config
+from ai_companion.logging_utils import (
+    build_tail_preserving_file_handler,
+    get_log_dir,
+    get_log_max_bytes,
+    start_log_limit_maintenance,
+)
 from ai_companion.ui_server import (
     UIStartResult,
     ensure_ui_server,
@@ -484,8 +489,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             page_size = max(1, min(200, int(request.query.get("page_size", "20"))))
         except ValueError:
             page, page_size = 1, 20
-        hermes_home = Path.home() / ".ai-companion"
-        log_dir = hermes_home / "logs"
+        log_dir = get_log_dir()
         logs = []
         if log_dir.exists():
             import re
@@ -536,8 +540,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
-        hermes_home = Path.home() / ".ai-companion"
-        log_file = hermes_home / "logs" / "gateway.log"
+        log_file = get_log_dir() / "gateway.log"
         last_size = 0
         if log_file.exists():
             last_size = log_file.stat().st_size
@@ -568,6 +571,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 await asyncio.sleep(1)
                 if log_file.exists():
                     current_size = log_file.stat().st_size
+                    if current_size < last_size:
+                        last_size = 0
                     if current_size > last_size:
                         content = log_file.read_text(encoding="utf-8")
                         new_content = content[last_size:]
@@ -1884,18 +1889,17 @@ class AiohttpAccessFilter(logging.Filter):
 if __name__ == "__main__":
     def setup_logging():
         """配置日志，同时输出到 stdout 和文件"""
-        import pathlib
-        log_dir = pathlib.Path.home() / ".ai-companion" / "logs"
+        log_dir = get_log_dir()
+        max_bytes = get_log_max_bytes()
         log_dir.mkdir(parents=True, exist_ok=True)
+        start_log_limit_maintenance(log_dir, max_bytes=max_bytes)
         log_file = log_dir / "gateway.log"
 
-        file_handler = logging.handlers.RotatingFileHandler(
+        file_handler = build_tail_preserving_file_handler(
             log_file,
-            maxBytes=10 * 1024 * 1024,  # 10MB
-            backupCount=5,
-            encoding="utf-8",
+            max_bytes=max_bytes,
+            level=logging.DEBUG,
         )
-        file_handler.setLevel(logging.DEBUG)
         file_handler.addFilter(AiohttpAccessFilter())
 
         # Console handler
@@ -1906,6 +1910,7 @@ if __name__ == "__main__":
             level=logging.DEBUG,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             handlers=[console_handler, file_handler],
+            force=True,
         )
 
     setup_logging()
