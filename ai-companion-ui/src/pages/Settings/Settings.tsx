@@ -155,6 +155,17 @@ function nestedConfig(platform: PlatformConfig, key: string): Record<string, unk
   return (cfg[key] && typeof cfg[key] === 'object' ? cfg[key] : {}) as Record<string, unknown>;
 }
 
+const imageSkillDefaults: Record<'image_generation' | 'image_understanding', Pick<SkillEntryConfig, 'base_url' | 'model'>> = {
+  image_generation: {
+    base_url: 'https://api.openai.com/v1',
+    model: 'gpt-image-1',
+  },
+  image_understanding: {
+    base_url: 'https://api.openai.com/v1',
+    model: 'gpt-4o',
+  },
+};
+
 function dedicatedFeishuRouting(routing: Record<string, unknown>, botId?: string): Record<string, unknown> {
   const next = { ...routing };
   delete next.group_bot_map;
@@ -746,6 +757,7 @@ export function Settings() {
             const botCfg = (draft.skills.bot[skillName] || {}) as SkillEntryConfig;
             const resolved = (draft.skills.resolved[skillName] || {}) as SkillEntryConfig;
             const isVision = skillName === 'image_understanding';
+            const defaults = imageSkillDefaults[skillName];
             return (
               <Card key={skillName}>
                 <CardContent style={{ padding: 16, display: 'grid', gap: 14 }}>
@@ -753,7 +765,7 @@ export function Settings() {
                     {skillName === 'image_generation' ? '图片生成' : '图片理解'}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    当前生效：enabled={String(Boolean(resolved.enabled))} / auto={String(Boolean(resolved.auto))} / provider={String(resolved.provider || '-') } / model={String(resolved.model || '-') }
+                    当前生效：enabled={String(Boolean(resolved.enabled))} / auto={String(Boolean(resolved.auto))} / base_url={String(resolved.base_url || defaults.base_url)} / model={String(resolved.model || defaults.model)}
                   </div>
                   <div style={gridStyle}>
                     <div>
@@ -767,8 +779,9 @@ export function Settings() {
                           <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>自动触发</span>
                           <Toggle checked={Boolean(globalCfg.auto)} onChange={(event) => patchSkillLayer('global', skillName, { auto: event.target.checked })} />
                         </div>
-                        <Input label="Provider" value={String(globalCfg.provider || '')} onChange={(event) => patchSkillLayer('global', skillName, { provider: event.target.value })} />
-                        <Input label="Model" value={String(globalCfg.model || '')} onChange={(event) => patchSkillLayer('global', skillName, { model: event.target.value })} />
+                        <Input label="Base URL" value={String(globalCfg.base_url || '')} placeholder={defaults.base_url} onChange={(event) => patchSkillLayer('global', skillName, { base_url: event.target.value })} />
+                        <Input label="模型名" value={String(globalCfg.model || '')} placeholder={defaults.model} onChange={(event) => patchSkillLayer('global', skillName, { model: event.target.value })} />
+                        <Input label="API Key" type="password" value={String(globalCfg.api_key || '')} onChange={(event) => patchSkillLayer('global', skillName, { api_key: event.target.value })} />
                         {isVision && (
                           <>
                             <Input label="最大图片大小(MB)" type="number" min="1" value={Number(globalCfg.max_image_size_mb || 8)} onChange={(event) => patchSkillLayer('global', skillName, { max_image_size_mb: Number(event.target.value) })} />
@@ -788,8 +801,9 @@ export function Settings() {
                           <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>自动触发</span>
                           <Toggle checked={Boolean(botCfg.auto)} onChange={(event) => patchSkillLayer('bot', skillName, { auto: event.target.checked }, false)} />
                         </div>
-                        <Input label="Provider" value={String(botCfg.provider || '')} onChange={(event) => patchSkillLayer('bot', skillName, { provider: event.target.value }, true)} />
-                        <Input label="Model" value={String(botCfg.model || '')} onChange={(event) => patchSkillLayer('bot', skillName, { model: event.target.value }, true)} />
+                        <Input label="Base URL" value={String(botCfg.base_url || '')} placeholder={String(resolved.base_url || defaults.base_url)} onChange={(event) => patchSkillLayer('bot', skillName, { base_url: event.target.value }, true)} />
+                        <Input label="模型名" value={String(botCfg.model || '')} placeholder={String(resolved.model || defaults.model)} onChange={(event) => patchSkillLayer('bot', skillName, { model: event.target.value }, true)} />
+                        <Input label="API Key" type="password" value={String(botCfg.api_key || '')} onChange={(event) => patchSkillLayer('bot', skillName, { api_key: event.target.value }, true)} />
                         {isVision && (
                           <>
                             <Input label="最大图片大小(MB)" type="number" min="1" value={Number(botCfg.max_image_size_mb || 8)} onChange={(event) => patchSkillLayer('bot', skillName, { max_image_size_mb: Number(event.target.value) }, true)} />

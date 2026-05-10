@@ -50,26 +50,19 @@ skills:
   image_generation:
     enabled: true
     auto: true
-    provider: "minimax"
-    model: "image-01"
-    api_key: "${MINIMAX_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-image-1"
+    api_key: "${OPENAI_API_KEY}"
     output_dir: "data/bots/_images"
-    # 旧格式仍兼容：未迁移前的 provider 块会继续读取
-    minimax:
-      model: "image-01"
-      output_dir: "data/bots/_images"
 
   image_understanding:
     enabled: true
     auto: true
-    provider: "openai"        # openai / minimax / custom
+    base_url: "https://api.openai.com/v1"
     model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"
     max_image_size_mb: 8
     max_images_per_message: 3
-    openai:
-      model: "gpt-4o"
-      # api_key: "${OPENAI_API_KEY}"
-      # base_url: "https://api.openai.com/v1"
 
   video_generation:
     model: "minimax"          # 默认模型：minimax | 自定义

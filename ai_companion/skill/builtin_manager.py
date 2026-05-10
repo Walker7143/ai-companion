@@ -13,6 +13,27 @@ from .image_understanding import ImageUnderstandingSkill
 from .tts import TTSSkill
 
 
+def _resolve_image_provider(skill_name: str, cfg: dict[str, Any], fallback: str = "") -> str:
+    provider = str(cfg.get("provider", "") or fallback or "").strip().lower()
+    if provider in {"openai", "compatible", "openai_compatible", "openai-compatible"}:
+        return "openai_compatible"
+    if provider in {"minimax", "custom"}:
+        return provider
+    if provider:
+        return provider
+
+    model_hint = str(cfg.get("model", "") or "").strip().lower()
+    if model_hint == "minimax" or isinstance(cfg.get("minimax"), dict):
+        return "minimax"
+    if skill_name == "image_understanding" and isinstance(cfg.get("custom"), dict):
+        return "custom"
+    if skill_name in {"image_generation", "image_understanding"} and (
+        cfg.get("base_url") or cfg.get("api_key") or cfg.get("model") or isinstance(cfg.get("openai"), dict)
+    ):
+        return "openai_compatible"
+    return fallback
+
+
 class BuiltinSkillManager:
     """Register builtin skills and fill runtime capability status."""
 
@@ -48,6 +69,8 @@ class BuiltinSkillManager:
             cfg = dict(raw_cfg)
             enabled = bool(cfg.get("enabled", True))
             provider = str(cfg.get("provider", "") or statuses.get(skill_name, {}).get("provider", "")).strip()
+            if skill_name in {"image_generation", "image_understanding"}:
+                provider = _resolve_image_provider(skill_name, cfg, provider)
             model = str(cfg.get("model", "") or statuses.get(skill_name, {}).get("model", "")).strip()
             auto = bool(cfg.get("auto", statuses.get(skill_name, {}).get("auto", self._AUTO_DEFAULTS.get(skill_name, False))))
 
@@ -102,18 +125,25 @@ class BuiltinSkillManager:
         }
 
     def _infer_unavailable_reason(self, skill_name: str, skill: Any, cfg: dict[str, Any], provider: str) -> str:
-        provider_name = (provider or cfg.get("model") or getattr(skill, "default_model", "") or "").strip()
+        if skill_name in {"image_generation", "image_understanding"}:
+            provider_name = _resolve_image_provider(skill_name, cfg, provider)
+        else:
+            provider_name = (provider or cfg.get("model") or getattr(skill, "default_model", "") or "").strip()
         if provider_name and provider_name not in getattr(skill, "supported_models", []):
             return f"provider_not_supported:{provider_name}"
 
         if skill_name == "image_generation":
-            has_key = bool(
-                os.environ.get("MINIMAX_API_KEY")
-                or cfg.get("api_key")
-                or (cfg.get("minimax") or {}).get("api_key")
-            )
+            provider_name = provider_name or "openai_compatible"
+            openai_cfg = cfg.get("openai") if isinstance(cfg.get("openai"), dict) else {}
+            minimax_cfg = cfg.get("minimax") if isinstance(cfg.get("minimax"), dict) else {}
+            if provider_name == "minimax":
+                has_key = bool(os.environ.get("MINIMAX_API_KEY") or cfg.get("api_key") or minimax_cfg.get("api_key"))
+                if not has_key:
+                    return "missing_api_key:MINIMAX_API_KEY"
+                return "unavailable_runtime_check"
+            has_key = bool(os.environ.get("OPENAI_API_KEY") or cfg.get("api_key") or openai_cfg.get("api_key"))
             if not has_key:
-                return "missing_api_key:MINIMAX_API_KEY"
+                return "missing_api_key:api_key"
             return "unavailable_runtime_check"
 
         if skill_name == "tts":
@@ -139,21 +169,23 @@ class BuiltinSkillManager:
             return "unavailable_runtime_check"
 
         if skill_name == "image_understanding":
-            provider_name = (provider_name or "openai").lower()
-            if provider_name == "openai":
+            provider_name = (provider_name or "openai_compatible").lower()
+            if provider_name == "openai_compatible":
+                openai_cfg = cfg.get("openai") if isinstance(cfg.get("openai"), dict) else {}
                 has_key = bool(
                     os.environ.get("OPENAI_API_KEY")
                     or cfg.get("api_key")
-                    or (cfg.get("openai") or {}).get("api_key")
+                    or openai_cfg.get("api_key")
                 )
                 if not has_key:
-                    return "missing_api_key:OPENAI_API_KEY"
+                    return "missing_api_key:api_key"
                 return "unavailable_runtime_check"
             if provider_name == "minimax":
+                minimax_cfg = cfg.get("minimax") if isinstance(cfg.get("minimax"), dict) else {}
                 has_key = bool(
                     os.environ.get("MINIMAX_API_KEY")
                     or cfg.get("api_key")
-                    or (cfg.get("minimax") or {}).get("api_key")
+                    or minimax_cfg.get("api_key")
                 )
                 if not has_key:
                     return "missing_api_key:MINIMAX_API_KEY"

@@ -353,6 +353,20 @@ memory:
   max_working_turns: 20
   hard_limit_chars: 5000
   soft_limit_chars: 3000
+
+skills:
+  image_generation:
+    enabled: true
+    auto: true
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-image-1"
+    api_key: "${OPENAI_API_KEY}"
+  image_understanding:
+    enabled: true
+    auto: true
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"
 ```
 
 ### 环境变量

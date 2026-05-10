@@ -19,7 +19,7 @@ class AutoRouterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_draw_intent_auto_routes_to_image_generation(self):
         dispatcher = SkillDispatcher()
-        skill = ImageGenerationSkill({"enabled": True, "api_key": "x", "model": "minimax"})
+        skill = ImageGenerationSkill({"enabled": True, "api_key": "x", "model": "gpt-image-1", "base_url": "https://example.com/v1"})
         skill.execute = AsyncMock(
             return_value=SkillResult(
                 success=True,
@@ -133,7 +133,7 @@ class AutoRouterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_photo_capture_intent_routes_to_image_generation_with_camera_style_prompt(self):
         dispatcher = SkillDispatcher()
-        skill = ImageGenerationSkill({"enabled": True, "api_key": "x", "model": "minimax"})
+        skill = ImageGenerationSkill({"enabled": True, "api_key": "x", "model": "gpt-image-1", "base_url": "https://example.com/v1"})
         captured_prompt = {"value": ""}
 
         async def _fake_execute(params, _context):

@@ -46,17 +46,19 @@ WEB_CONFIG_SCHEMA = {
             "id": "skills",
             "title": "技能能力",
             "scope": "global+bot",
-            "description": "配置图片生成/图片理解等内置技能的启用状态、自动路由和 provider 参数。",
+            "description": "配置图片生成/图片理解等内置技能。图片类技能按 OpenAI-compatible 规范默认工作，只需要 Base URL、模型名和 API Key。",
             "restart": "保存后新请求生效；若 Gateway 已运行建议重启后再验证自动路由。",
             "fields": {
                 "image_generation.enabled": "是否启用图片生成能力。",
                 "image_generation.auto": "是否允许自然语言自动触发图片生成。",
-                "image_generation.provider": "图片生成 provider，目前常用 minimax。",
-                "image_generation.model": "图片生成模型名，例如 image-01。",
+                "image_generation.base_url": "图片生成 API 基础地址，系统会自动调用 /images/generations。",
+                "image_generation.model": "图片生成模型名，例如 gpt-image-1、dall-e-3 或服务商给你的模型名。",
+                "image_generation.api_key": "图片生成 API Key。留空或保留掩码表示继续使用旧值。",
                 "image_understanding.enabled": "是否启用图片理解能力。",
                 "image_understanding.auto": "是否允许图片消息自动触发理解。",
-                "image_understanding.provider": "图片理解 provider：openai / minimax / custom。",
-                "image_understanding.model": "图片理解模型名，例如 gpt-4o。",
+                "image_understanding.base_url": "图片理解 API 基础地址，系统会自动调用 /chat/completions。",
+                "image_understanding.model": "图片理解模型名，例如 gpt-4o、qwen-vl-plus 或服务商给你的模型名。",
+                "image_understanding.api_key": "图片理解 API Key。留空或保留掩码表示继续使用旧值。",
             },
         },
         {
@@ -149,6 +151,10 @@ WEB_CONFIG_SCHEMA = {
     ],
     "sensitive_fields": [
         "model.api_key",
+        "skills.global.image_generation.api_key",
+        "skills.global.image_understanding.api_key",
+        "skills.bot.image_generation.api_key",
+        "skills.bot.image_understanding.api_key",
         "platforms.feishu.extra.app_secret",
         "platforms.weixin.token",
         "platforms.weixin.extra.token",
@@ -347,9 +353,54 @@ def _normalize_skill_tree(value: Any) -> dict:
             if key in {"max_image_size_mb", "max_images_per_message"}:
                 cfg[key] = _as_int(raw_val, 8 if key == "max_image_size_mb" else 3, 1)
                 continue
+            if key == "api_key" and _is_masked_or_empty(raw_val):
+                continue
             cfg[key] = raw_val
         result[str(skill_name)] = cfg
     return result
+
+
+def _public_skill_tree(value: Any) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for skill_name, raw_cfg in value.items():
+        if not isinstance(raw_cfg, dict):
+            continue
+        cfg: dict[str, Any] = {}
+        for key, raw_val in raw_cfg.items():
+            if key == "api_key":
+                cfg[key] = mask_secret(str(raw_val or ""))
+            elif isinstance(raw_val, dict):
+                cfg[key] = _public_skill_tree({"_": raw_val}).get("_", raw_val)
+            else:
+                cfg[key] = raw_val
+        result[str(skill_name)] = cfg
+    return result
+
+
+def _merge_secret_skill_tree(incoming: dict, existing: dict) -> dict:
+    result = _normalize_skill_tree(incoming)
+    existing = existing if isinstance(existing, dict) else {}
+    for skill_name, cfg in result.items():
+        if not isinstance(cfg, dict):
+            continue
+        existing_cfg = existing.get(skill_name) if isinstance(existing.get(skill_name), dict) else {}
+        incoming_cfg = incoming.get(skill_name) if isinstance(incoming.get(skill_name), dict) else {}
+        _restore_masked_api_keys(cfg, incoming_cfg, existing_cfg)
+    return result
+
+
+def _restore_masked_api_keys(result: dict, incoming: dict, existing: dict) -> None:
+    if "api_key" not in result and existing.get("api_key") and _is_masked_or_empty(incoming.get("api_key")):
+        result["api_key"] = existing["api_key"]
+
+    for key, child in list(result.items()):
+        if not isinstance(child, dict):
+            continue
+        incoming_child = incoming.get(key) if isinstance(incoming.get(key), dict) else {}
+        existing_child = existing.get(key) if isinstance(existing.get(key), dict) else {}
+        _restore_masked_api_keys(child, incoming_child, existing_child)
 
 
 def _validate_feishu_one_to_one_binding(feishu: dict):
@@ -634,18 +685,18 @@ class ConfigAdminService:
         }
 
     def _public_skills(self, bot_id: str, models_data: dict) -> dict:
-        global_skills = models_data.get("skills", {}) if isinstance(models_data.get("skills"), dict) else {}
+        global_skills_raw = models_data.get("skills", {}) if isinstance(models_data.get("skills"), dict) else {}
         bots_data = _load_yaml(self.bots_path)
-        bot_skills = {}
+        bot_skills_raw = {}
         for bot_cfg in bots_data.get("bots", []) if isinstance(bots_data.get("bots"), list) else []:
             if str(bot_cfg.get("id") or "") == bot_id and isinstance(bot_cfg.get("skills"), dict):
-                bot_skills = bot_cfg.get("skills", {})
+                bot_skills_raw = bot_cfg.get("skills", {})
                 break
-        merged = _deep_merge(global_skills, bot_skills)
+        merged = _deep_merge(global_skills_raw, bot_skills_raw)
         return {
-            "global": global_skills,
-            "bot": bot_skills,
-            "resolved": merged,
+            "global": _public_skill_tree(global_skills_raw),
+            "bot": _public_skill_tree(bot_skills_raw),
+            "resolved": _public_skill_tree(merged),
         }
 
     def _public_proactive(self, cfg: dict) -> dict:
@@ -919,7 +970,8 @@ class ConfigAdminService:
             bot_skills = {}
 
         models_data = _load_yaml(self.models_path)
-        models_data["skills"] = _normalize_skill_tree(global_skills)
+        existing_global = models_data.get("skills", {}) if isinstance(models_data.get("skills"), dict) else {}
+        models_data["skills"] = _merge_secret_skill_tree(global_skills, existing_global)
         _write_yaml(self.models_path, models_data)
 
         bots_data = _load_yaml(self.bots_path)
@@ -934,8 +986,9 @@ class ConfigAdminService:
         if target is None:
             target = {"id": bot_id, "name": bot_id, "enabled": True}
             bots.append(target)
+        existing_bot_skills = target.get("skills", {}) if isinstance(target.get("skills"), dict) else {}
         if bot_skills:
-            target["skills"] = _normalize_skill_tree(bot_skills)
+            target["skills"] = _merge_secret_skill_tree(bot_skills, existing_bot_skills)
         else:
             target.pop("skills", None)
         bots_data["bots"] = bots

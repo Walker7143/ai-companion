@@ -8,12 +8,14 @@ bots:
     skills:
       image_generation:
         auto: true
-        provider: "minimax"
-        model: "image-01"
+        base_url: "https://api.openai.com/v1"
+        model: "gpt-image-1"
+        api_key: "${OPENAI_API_KEY}"
       image_understanding:
         auto: true
-        provider: "openai"
+        base_url: "https://api.openai.com/v1"
         model: "gpt-4o"
+        api_key: "${OPENAI_API_KEY}"
 
   - id: shen_nian
     name: 沈念

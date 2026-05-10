@@ -257,6 +257,7 @@ export interface SkillEntryConfig {
   auto?: boolean;
   provider?: string;
   model?: string;
+  base_url?: string;
   api_key?: string;
   output_dir?: string;
   max_image_size_mb?: number;

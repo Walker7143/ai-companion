@@ -17,6 +17,20 @@ from .base import Skill, SkillContext, SkillResult
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.chat/v1"
+
+
+def _clean_base_url(value: str | None, default: str) -> str:
+    return str(value or default).strip().rstrip("/")
+
+
+def _endpoint_url(base_url: str, endpoint: str) -> str:
+    base = base_url.strip().rstrip("/")
+    normalized_endpoint = "/" + endpoint.strip("/")
+    if base.endswith(normalized_endpoint):
+        return base
+    return f"{base}{normalized_endpoint}"
 
 
 class ImageUnderstandingSkill(Skill):
@@ -25,7 +39,7 @@ class ImageUnderstandingSkill(Skill):
     name = "image_understanding"
     description = "理解图片内容并输出结构化结果"
     capabilities = ["image_understanding", "vision"]
-    supported_models = ["openai", "minimax", "custom"]
+    supported_models = ["openai_compatible", "openai", "minimax", "custom"]
 
     def __init__(self, config: dict | None = None):
         super().__init__(config)
@@ -36,20 +50,22 @@ class ImageUnderstandingSkill(Skill):
 
     def _resolve_provider(self) -> str:
         provider = str(self.config.get("provider", "") or "").strip().lower()
+        if provider in {"openai", "custom", "compatible", "openai_compatible", "openai-compatible"}:
+            return "openai_compatible" if provider != "custom" else "custom"
         if provider:
             return provider
 
         # old-style compatibility: model is provider key and provider block exists
         model_hint = str(self.config.get("model", "") or "").strip().lower()
         if model_hint in {"openai", "minimax", "custom"} and isinstance(self.config.get(model_hint), dict):
-            return model_hint
+            return "openai_compatible" if model_hint == "openai" else model_hint
 
         for candidate in ("openai", "minimax", "custom"):
             if isinstance(self.config.get(candidate), dict):
-                return candidate
+                return "openai_compatible" if candidate == "openai" else candidate
 
         # default to openai-compatible path for common vision models (e.g. gpt-4o)
-        return "openai"
+        return "openai_compatible"
 
     def _resolve_model_name(self, provider: str, params: dict[str, Any]) -> str:
         model_from_params = str(params.get("model", "") or "").strip()
@@ -57,10 +73,13 @@ class ImageUnderstandingSkill(Skill):
             return model_from_params
 
         model_from_config = str(self.config.get("model", "") or "").strip()
-        if model_from_config and model_from_config not in {"openai", "minimax", "custom"}:
+        provider_tokens = {"openai", "minimax", "custom", "compatible", "openai_compatible", "openai-compatible"}
+        if model_from_config and model_from_config not in provider_tokens:
             return model_from_config
 
         provider_cfg = self.config.get(provider) if isinstance(self.config.get(provider), dict) else {}
+        if provider == "openai_compatible" and not provider_cfg:
+            provider_cfg = self.config.get("openai") if isinstance(self.config.get("openai"), dict) else {}
         provider_model = str(provider_cfg.get("model", "") or "").strip()
         if provider_model:
             return provider_model
@@ -73,8 +92,9 @@ class ImageUnderstandingSkill(Skill):
         provider = self._resolve_provider()
         if provider not in self.supported_models:
             return False
-        if provider == "openai":
-            return bool(os.environ.get("OPENAI_API_KEY") or self.config.get("api_key") or (self.config.get("openai") or {}).get("api_key"))
+        if provider == "openai_compatible":
+            openai_cfg = self.config.get("openai") if isinstance(self.config.get("openai"), dict) else {}
+            return bool(os.environ.get("OPENAI_API_KEY") or self.config.get("api_key") or openai_cfg.get("api_key"))
         if provider == "minimax":
             return bool(os.environ.get("MINIMAX_API_KEY") or self.config.get("api_key") or (self.config.get("minimax") or {}).get("api_key"))
         if provider == "custom":
@@ -120,7 +140,7 @@ class ImageUnderstandingSkill(Skill):
             return SkillResult(success=False, content="没有可用图片可供理解")
 
         try:
-            if provider == "openai":
+            if provider == "openai_compatible":
                 raw = await self._analyze_openai(prompt, image_parts, params)
             elif provider == "minimax":
                 raw = await self._analyze_minimax(prompt, image_parts, params)
@@ -200,24 +220,25 @@ class ImageUnderstandingSkill(Skill):
         )
 
     async def _analyze_openai(self, prompt: str, image_parts: list[dict[str, Any]], params: dict[str, Any]) -> str:
-        model_name = self._resolve_model_name("openai", params)
+        model_name = self._resolve_model_name("openai_compatible", params)
+        openai_cfg = self.config.get("openai") if isinstance(self.config.get("openai"), dict) else {}
         api_key = str(
             params.get("api_key")
             or self.config.get("api_key")
-            or (self.config.get("openai") or {}).get("api_key")
+            or openai_cfg.get("api_key")
             or os.environ.get("OPENAI_API_KEY")
             or ""
         ).strip()
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY 未配置")
+            raise RuntimeError("图片理解 API Key 未配置")
 
         base_url = str(
             params.get("base_url")
             or self.config.get("base_url")
-            or (self.config.get("openai") or {}).get("base_url")
-            or "https://api.openai.com/v1"
+            or openai_cfg.get("base_url")
+            or DEFAULT_OPENAI_BASE_URL
         ).strip().rstrip("/")
-        url = f"{base_url}/chat/completions"
+        url = _endpoint_url(base_url, "/chat/completions")
 
         payload = {
             "model": model_name,
@@ -258,9 +279,10 @@ class ImageUnderstandingSkill(Skill):
         base_url = str(
             params.get("base_url")
             or self.config.get("base_url")
-            or "https://api.minimax.chat/v1"
+            or (self.config.get("minimax") or {}).get("base_url")
+            or DEFAULT_MINIMAX_BASE_URL
         ).strip().rstrip("/")
-        url = f"{base_url}/text/chatcompletion_v2"
+        url = _endpoint_url(base_url, "/text/chatcompletion_v2")
 
         payload = {
             "model": model_name,
@@ -293,16 +315,13 @@ class ImageUnderstandingSkill(Skill):
 
     async def _analyze_custom(self, prompt: str, image_parts: list[dict[str, Any]], params: dict[str, Any]) -> str:
         custom_cfg = self.config.get("custom") if isinstance(self.config.get("custom"), dict) else {}
-        api_url = str(
-            params.get("api_url")
-            or custom_cfg.get("api_url")
-            or custom_cfg.get("base_url")
-            or self.config.get("api_url")
-            or self.config.get("base_url")
-            or ""
-        ).strip()
+        explicit_api_url = str(params.get("api_url") or custom_cfg.get("api_url") or self.config.get("api_url") or "").strip()
+        base_url = str(params.get("base_url") or custom_cfg.get("base_url") or self.config.get("base_url") or "").strip()
+        api_url = explicit_api_url.rstrip("/") if explicit_api_url else base_url.rstrip("/")
         if not api_url:
             raise RuntimeError("custom image understanding 缺少 api_url/base_url")
+        if not explicit_api_url:
+            api_url = _endpoint_url(api_url, "/chat/completions")
 
         auth_type = str(params.get("auth_type") or custom_cfg.get("auth_type") or self.config.get("auth_type") or "bearer").strip().lower()
         api_key = str(

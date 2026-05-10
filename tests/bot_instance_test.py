@@ -620,6 +620,105 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
                 else:
                     os.environ["AI_COMPANION_HOME"] = previous_home
 
+    async def test_image_skills_accept_simple_three_field_config(self):
+        bot = BotInstance(
+            {
+                "id": "shen_nian",
+                "name": "沈念",
+                "skills": {
+                    "image_generation": {
+                        "enabled": True,
+                        "auto": True,
+                        "base_url": "https://example.com/v1",
+                        "model": "gpt-image-1",
+                        "api_key": "image-key",
+                    },
+                    "image_understanding": {
+                        "enabled": True,
+                        "auto": True,
+                        "base_url": "https://example.com/v1",
+                        "model": "gpt-4o",
+                        "api_key": "vision-key",
+                    },
+                },
+            },
+            model=None,
+            memory_config=None,
+        )
+        try:
+            caps = bot.get_skill_capabilities()["skills"]
+            self.assertTrue(caps["image_generation"]["available"])
+            self.assertEqual(caps["image_generation"]["provider"], "openai_compatible")
+            self.assertEqual(caps["image_generation"]["model"], "gpt-image-1")
+            self.assertTrue(caps["image_understanding"]["available"])
+            self.assertEqual(caps["image_understanding"]["provider"], "openai_compatible")
+            self.assertEqual(caps["image_understanding"]["model"], "gpt-4o")
+        finally:
+            await bot.close()
+
+    async def test_admin_skill_api_masks_and_preserves_image_api_keys(self):
+        from ai_companion.gateway.admin_services import ConfigAdminService, MASKED_SECRET
+
+        class _Config:
+            def __init__(self, root: Path):
+                self.config_dir = root / "config"
+                self._models = None
+                self._config = None
+
+            @property
+            def models(self):
+                return {}
+
+            @property
+            def config(self):
+                return {}
+
+            def get_model_config(self):
+                return {"provider": "openai", "api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o"}
+
+        with TemporaryDirectory(prefix="skill-admin-mask-") as td:
+            root = Path(td)
+            cfg = _Config(root)
+            cfg.config_dir.mkdir(parents=True, exist_ok=True)
+            (cfg.config_dir / "models.yaml").write_text(
+                json.dumps(
+                    {
+                        "skills": {
+                            "image_generation": {
+                                "enabled": True,
+                                "base_url": "https://example.com/v1",
+                                "model": "gpt-image-1",
+                                "api_key": "real-image-key",
+                            }
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (cfg.config_dir / "bots.yaml").write_text("bots: []\n", encoding="utf-8")
+            service = ConfigAdminService(cfg)
+
+            public = service._public_skills("shen_nian", {"skills": {"image_generation": {"api_key": "real-image-key"}}})
+            self.assertEqual(public["global"]["image_generation"]["api_key"], "real...-key")
+
+            service._save_skills(
+                "shen_nian",
+                {
+                    "global": {
+                        "image_generation": {
+                            "enabled": True,
+                            "base_url": "https://example.com/v1",
+                            "model": "gpt-image-1",
+                            "api_key": MASKED_SECRET,
+                        }
+                    },
+                    "bot": {},
+                },
+            )
+            saved = (cfg.config_dir / "models.yaml").read_text(encoding="utf-8")
+            self.assertIn("real-image-key", saved)
+
     async def test_installed_skill_auto_route_via_natural_text(self):
         with TemporaryDirectory(prefix="cap-skill-home-") as td:
             previous_home = os.environ.get("AI_COMPANION_HOME")

@@ -1445,29 +1445,20 @@ skills:
   image_generation:
     enabled: true
     auto: true
-    provider: "minimax"
-    model: "minimax"          # dalle/minimax/stable_diffusion/自定义
-    minimax:
-      model: "image-01"
-      output_dir: "data/bots/_images"
-    dalle:
-      model: "dall-e-3"
-    stable_diffusion:
-      model: "stable-diffusion-xl"
-      api_url: "http://localhost:7860"
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-image-1"
+    api_key: "${OPENAI_API_KEY}"
+    output_dir: "data/bots/_images"
 
   # 图片理解
   image_understanding:
     enabled: true
     auto: true
-    provider: "openai"        # openai/minimax/custom
+    base_url: "https://api.openai.com/v1"
     model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"
     max_image_size_mb: 8
     max_images_per_message: 3
-    openai:
-      model: "gpt-4o"
-      # api_key: "${OPENAI_API_KEY}"
-      # base_url: "https://api.openai.com/v1"
 
   # 视频生成
   video_generation:
@@ -2051,14 +2042,14 @@ minimax:
 
 **A**: 先检查运行时能力开关和可用性：
 1. 在对话里输入 `/skills`，确认 `image_generation` 的 `enabled=true`、`auto=true`。
-2. 若 `reason` 显示缺 key（例如 `missing_api_key:MINIMAX_API_KEY`），先补齐对应 API Key。
+2. 若 `reason` 显示缺 key（例如 `missing_api_key:api_key`），先补齐 `api_key`。
 3. 如果你故意设置了 `auto=false`，自然语言不会自动触发，改用 `/skill image_generation ...`。
 
 ### Q: 发图片后为什么没有自动理解？
 
 **A**: 常见原因：
 1. `image_understanding` 未启用或 `auto=false`。
-2. 能力不可用（例如缺少 OpenAI/MiniMax key，或 provider 配置不完整）。
+2. 能力不可用（例如缺少 `api_key`，或 `base_url` / `model` 填错）。
 3. 图片下载/缓存失败。此时系统会自动降级为普通文本对话，不会中断回复。
 
 ---

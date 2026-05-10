@@ -152,8 +152,8 @@ class BotImageUnderstandingIntegrationTest(unittest.IsolatedAsyncioTestCase):
                     "image_generation": {
                         "enabled": True,
                         "auto": False,
-                        "provider": "minimax",
-                        "model": "minimax",
+                        "base_url": "https://example.com/v1",
+                        "model": "gpt-image-1",
                         "api_key": "test-key",
                     }
                 },
@@ -193,8 +193,8 @@ class BotImageUnderstandingIntegrationTest(unittest.IsolatedAsyncioTestCase):
                     "image_generation": {
                         "enabled": True,
                         "auto": True,
-                        "provider": "minimax",
-                        "model": "minimax",
+                        "base_url": "https://example.com/v1",
+                        "model": "gpt-image-1",
                         "api_key": "test-key",
                     }
                 },
@@ -274,8 +274,8 @@ class BotImageUnderstandingIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 "image_generation": {
                     "enabled": True,
                     "auto": True,
-                    "provider": "minimax",
-                    "model": "minimax",
+                    "base_url": "https://example.com/v1",
+                    "model": "gpt-image-1",
                     "api_key": "test-key",
                 }
             },

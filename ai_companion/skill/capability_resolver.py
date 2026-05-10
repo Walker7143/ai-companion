@@ -26,6 +26,14 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 def _infer_provider(skill_name: str, cfg: dict[str, Any]) -> str:
     provider = str(cfg.get("provider", "") or "").strip()
     if provider:
+        if skill_name in {"image_generation", "image_understanding"} and provider in {
+            "openai",
+            "custom",
+            "compatible",
+            "openai_compatible",
+            "openai-compatible",
+        }:
+            return "openai_compatible" if provider != "custom" else "custom"
         return provider
 
     model_hint = str(cfg.get("model", "") or "").strip()
@@ -33,9 +41,20 @@ def _infer_provider(skill_name: str, cfg: dict[str, Any]) -> str:
         return model_hint
 
     if skill_name == "image_generation":
-        for candidate in ("minimax", "dalle", "stable_diffusion"):
+        if isinstance(cfg.get("minimax"), dict) or model_hint == "minimax":
+            return "minimax"
+        if cfg.get("base_url") or cfg.get("api_key") or model_hint:
+            return "openai_compatible"
+        for candidate in ("dalle", "stable_diffusion"):
             if isinstance(cfg.get(candidate), dict):
                 return candidate
+    if skill_name == "image_understanding":
+        if isinstance(cfg.get("minimax"), dict) or model_hint == "minimax":
+            return "minimax"
+        if isinstance(cfg.get("custom"), dict):
+            return "custom"
+        if isinstance(cfg.get("openai"), dict) or cfg.get("base_url") or cfg.get("api_key") or model_hint:
+            return "openai_compatible"
     if skill_name == "tts":
         for candidate in ("edge_tts", "minimax", "azure_tts", "openai_tts"):
             if isinstance(cfg.get(candidate), dict):
