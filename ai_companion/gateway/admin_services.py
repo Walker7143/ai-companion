@@ -49,13 +49,9 @@ WEB_CONFIG_SCHEMA = {
             "description": "配置图片生成/图片理解等内置技能。图片类技能按 OpenAI-compatible 规范默认工作，只需要 Base URL、模型名和 API Key。",
             "restart": "保存后新请求生效；若 Gateway 已运行建议重启后再验证自动路由。",
             "fields": {
-                "image_generation.enabled": "是否启用图片生成能力。",
-                "image_generation.auto": "是否允许自然语言自动触发图片生成。",
                 "image_generation.base_url": "图片生成 API 基础地址，系统会自动调用 /images/generations。",
                 "image_generation.model": "图片生成模型名，例如 gpt-image-1、dall-e-3 或服务商给你的模型名。",
                 "image_generation.api_key": "图片生成 API Key。留空或保留掩码表示继续使用旧值。",
-                "image_understanding.enabled": "是否启用图片理解能力。",
-                "image_understanding.auto": "是否允许图片消息自动触发理解。",
                 "image_understanding.base_url": "图片理解 API 基础地址，系统会自动调用 /chat/completions。",
                 "image_understanding.model": "图片理解模型名，例如 gpt-4o、qwen-vl-plus 或服务商给你的模型名。",
                 "image_understanding.api_key": "图片理解 API Key。留空或保留掩码表示继续使用旧值。",
@@ -332,12 +328,71 @@ def _is_masked_or_empty(value: Any) -> bool:
     return value in (None, "") or is_masked_secret(str(value))
 
 
+_SIMPLE_IMAGE_SKILLS = {"image_generation", "image_understanding"}
+_SIMPLE_IMAGE_SKILL_KEYS = ("base_url", "model", "api_key")
+_SIMPLE_IMAGE_SKILL_DEFAULTS: dict[str, dict[str, str]] = {
+    "image_generation": {"base_url": "https://api.openai.com/v1", "model": "gpt-image-1"},
+    "image_understanding": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
+}
+_SIMPLE_IMAGE_PROVIDER_TOKENS = {"openai", "minimax", "custom", "compatible", "openai_compatible", "openai-compatible"}
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _simple_image_provider_blocks(raw_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    provider = str(raw_cfg.get("provider") or "").strip().lower()
+    model_hint = str(raw_cfg.get("model") or "").strip().lower()
+    aliases = {
+        "openai-compatible": "openai",
+        "openai_compatible": "openai",
+        "compatible": "openai",
+    }
+    ordered_names: list[str] = []
+    for name in (provider, model_hint, "openai", "openai_compatible", "compatible", "custom", "minimax"):
+        for candidate in (name, aliases.get(name, name)):
+            if candidate and candidate not in ordered_names:
+                ordered_names.append(candidate)
+
+    blocks = []
+    for name in ordered_names:
+        block = raw_cfg.get(name)
+        if isinstance(block, dict):
+            blocks.append(block)
+    return blocks
+
+
+def _normalize_simple_image_skill(skill_name: str, raw_cfg: dict[str, Any]) -> dict[str, Any]:
+    defaults = _SIMPLE_IMAGE_SKILL_DEFAULTS.get(skill_name, {})
+    blocks = _simple_image_provider_blocks(raw_cfg)
+    model = str(raw_cfg.get("model") or "").strip()
+    if model.lower() in _SIMPLE_IMAGE_PROVIDER_TOKENS:
+        model = ""
+    cfg: dict[str, Any] = {
+        "base_url": _first_text(raw_cfg.get("base_url"), raw_cfg.get("api_url"), *(b.get("base_url") or b.get("api_url") for b in blocks), defaults.get("base_url", "")),
+        "model": _first_text(model, *(b.get("model") for b in blocks), defaults.get("model", "")),
+    }
+    api_key = _first_text(raw_cfg.get("api_key"), *(b.get("api_key") for b in blocks))
+    if not _is_masked_or_empty(api_key):
+        cfg["api_key"] = api_key
+    return {key: value for key, value in cfg.items() if value not in (None, "")}
+
+
 def _normalize_skill_tree(value: Any) -> dict:
     if not isinstance(value, dict):
         return {}
     result: dict[str, Any] = {}
     for skill_name, raw_cfg in value.items():
         if not isinstance(raw_cfg, dict):
+            continue
+        skill_name = str(skill_name)
+        if skill_name in _SIMPLE_IMAGE_SKILLS:
+            result[skill_name] = _normalize_simple_image_skill(skill_name, raw_cfg)
             continue
         cfg: dict[str, Any] = {}
         for key, raw_val in raw_cfg.items():
@@ -356,7 +411,7 @@ def _normalize_skill_tree(value: Any) -> dict:
             if key == "api_key" and _is_masked_or_empty(raw_val):
                 continue
             cfg[key] = raw_val
-        result[str(skill_name)] = cfg
+        result[skill_name] = cfg
     return result
 
 
@@ -367,6 +422,14 @@ def _public_skill_tree(value: Any) -> dict:
     for skill_name, raw_cfg in value.items():
         if not isinstance(raw_cfg, dict):
             continue
+        skill_name = str(skill_name)
+        if skill_name in _SIMPLE_IMAGE_SKILLS:
+            normalized = _normalize_simple_image_skill(skill_name, raw_cfg)
+            cfg = {key: normalized[key] for key in _SIMPLE_IMAGE_SKILL_KEYS if key in normalized}
+            if "api_key" in cfg:
+                cfg["api_key"] = mask_secret(str(cfg.get("api_key") or ""))
+            result[skill_name] = cfg
+            continue
         cfg: dict[str, Any] = {}
         for key, raw_val in raw_cfg.items():
             if key == "api_key":
@@ -375,7 +438,7 @@ def _public_skill_tree(value: Any) -> dict:
                 cfg[key] = _public_skill_tree({"_": raw_val}).get("_", raw_val)
             else:
                 cfg[key] = raw_val
-        result[str(skill_name)] = cfg
+        result[skill_name] = cfg
     return result
 
 
@@ -387,6 +450,11 @@ def _merge_secret_skill_tree(incoming: dict, existing: dict) -> dict:
             continue
         existing_cfg = existing.get(skill_name) if isinstance(existing.get(skill_name), dict) else {}
         incoming_cfg = incoming.get(skill_name) if isinstance(incoming.get(skill_name), dict) else {}
+        if skill_name in _SIMPLE_IMAGE_SKILLS:
+            existing_simple_cfg = _normalize_simple_image_skill(skill_name, existing_cfg)
+            if "api_key" not in cfg and existing_simple_cfg.get("api_key") and _is_masked_or_empty(incoming_cfg.get("api_key")):
+                cfg["api_key"] = existing_simple_cfg["api_key"]
+            continue
         _restore_masked_api_keys(cfg, incoming_cfg, existing_cfg)
     return result
 

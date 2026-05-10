@@ -1,1 +1,0 @@
-{"kind": "ai-companion-bot-scheduler", "bot_id": "aiyue", "pid": 32253, "argv": ["tests/system_test_suite.py"], "cwd": "/Users/wangxiaowei/projects/own/ai-girl-friend", "acquired_at": "2026-05-09T11:46:52.112931+00:00", "metadata": {"bot_name": "爱月", "scheduler": "life"}}

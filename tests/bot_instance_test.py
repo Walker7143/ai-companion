@@ -1,6 +1,7 @@
 import unittest
 import json
 import os
+import yaml
 from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -686,9 +687,24 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
                         "skills": {
                             "image_generation": {
                                 "enabled": True,
+                                "auto": True,
+                                "provider": "openai",
                                 "base_url": "https://example.com/v1",
                                 "model": "gpt-image-1",
                                 "api_key": "real-image-key",
+                                "output_dir": "data/bots/_images",
+                            },
+                            "image_understanding": {
+                                "enabled": True,
+                                "auto": True,
+                                "model": "openai",
+                                "openai": {
+                                    "base_url": "https://vision.example.com/v1",
+                                    "model": "gpt-4o",
+                                    "api_key": "nested-vision-key",
+                                },
+                                "max_image_size_mb": 8,
+                                "max_images_per_message": 3,
                             }
                         }
                     },
@@ -699,8 +715,39 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
             (cfg.config_dir / "bots.yaml").write_text("bots: []\n", encoding="utf-8")
             service = ConfigAdminService(cfg)
 
-            public = service._public_skills("shen_nian", {"skills": {"image_generation": {"api_key": "real-image-key"}}})
+            public = service._public_skills(
+                "shen_nian",
+                {
+                    "skills": {
+                        "image_generation": {
+                            "enabled": True,
+                            "auto": True,
+                            "provider": "openai",
+                            "api_key": "real-image-key",
+                            "output_dir": "data/bots/_images",
+                        },
+                        "image_understanding": {
+                            "model": "openai",
+                            "openai": {
+                                "base_url": "https://vision.example.com/v1",
+                                "model": "gpt-4o",
+                                "api_key": "nested-vision-key",
+                            },
+                            "max_image_size_mb": 8,
+                            "max_images_per_message": 3,
+                        },
+                    }
+                },
+            )
             self.assertEqual(public["global"]["image_generation"]["api_key"], "real...-key")
+            self.assertEqual(public["global"]["image_generation"]["base_url"], "https://api.openai.com/v1")
+            self.assertNotIn("enabled", public["global"]["image_generation"])
+            self.assertNotIn("auto", public["global"]["image_generation"])
+            self.assertNotIn("output_dir", public["global"]["image_generation"])
+            self.assertEqual(public["global"]["image_understanding"]["base_url"], "https://vision.example.com/v1")
+            self.assertEqual(public["global"]["image_understanding"]["api_key"], "nest...-key")
+            self.assertNotIn("openai", public["global"]["image_understanding"])
+            self.assertNotIn("max_image_size_mb", public["global"]["image_understanding"])
 
             service._save_skills(
                 "shen_nian",
@@ -711,13 +758,35 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
                             "base_url": "https://example.com/v1",
                             "model": "gpt-image-1",
                             "api_key": MASKED_SECRET,
+                            "output_dir": "data/bots/_images",
+                        },
+                        "image_understanding": {
+                            "base_url": "https://vision.example.com/v1",
+                            "model": "gpt-4o",
+                            "api_key": MASKED_SECRET,
+                            "max_image_size_mb": 8,
                         }
                     },
                     "bot": {},
                 },
             )
-            saved = (cfg.config_dir / "models.yaml").read_text(encoding="utf-8")
-            self.assertIn("real-image-key", saved)
+            saved = yaml.safe_load((cfg.config_dir / "models.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(
+                saved["skills"]["image_generation"],
+                {
+                    "base_url": "https://example.com/v1",
+                    "model": "gpt-image-1",
+                    "api_key": "real-image-key",
+                },
+            )
+            self.assertEqual(
+                saved["skills"]["image_understanding"],
+                {
+                    "base_url": "https://vision.example.com/v1",
+                    "model": "gpt-4o",
+                    "api_key": "nested-vision-key",
+                },
+            )
 
     async def test_installed_skill_auto_route_via_natural_text(self):
         with TemporaryDirectory(prefix="cap-skill-home-") as td:

@@ -169,6 +169,25 @@ const imageSkillDefaults: Record<ImageSkillName, Pick<SkillEntryConfig, 'base_ur
   },
 };
 
+function compactImageSkillConfig(
+  skillName: ImageSkillName,
+  source: SkillEntryConfig,
+  patch: Partial<SkillEntryConfig> = {},
+): SkillEntryConfig {
+  const defaults = imageSkillDefaults[skillName];
+  const baseUrl = String(patch.base_url ?? source.base_url ?? '').trim() || defaults.base_url;
+  const model = String(patch.model ?? source.model ?? '').trim() || defaults.model;
+  const next: SkillEntryConfig = {
+    base_url: baseUrl,
+    model,
+  };
+  const apiKey = patch.api_key ?? source.api_key;
+  if (apiKey !== undefined && apiKey !== null && String(apiKey).trim() !== '') {
+    next.api_key = String(apiKey).trim();
+  }
+  return next;
+}
+
 function dedicatedFeishuRouting(routing: Record<string, unknown>, botId?: string): Record<string, unknown> {
   const next = { ...routing };
   delete next.group_bot_map;
@@ -513,21 +532,12 @@ export function Settings() {
       const defaults = imageSkillDefaults[skillName];
       const currentGlobal = (prev.skills?.global?.[skillName] || {}) as SkillEntryConfig;
       const currentResolved = (prev.skills?.resolved?.[skillName] || {}) as SkillEntryConfig;
-      const nextSkill = {
-        ...currentGlobal,
-        enabled: true,
-        auto: true,
+      const current = {
         base_url: currentGlobal.base_url || currentResolved.base_url || defaults.base_url,
         model: currentGlobal.model || currentResolved.model || defaults.model,
-        ...patch,
+        api_key: currentGlobal.api_key || currentResolved.api_key,
       } as SkillEntryConfig;
-
-      const compact: SkillEntryConfig = {};
-      Object.entries(nextSkill).forEach(([key, value]) => {
-        if (value === undefined || value === null) return;
-        if (typeof value === 'string' && value.trim() === '') return;
-        compact[key] = value as never;
-      });
+      const compact = compactImageSkillConfig(skillName, current, patch);
 
       const nextGlobal = {
         ...(prev.skills?.global || {}),
@@ -556,25 +566,11 @@ export function Settings() {
     const resolved = { ...(skills.resolved || {}) };
 
     imageSkillNames.forEach((skillName) => {
-      const defaults = imageSkillDefaults[skillName];
       const merged = {
         ...(global[skillName] || {}),
         ...(bot[skillName] || {}),
       } as SkillEntryConfig;
-      const compact: SkillEntryConfig = {
-        enabled: true,
-        auto: true,
-        base_url: String(merged.base_url || defaults.base_url),
-        model: String(merged.model || defaults.model),
-      };
-      if (merged.api_key) compact.api_key = merged.api_key;
-      if (skillName === 'image_generation') {
-        compact.output_dir = String(merged.output_dir || 'data/bots/_images');
-      }
-      if (skillName === 'image_understanding') {
-        compact.max_image_size_mb = Number(merged.max_image_size_mb || 8);
-        compact.max_images_per_message = Number(merged.max_images_per_message || 3);
-      }
+      const compact = compactImageSkillConfig(skillName, merged);
       global[skillName] = compact;
       resolved[skillName] = compact;
       delete bot[skillName];
