@@ -106,6 +106,34 @@ class ImageUnderstandingSkill(Skill):
             return bool(api_url and (custom_cfg.get("api_key") or self.config.get("api_key")))
         return False
 
+    def _resolve_openai_compatible_auth_type(self, base_url: str, params: dict[str, Any]) -> str:
+        openai_cfg = self.config.get("openai") if isinstance(self.config.get("openai"), dict) else {}
+        auth_type = str(
+            params.get("auth_type")
+            or self.config.get("auth_type")
+            or openai_cfg.get("auth_type")
+            or ""
+        ).strip().lower()
+        if auth_type:
+            return auth_type
+        if "xiaomimimo.com" in base_url.lower():
+            return "api_key"
+        return "bearer"
+
+    def _resolve_openai_compatible_token_field(self, base_url: str, params: dict[str, Any]) -> str:
+        openai_cfg = self.config.get("openai") if isinstance(self.config.get("openai"), dict) else {}
+        token_field = str(
+            params.get("max_tokens_field")
+            or self.config.get("max_tokens_field")
+            or openai_cfg.get("max_tokens_field")
+            or ""
+        ).strip()
+        if token_field:
+            return token_field
+        if "xiaomimimo.com" in base_url.lower():
+            return "max_completion_tokens"
+        return "max_tokens"
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=self.timeout)
@@ -249,12 +277,17 @@ class ImageUnderstandingSkill(Skill):
                 }
             ],
             "temperature": 0.2,
-            "max_tokens": int(params.get("max_tokens", 800) or 800),
         }
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        payload[self._resolve_openai_compatible_token_field(base_url, params)] = int(params.get("max_tokens", 800) or 800)
+
+        auth_type = self._resolve_openai_compatible_auth_type(base_url, params)
+        headers = {"Content-Type": "application/json"}
+        if auth_type in {"api_key", "api-key"}:
+            headers["api-key"] = api_key
+        elif auth_type in {"x_api_key", "x-api-key"}:
+            headers["X-API-Key"] = api_key
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         session = await self._get_session()
         async with session.post(url, headers=headers, json=payload) as resp:
