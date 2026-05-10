@@ -310,7 +310,7 @@ def _leave_directory_if_inside(path: Path) -> None:
 
 def _install_project(project_dir: Path, options: UpdateOptions) -> None:
     print("同步 Python 包和依赖...")
-    cmd = [sys.executable, "-m", "pip", "install"]
+    cmd = [sys.executable, "-m", "pip", "install", "--no-build-isolation"]
     if options.index_url:
         cmd.extend(["-i", options.index_url])
     cmd.extend(["-e", str(project_dir)])

@@ -3,6 +3,7 @@ import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -12,6 +13,29 @@ from ai_companion.gateway import control
 
 
 class GatewayControlTest(unittest.TestCase):
+    def test_start_gateway_does_not_redirect_stdio_to_managed_log(self):
+        old_pid_file = control.GATEWAY_PID_FILE
+        old_log_file = control.GATEWAY_LOG_FILE
+
+        with tempfile.TemporaryDirectory(prefix="gateway-control-") as td:
+            root = Path(td)
+            control.GATEWAY_PID_FILE = root / "gateway.pid"
+            control.GATEWAY_LOG_FILE = root / "gateway.log"
+            try:
+                with (
+                    patch.object(control, "_find_gateway_pids", return_value=[]),
+                    patch.object(control.subprocess, "Popen", return_value=SimpleNamespace(pid=12345)) as popen,
+                ):
+                    self.assertEqual(control.start_gateway(sync=False), 12345)
+
+                _, kwargs = popen.call_args
+                self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+                self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+                self.assertEqual(control.GATEWAY_PID_FILE.read_text(encoding="utf-8"), "12345")
+            finally:
+                control.GATEWAY_PID_FILE = old_pid_file
+                control.GATEWAY_LOG_FILE = old_log_file
+
     def test_stop_finds_gateway_process_without_pid_file(self):
         marker = "ai_companion_gateway_test_marker_stop_scan"
         old_patterns = control._GATEWAY_PROCESS_PATTERNS

@@ -648,6 +648,10 @@ class BotInstance:
             return response
 
         runtime_input = self._build_runtime_input(user_input, memory_turn_context)
+        effective_user_input = user_input
+        if not effective_user_input.strip() and runtime_input.get("media_urls"):
+            effective_user_input = "[\u7528\u6237\u53d1\u9001\u4e86\u4e00\u5f20\u56fe\u7247]"
+            runtime_input["text"] = effective_user_input
 
         # 1. 拒绝检查（如果启用）
         relationship_state = None
@@ -658,7 +662,7 @@ class BotInstance:
             )
 
         refusal_response = await self.refusal_engine.check(
-            user_request=user_input,
+            user_request=effective_user_input,
             memory_context=None,
             relationship_state=relationship_state
         )
@@ -687,7 +691,7 @@ class BotInstance:
         )
         if route_result.handled:
             response = route_result.direct_response or "能力调用已完成。"
-            self.conversation_history.append({"role": "user", "content": user_input})
+            self.conversation_history.append({"role": "user", "content": effective_user_input})
             self.conversation_history.append({"role": "assistant", "content": response})
             return response
 
@@ -697,7 +701,7 @@ class BotInstance:
             logger.info("[BotInstance] 图片理解已注入上下文")
 
         # 3. 情绪触发检测
-        emotion_triggered = self._check_emotion_trigger(user_input)
+        emotion_triggered = self._check_emotion_trigger(effective_user_input)
         if emotion_triggered:
             logger.info(f"[Proactive] 情绪触发: {user_input[:30]}...")
 
@@ -707,10 +711,10 @@ class BotInstance:
             await self.memory.maybe_compress()
 
             # 2. 加载上下文
-            ctx = await self.memory.load_context(user_input)
+            ctx = await self.memory.load_context(effective_user_input)
 
             # 3. 构建带人格的记忆增强 system prompt
-            realtime_status_query = self._is_realtime_status_query(user_input)
+            realtime_status_query = self._is_realtime_status_query(effective_user_input)
             memory_suffix = None if realtime_status_query else self._prepare_generation_suffix(ctx.get("system_suffix"))
             if image_context_suffix:
                 memory_suffix = self._merge_memory_suffix(memory_suffix, image_context_suffix)
@@ -718,7 +722,7 @@ class BotInstance:
             system_prompt = self._build_system_prompt(
                 adjustment_note=adjustment_note,
                 memory_suffix=memory_suffix,
-                user_input=user_input,
+                user_input=effective_user_input,
                 memory_context=ctx,
                 relationship_state=relationship_state,
             )
@@ -726,18 +730,18 @@ class BotInstance:
             # 4. 构建 messages
             history = [] if realtime_status_query else ctx.get("working_history", [])
             messages = self._prepare_generation_messages(history)
-            messages.append({"role": "user", "content": user_input})
+            messages.append({"role": "user", "content": effective_user_input})
 
             # 5. 对话
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, ctx, relationship_state)
-            self._run_proactive_closeout_analysis(user_input, response, memory_turn_context)
+            self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context)
 
             # 6. 异步写入记忆
             self._track_background_task(
-                self.memory.on_message(user_input, response, turn_context=memory_turn_context),
+                self.memory.on_message(effective_user_input, response, turn_context=memory_turn_context),
                 name="memory.on_message",
             )
         else:
@@ -745,22 +749,22 @@ class BotInstance:
             system_prompt = self._build_system_prompt(
                 adjustment_note=adjustment_note,
                 memory_suffix=memory_suffix,
-                user_input=user_input,
+                user_input=effective_user_input,
                 memory_context={},
                 relationship_state=relationship_state,
             )
-            messages = [{"role": "user", "content": user_input}]
+            messages = [{"role": "user", "content": effective_user_input}]
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, {}, relationship_state)
-            self._run_proactive_closeout_analysis(user_input, response, memory_turn_context)
+            self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context)
 
         if image_user_hint and image_user_hint not in response:
             response = f"{image_user_hint}\n{response}"
 
         # 记录历史
-        self.conversation_history.append({"role": "user", "content": user_input})
+        self.conversation_history.append({"role": "user", "content": effective_user_input})
         self.conversation_history.append({"role": "assistant", "content": response})
 
         return response

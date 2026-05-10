@@ -9,6 +9,7 @@ from ai_companion.logging_utils import (
     TailPreservingFileHandler,
     get_log_max_bytes,
     parse_size_to_bytes,
+    trim_log_dir,
     trim_log_file,
 )
 
@@ -64,6 +65,20 @@ class LoggingUtilsTest(unittest.TestCase):
             self.assertNotIn("line 00", content)
             self.assertIn("line 19", content)
             self.assertLessEqual(log_path.stat().st_size, 100)
+
+    def test_trim_log_dir_skips_active_file_handlers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "app.log"
+            log_path.write_bytes(b"old line\nnew line\n")
+            handler = TailPreservingFileHandler(log_path, max_bytes=1024, encoding="utf-8")
+            try:
+                trim_log_dir(Path(tmpdir), max_bytes=8)
+                self.assertEqual(log_path.read_text(encoding="utf-8"), "old line\nnew line\n")
+            finally:
+                handler.close()
+
+            trim_log_dir(Path(tmpdir), max_bytes=9)
+            self.assertEqual(log_path.read_text(encoding="utf-8"), "new line\n")
 
 
 if __name__ == "__main__":

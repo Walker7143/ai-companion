@@ -72,6 +72,57 @@ class BotImageUnderstandingIntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("图片摘要: 一只白色猫咪坐在窗台", model.last_system_prompt)
         self.assertIn("识别到元素: 猫咪, 窗台", model.last_system_prompt)
 
+    async def test_image_only_media_uses_non_empty_prompt_for_chat_model(self):
+        model = EchoModel()
+        bot = BotInstance(
+            {
+                "id": "shen_nian",
+                "name": "test",
+                "skills": {
+                    "image_understanding": {
+                        "enabled": True,
+                        "provider": "custom",
+                        "custom": {
+                            "auth_type": "none",
+                            "api_url": "https://example.com/vision",
+                        },
+                    }
+                },
+            },
+            model=model,
+            refusal_enabled=False,
+        )
+        bot._initialized = True
+        bot._schedulers_started = True
+        skill = bot.skill_dispatcher.get("image_understanding")
+        self.assertIsNotNone(skill)
+        skill.execute = AsyncMock(
+            return_value=SkillResult(
+                success=True,
+                content={
+                    "summary": "outdoor photo",
+                    "objects": ["tree"],
+                    "text_ocr": "",
+                    "safety_notes": [],
+                    "confidence": 0.8,
+                },
+            )
+        )
+        try:
+            response = await bot.handle_message(
+                "",
+                memory_turn_context={
+                    "media_urls": ["/tmp/wx-image.jpg"],
+                    "media_types": ["image/jpeg"],
+                },
+            )
+        finally:
+            await bot.close()
+
+        self.assertEqual(response, "ok")
+        self.assertEqual(model.last_messages[-1]["content"], "[\u7528\u6237\u53d1\u9001\u4e86\u4e00\u5f20\u56fe\u7247]")
+        self.assertIn("outdoor photo", model.last_system_prompt)
+
     async def test_image_media_with_disabled_capability_shows_clear_hint(self):
         model = EchoModel()
         bot = BotInstance(

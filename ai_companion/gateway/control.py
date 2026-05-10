@@ -236,13 +236,12 @@ def start_gateway(sync: bool = False) -> int | None:
 
     cmd.append("--daemon")
     trim_log_file(GATEWAY_LOG_FILE, max_bytes=get_log_max_bytes())
-    with open(GATEWAY_LOG_FILE, "a", encoding="utf-8") as log_file:
-        process = subprocess.Popen(
-            cmd,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
     save_gateway_pid(process.pid)
     print(f"[OK] Gateway 已启动 (PID: {process.pid})")
@@ -320,7 +319,8 @@ def _format_platform_status_detail(name: str, status: dict[str, Any]) -> str:
 
 def tail_logs(lines: int = 50) -> None:
     """Print latest gateway log lines."""
-    trim_log_file(GATEWAY_LOG_FILE, max_bytes=get_log_max_bytes())
+    if not is_gateway_running():
+        trim_log_file(GATEWAY_LOG_FILE, max_bytes=get_log_max_bytes())
     if not GATEWAY_LOG_FILE.exists():
         print("[ERROR] 日志文件不存在")
         return

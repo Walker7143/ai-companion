@@ -31,6 +31,7 @@ _LIMITER_LOCK = threading.Lock()
 _LIMITER_STOP = threading.Event()
 _LIMITER_THREAD: threading.Thread | None = None
 _LIMITED_LOG_DIRS: dict[Path, int] = {}
+_ACTIVE_HANDLER_FILES: dict[Path, int] = {}
 
 
 def get_log_dir() -> Path:
@@ -142,12 +143,27 @@ def trim_log_file(path: Path, max_bytes: int | None = None) -> bool:
         return False
 
 
-def trim_log_dir(log_dir: Path, max_bytes: int | None = None) -> None:
+def trim_log_dir(
+    log_dir: Path,
+    max_bytes: int | None = None,
+    *,
+    skip_active_handlers: bool = True,
+) -> None:
     if max_bytes is None:
         max_bytes = get_log_max_bytes()
     if max_bytes <= 0 or not log_dir.exists():
         return
+    active_files: set[Path] = set()
+    if skip_active_handlers:
+        with _LIMITER_LOCK:
+            active_files = set(_ACTIVE_HANDLER_FILES)
     for log_file in log_dir.glob("*.log"):
+        if skip_active_handlers:
+            try:
+                if log_file.resolve() in active_files:
+                    continue
+            except OSError:
+                continue
         trim_log_file(log_file, max_bytes=max_bytes)
 
 
@@ -196,11 +212,29 @@ class TailPreservingFileHandler(logging.FileHandler):
     def __init__(self, filename: Path, *, max_bytes: int, encoding: str = "utf-8"):
         self.max_bytes = max_bytes
         super().__init__(filename, mode="a", encoding=encoding)
+        self._active_path = Path(self.baseFilename).resolve()
+        self._active_registered = True
+        with _LIMITER_LOCK:
+            _ACTIVE_HANDLER_FILES[self._active_path] = _ACTIVE_HANDLER_FILES.get(self._active_path, 0) + 1
         self._trim_if_needed()
 
     def emit(self, record: logging.LogRecord) -> None:
         super().emit(record)
         self._trim_if_needed()
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            active_path = getattr(self, "_active_path", None)
+            if active_path is not None and getattr(self, "_active_registered", False):
+                self._active_registered = False
+                with _LIMITER_LOCK:
+                    count = _ACTIVE_HANDLER_FILES.get(active_path, 0)
+                    if count <= 1:
+                        _ACTIVE_HANDLER_FILES.pop(active_path, None)
+                    else:
+                        _ACTIVE_HANDLER_FILES[active_path] = count - 1
 
     def _trim_if_needed(self) -> None:
         if self.max_bytes <= 0:

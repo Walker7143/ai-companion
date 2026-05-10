@@ -346,6 +346,10 @@ def _looks_like_image(data: bytes) -> bool:
         return True
     if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
         return True
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in {b"heic", b"heix", b"hevc", b"hevx", b"heif", b"mif1", b"msf1", b"avif", b"avis"}:
+            return True
     return False
 
 

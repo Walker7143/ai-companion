@@ -384,6 +384,68 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0].media_urls, ["/tmp/wx-image.jpg", "/tmp/wx-doc.txt", "/tmp/wx-audio.silk", "/tmp/wx-video.mp4"])
         self.assertEqual(events[0].media_types, ["image/jpeg", "text/plain", "audio/silk", "video/mp4"])
 
+    async def test_weixin_inbound_image_accepts_flat_media_fields(self):
+        events = []
+        captured = {}
+
+        async def capture_event(event):
+            events.append(event)
+
+        async def noop_typing(*args, **kwargs):
+            return None
+
+        async def fake_download_and_decrypt_media(*args, **kwargs):
+            captured.update(kwargs)
+            return b"\x89PNG\r\n\x1a\nimage-bytes"
+
+        adapter = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={
+                    "account_id": "wxbot",
+                    "dm_policy": "allowlist",
+                    "allow_from": ["user-1"],
+                },
+            )
+        )
+        adapter._poll_session = object()
+        adapter.handle_message = capture_event
+        adapter._maybe_fetch_typing_ticket = noop_typing
+
+        with patch(
+            "ai_companion.gateway.platforms.weixin._download_and_decrypt_media",
+            fake_download_and_decrypt_media,
+        ), patch(
+            "ai_companion.gateway.platforms.weixin.cache_image_from_bytes",
+            return_value="/tmp/wx-flat-image.png",
+        ) as cache_image:
+            await adapter._process_message(
+                {
+                    "message_id": "flat-image-msg-1",
+                    "from_user_id": "user-1",
+                    "to_user_id": "wxbot",
+                    "item_list": [
+                        {
+                            "type": ITEM_IMAGE,
+                            "image_item": {
+                                "fullUrl": "https://novac2c.cdn.weixin.qq.com/flat-image.png",
+                                "aeskey": "0123456789abcdeffedcba9876543210",
+                            },
+                        }
+                    ],
+                }
+            )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].message_type.value, "photo")
+        self.assertEqual(events[0].media_urls, ["/tmp/wx-flat-image.png"])
+        self.assertEqual(events[0].media_types, ["image/png"])
+        self.assertEqual(captured["full_url"], "https://novac2c.cdn.weixin.qq.com/flat-image.png")
+        self.assertTrue(captured["aes_key_b64"])
+        cache_image.assert_called_once()
+        self.assertEqual(cache_image.call_args.args[1], ".png")
+
     async def test_weixin_outbound_media_builders_for_image_file_voice_video(self):
         sent_media_types = []
 

@@ -638,8 +638,61 @@ def _is_public_http_url(url: str) -> bool:
     return True
 
 
+def _first_media_value(containers: List[Dict[str, Any]], *keys: str) -> Optional[str]:
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in keys:
+            value = container.get(key)
+            if value not in (None, ""):
+                return str(value)
+    return None
+
+
+def _normalize_aes_key_b64(value: Optional[str]) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if re.fullmatch(r"[0-9a-fA-F]{32}", raw):
+        return base64.b64encode(bytes.fromhex(raw)).decode("ascii")
+    return raw
+
+
 def _media_reference(item: Dict[str, Any], key: str) -> Dict[str, Any]:
-    return (item.get(key) or {}).get("media") or {}
+    typed_item = item.get(key) if isinstance(item.get(key), dict) else {}
+    typed_media = typed_item.get("media") if isinstance(typed_item.get("media"), dict) else {}
+    direct_media = item.get("media") if isinstance(item.get("media"), dict) else {}
+    containers = [typed_media, typed_item, direct_media, item]
+
+    return {
+        "encrypt_query_param": _first_media_value(
+            containers,
+            "encrypt_query_param",
+            "encrypted_query_param",
+            "encryptQueryParam",
+            "encryptedQueryParam",
+            "encrypted_param",
+            "encryptedParam",
+        ),
+        "aes_key": _normalize_aes_key_b64(
+            _first_media_value(
+                containers,
+                "aes_key",
+                "aesKey",
+                "aeskey",
+                "aes_key_b64",
+                "aesKeyB64",
+            )
+        ),
+        "full_url": _first_media_value(
+            containers,
+            "full_url",
+            "fullUrl",
+            "download_url",
+            "downloadUrl",
+            "url",
+        ),
+    }
 
 
 async def _download_and_decrypt_media(
@@ -669,6 +722,43 @@ async def _download_and_decrypt_media(
 
 def _mime_from_filename(filename: str) -> str:
     return mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+
+def _image_extension_from_bytes(data: bytes) -> str:
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:6] == b"GIF87a" or data[:6] == b"GIF89a":
+        return ".gif"
+    if data[:2] == b"BM":
+        return ".bmp"
+    if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+        return ".webp"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"}:
+            return ".heic"
+        if brand in {b"avif", b"avis"}:
+            return ".avif"
+    return ".jpg"
+
+
+def _image_mime_from_path(path: str) -> str:
+    suffix = Path(path).suffix.lower()
+    fallback = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+        ".webp": "image/webp",
+        ".heic": "image/heic",
+        ".heif": "image/heif",
+        ".avif": "image/avif",
+    }.get(suffix, "image/jpeg")
+    guessed = mimetypes.guess_type(path)[0]
+    return guessed if guessed and guessed.startswith("image/") else fallback
 
 
 def _split_table_row(line: str) -> List[str]:
@@ -1522,7 +1612,7 @@ class WeixinAdapter(BasePlatformAdapter):
             path = await self._download_image(item)
             if path:
                 media_paths.append(path)
-                media_types.append("image/jpeg")
+                media_types.append(_image_mime_from_path(path))
         elif item_type == ITEM_VIDEO:
             path = await self._download_video(item)
             if path:
@@ -1546,13 +1636,11 @@ class WeixinAdapter(BasePlatformAdapter):
                 self._poll_session,
                 cdn_base_url=self._cdn_base_url,
                 encrypted_query_param=media.get("encrypt_query_param"),
-                aes_key_b64=(item.get("image_item") or {}).get("aeskey")
-                and base64.b64encode(bytes.fromhex(str((item.get("image_item") or {}).get("aeskey")))).decode("ascii")
-                or media.get("aes_key"),
+                aes_key_b64=media.get("aes_key"),
                 full_url=media.get("full_url"),
                 timeout_seconds=30.0,
             )
-            return cache_image_from_bytes(data, ".jpg")
+            return cache_image_from_bytes(data, _image_extension_from_bytes(data))
         except Exception as exc:
             logger.warning("[%s] image download failed: %s", self.name, exc)
             return None
