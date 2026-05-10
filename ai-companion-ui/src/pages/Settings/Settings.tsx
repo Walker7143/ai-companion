@@ -8,6 +8,7 @@ import type { BotConfig, LifeConfig, PlatformConfig, ProactiveConfig, SkillEntry
 
 type SectionId = 'model' | 'skills' | 'memory' | 'proactive' | 'life' | 'platforms' | 'persona' | 'session_reset';
 type EmbodiedFrequency = BotConfig['persona_summary']['speaking_style']['embodied_expression']['frequency'];
+type ImageSkillName = 'image_generation' | 'image_understanding';
 type GatewayPlatformStatus = {
   state?: string;
   account_id_hint?: string;
@@ -155,7 +156,9 @@ function nestedConfig(platform: PlatformConfig, key: string): Record<string, unk
   return (cfg[key] && typeof cfg[key] === 'object' ? cfg[key] : {}) as Record<string, unknown>;
 }
 
-const imageSkillDefaults: Record<'image_generation' | 'image_understanding', Pick<SkillEntryConfig, 'base_url' | 'model'>> = {
+const imageSkillNames: ImageSkillName[] = ['image_generation', 'image_understanding'];
+
+const imageSkillDefaults: Record<ImageSkillName, Pick<SkillEntryConfig, 'base_url' | 'model'>> = {
   image_generation: {
     base_url: 'https://api.openai.com/v1',
     model: 'gpt-image-1',
@@ -504,37 +507,85 @@ export function Settings() {
     });
   };
 
-  const patchSkillLayer = (
-    layer: 'global' | 'bot',
-    skillName: string,
-    patch: Partial<SkillEntryConfig>,
-    removeWhenEmpty = false,
-  ) => {
+  const patchSimpleImageSkill = (skillName: ImageSkillName, patch: Partial<SkillEntryConfig>) => {
     setDraft((prev) => {
       if (!prev) return prev;
-      const currentLayer = { ...(prev.skills?.[layer] || {}) } as Record<string, SkillEntryConfig>;
-      const current = { ...(currentLayer[skillName] || {}) };
-      const next = { ...current, ...patch } as Record<string, unknown>;
+      const defaults = imageSkillDefaults[skillName];
+      const currentGlobal = (prev.skills?.global?.[skillName] || {}) as SkillEntryConfig;
+      const currentResolved = (prev.skills?.resolved?.[skillName] || {}) as SkillEntryConfig;
+      const nextSkill = {
+        ...currentGlobal,
+        enabled: true,
+        auto: true,
+        base_url: currentGlobal.base_url || currentResolved.base_url || defaults.base_url,
+        model: currentGlobal.model || currentResolved.model || defaults.model,
+        ...patch,
+      } as SkillEntryConfig;
+
       const compact: SkillEntryConfig = {};
-      Object.entries(next).forEach(([key, value]) => {
+      Object.entries(nextSkill).forEach(([key, value]) => {
         if (value === undefined || value === null) return;
         if (typeof value === 'string' && value.trim() === '') return;
         compact[key] = value as never;
       });
-      if (removeWhenEmpty && Object.keys(compact).length === 0) {
-        delete currentLayer[skillName];
-      } else {
-        currentLayer[skillName] = compact;
-      }
+
+      const nextGlobal = {
+        ...(prev.skills?.global || {}),
+        [skillName]: compact,
+      };
+      const nextBot = { ...(prev.skills?.bot || {}) };
+      delete nextBot[skillName];
       return {
         ...prev,
         skills: {
           ...prev.skills,
-          [layer]: currentLayer,
-          resolved: { ...(prev.skills?.resolved || {}), ...currentLayer },
+          global: nextGlobal,
+          bot: nextBot,
+          resolved: {
+            ...(prev.skills?.resolved || {}),
+            [skillName]: compact,
+          },
         },
       };
     });
+  };
+
+  const simpleImageSkills = (skills: BotConfig['skills']): BotConfig['skills'] => {
+    const global = { ...(skills.global || {}) };
+    const bot = { ...(skills.bot || {}) };
+    const resolved = { ...(skills.resolved || {}) };
+
+    imageSkillNames.forEach((skillName) => {
+      const defaults = imageSkillDefaults[skillName];
+      const merged = {
+        ...(global[skillName] || {}),
+        ...(bot[skillName] || {}),
+      } as SkillEntryConfig;
+      const compact: SkillEntryConfig = {
+        enabled: true,
+        auto: true,
+        base_url: String(merged.base_url || defaults.base_url),
+        model: String(merged.model || defaults.model),
+      };
+      if (merged.api_key) compact.api_key = merged.api_key;
+      if (skillName === 'image_generation') {
+        compact.output_dir = String(merged.output_dir || 'data/bots/_images');
+      }
+      if (skillName === 'image_understanding') {
+        compact.max_image_size_mb = Number(merged.max_image_size_mb || 8);
+        compact.max_images_per_message = Number(merged.max_images_per_message || 3);
+      }
+      global[skillName] = compact;
+      resolved[skillName] = compact;
+      delete bot[skillName];
+    });
+
+    return {
+      ...skills,
+      global,
+      bot,
+      resolved,
+    };
   };
 
   const updatePlatform = (name: string, updater: (platform: PlatformConfig) => PlatformConfig) => {
@@ -624,9 +675,10 @@ export function Settings() {
         enabled: weixinBindingEnabled,
         routing: weixinRouting,
       };
+      const skills = simpleImageSkills(draft.skills);
       const payload = {
         model: draft.model,
-        skills: draft.skills,
+        skills,
         memory: draft.memory,
         proactive: draft.proactive,
         life: draft.life,
@@ -752,66 +804,27 @@ export function Settings() {
 
       <SectionCard id="skills" title={sectionMeta.skills?.title || '技能能力'} description={sectionMeta.skills?.description} restart={sectionMeta.skills?.restart}>
         <div style={{ display: 'grid', gap: 20 }}>
-          {(['image_generation', 'image_understanding'] as const).map((skillName) => {
+          {imageSkillNames.map((skillName) => {
+            const resolved = (draft.skills.resolved[skillName] || {}) as SkillEntryConfig;
             const globalCfg = (draft.skills.global[skillName] || {}) as SkillEntryConfig;
             const botCfg = (draft.skills.bot[skillName] || {}) as SkillEntryConfig;
-            const resolved = (draft.skills.resolved[skillName] || {}) as SkillEntryConfig;
-            const isVision = skillName === 'image_understanding';
             const defaults = imageSkillDefaults[skillName];
+            const simpleCfg = { ...globalCfg, ...botCfg, ...resolved } as SkillEntryConfig;
+            const title = skillName === 'image_generation' ? '图片生成' : '图片理解';
             return (
               <Card key={skillName}>
                 <CardContent style={{ padding: 16, display: 'grid', gap: 14 }}>
-                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                    {skillName === 'image_generation' ? '图片生成' : '图片理解'}
+                  <div>
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
+                    <FieldHint text={skillName === 'image_generation' ? '只要服务商兼容 OpenAI 图片生成接口，填写这三项就能用。' : '只要服务商兼容 OpenAI Chat Completions 多模态接口，填写这三项就能用。'} />
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    当前生效：enabled={String(Boolean(resolved.enabled))} / auto={String(Boolean(resolved.auto))} / base_url={String(resolved.base_url || defaults.base_url)} / model={String(resolved.model || defaults.model)}
-                  </div>
-                  <div style={gridStyle}>
+                  <div style={compactGridStyle}>
                     <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>全局默认（models.yaml）</div>
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>启用</span>
-                          <Toggle checked={Boolean(globalCfg.enabled)} onChange={(event) => patchSkillLayer('global', skillName, { enabled: event.target.checked })} />
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>自动触发</span>
-                          <Toggle checked={Boolean(globalCfg.auto)} onChange={(event) => patchSkillLayer('global', skillName, { auto: event.target.checked })} />
-                        </div>
-                        <Input label="Base URL" value={String(globalCfg.base_url || '')} placeholder={defaults.base_url} onChange={(event) => patchSkillLayer('global', skillName, { base_url: event.target.value })} />
-                        <Input label="模型名" value={String(globalCfg.model || '')} placeholder={defaults.model} onChange={(event) => patchSkillLayer('global', skillName, { model: event.target.value })} />
-                        <Input label="API Key" type="password" value={String(globalCfg.api_key || '')} onChange={(event) => patchSkillLayer('global', skillName, { api_key: event.target.value })} />
-                        {isVision && (
-                          <>
-                            <Input label="最大图片大小(MB)" type="number" min="1" value={Number(globalCfg.max_image_size_mb || 8)} onChange={(event) => patchSkillLayer('global', skillName, { max_image_size_mb: Number(event.target.value) })} />
-                            <Input label="单次最大图片数" type="number" min="1" value={Number(globalCfg.max_images_per_message || 3)} onChange={(event) => patchSkillLayer('global', skillName, { max_images_per_message: Number(event.target.value) })} />
-                          </>
-                        )}
-                      </div>
+                      <Input label="Base URL" value={String(simpleCfg.base_url || '')} placeholder={defaults.base_url} onChange={(event) => patchSimpleImageSkill(skillName, { base_url: event.target.value })} />
+                      <FieldHint text={skillName === 'image_generation' ? '会自动调用 /images/generations。' : '会自动调用 /chat/completions。'} />
                     </div>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>当前 Bot 覆盖（bots.yaml）</div>
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>启用</span>
-                          <Toggle checked={Boolean(botCfg.enabled)} onChange={(event) => patchSkillLayer('bot', skillName, { enabled: event.target.checked }, false)} />
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>自动触发</span>
-                          <Toggle checked={Boolean(botCfg.auto)} onChange={(event) => patchSkillLayer('bot', skillName, { auto: event.target.checked }, false)} />
-                        </div>
-                        <Input label="Base URL" value={String(botCfg.base_url || '')} placeholder={String(resolved.base_url || defaults.base_url)} onChange={(event) => patchSkillLayer('bot', skillName, { base_url: event.target.value }, true)} />
-                        <Input label="模型名" value={String(botCfg.model || '')} placeholder={String(resolved.model || defaults.model)} onChange={(event) => patchSkillLayer('bot', skillName, { model: event.target.value }, true)} />
-                        <Input label="API Key" type="password" value={String(botCfg.api_key || '')} onChange={(event) => patchSkillLayer('bot', skillName, { api_key: event.target.value }, true)} />
-                        {isVision && (
-                          <>
-                            <Input label="最大图片大小(MB)" type="number" min="1" value={Number(botCfg.max_image_size_mb || 8)} onChange={(event) => patchSkillLayer('bot', skillName, { max_image_size_mb: Number(event.target.value) }, true)} />
-                            <Input label="单次最大图片数" type="number" min="1" value={Number(botCfg.max_images_per_message || 3)} onChange={(event) => patchSkillLayer('bot', skillName, { max_images_per_message: Number(event.target.value) }, true)} />
-                          </>
-                        )}
-                      </div>
-                    </div>
+                    <Input label="模型名" value={String(simpleCfg.model || '')} placeholder={defaults.model} onChange={(event) => patchSimpleImageSkill(skillName, { model: event.target.value })} />
+                    <Input label="API Key" type="password" value={String(simpleCfg.api_key || '')} onChange={(event) => patchSimpleImageSkill(skillName, { api_key: event.target.value })} />
                   </div>
                 </CardContent>
               </Card>
