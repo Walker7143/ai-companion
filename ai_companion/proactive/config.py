@@ -69,6 +69,11 @@ class ProactiveConfig:
             "idle_ping": {
                 "enabled": True,
             },
+            "closeout_analyzer": {
+                "enabled": True,
+                "max_tokens": 200,
+                "fallback_to_regex": True,
+            },
         },
         # 黄金时段配置
         "preferred_contact_times": ["09:00-23:00"],
@@ -318,6 +323,18 @@ class ProactiveConfig:
     @property
     def idle_ping_enabled(self) -> bool:
         return bool(self._continuity_section("idle_ping").get("enabled", True))
+
+    @property
+    def closeout_analyzer_enabled(self) -> bool:
+        return bool(self._continuity_section("closeout_analyzer").get("enabled", True))
+
+    @property
+    def closeout_analyzer_max_tokens(self) -> int:
+        return int(self._continuity_section("closeout_analyzer").get("max_tokens", 200))
+
+    @property
+    def closeout_analyzer_fallback_to_regex(self) -> bool:
+        return bool(self._continuity_section("closeout_analyzer").get("fallback_to_regex", True))
 
     @property
     def idle_reminder_enabled(self) -> bool:

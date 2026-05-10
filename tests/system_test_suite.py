@@ -3596,6 +3596,8 @@ class SystemTestSuite:
                 self.calls.append(text)
                 if "主动联系原因" in text or "继续刚才承诺" in text:
                     return '{"opening":"刚才你问的那个问题","topic":"我想了一下，可以先小范围试试","ending":"你觉得呢？"}'
+                if "延迟回复承诺" in text or "对话分析助手" in text:
+                    return '{"deferred_reply": {"detected": true, "summary": "承诺稍后回复关于项目的看法", "delay_minutes": 1}, "unresolved_topic": {"detected": false, "summary": "", "confidence": 0.0}, "emotion_followup": {"detected": false, "emotion": "", "summary": ""}}'
                 return "我想一下，一会儿回复你。"
 
             async def embeddings(self, texts: list[str]) -> list[list[float]]:
@@ -3663,6 +3665,7 @@ class SystemTestSuite:
                         "chat_id": "wx-1",
                     },
                 )
+                await bot._drain_background_tasks(timeout=5.0)
                 pending_before = bot.conversation_task_store.count_pending(bot_id)
                 now = datetime.now()
                 task_rows = bot.conversation_task_store.list_due(bot_id, now + timedelta(minutes=10))

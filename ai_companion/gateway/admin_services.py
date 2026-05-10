@@ -785,6 +785,8 @@ class ConfigAdminService:
         life_event = life_event if isinstance(life_event, dict) else {}
         idle_ping = continuity.get("idle_ping", {})
         idle_ping = idle_ping if isinstance(idle_ping, dict) else {}
+        closeout = continuity.get("closeout_analyzer", {})
+        closeout = closeout if isinstance(closeout, dict) else {}
         return {
             "enabled": bool(cfg.get("enabled", True)),
             "mode": cfg.get("mode", "active"),
@@ -821,6 +823,9 @@ class ConfigAdminService:
             "emotion_followup_expires_hours": _as_int(emotion_followup.get("expires_hours"), 24, 1),
             "life_event_motive_enabled": _as_bool(life_event.get("enabled"), True),
             "idle_ping_enabled": _as_bool(idle_ping.get("enabled"), True),
+            "closeout_analyzer_enabled": _as_bool(closeout.get("enabled"), True),
+            "closeout_analyzer_max_tokens": _as_int(closeout.get("max_tokens"), 200, 1),
+            "closeout_analyzer_fallback_to_regex": _as_bool(closeout.get("fallback_to_regex"), True),
         }
 
     def _public_life(self, cfg: dict) -> dict:
@@ -1155,6 +1160,15 @@ class ConfigAdminService:
 
         life_event["enabled"] = _as_bool(proactive_data.get("life_event_motive_enabled"), _as_bool(life_event.get("enabled"), True))
         idle_ping["enabled"] = _as_bool(proactive_data.get("idle_ping_enabled"), _as_bool(idle_ping.get("enabled"), True))
+
+        closeout = _continuity_child("closeout_analyzer")
+        closeout["enabled"] = _as_bool(proactive_data.get("closeout_analyzer_enabled"), _as_bool(closeout.get("enabled"), True))
+        closeout["max_tokens"] = _as_int(proactive_data.get("closeout_analyzer_max_tokens"), closeout.get("max_tokens", 200), 1)
+        closeout["fallback_to_regex"] = _as_bool(
+            proactive_data.get("closeout_analyzer_fallback_to_regex"),
+            _as_bool(closeout.get("fallback_to_regex"), True),
+        )
+
         _write_json(path, existing)
 
     def _save_life(self, path: Path, life_data: dict) -> list[str]:

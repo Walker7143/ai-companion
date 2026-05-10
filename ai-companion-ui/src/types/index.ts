@@ -328,6 +328,9 @@ export interface ProactiveConfig {
   emotion_followup_expires_hours: number;
   life_event_motive_enabled: boolean;
   idle_ping_enabled: boolean;
+  closeout_analyzer_enabled: boolean;
+  closeout_analyzer_max_tokens: number;
+  closeout_analyzer_fallback_to_regex: boolean;
 }
 
 export interface LifeConfig {

@@ -18,6 +18,7 @@ from ..proactive.life_engine import LifeEngine
 from ..proactive.life_scheduler import LifeScheduler
 from ..proactive.runtime_lock import BotSchedulerRuntimeLock
 from ..proactive.conversation_task_store import ConversationTaskStore
+from ..proactive.closeout_analyzer import CloseoutAnalyzer
 from ..proactive.deferred_detector import DeferredReplyDetector
 from ..proactive.motives import ConversationTask, ConversationTaskStatus, ConversationTaskType
 from ..proactive.orchestrator import ProactiveOrchestrator
@@ -642,6 +643,19 @@ class BotInstance:
         # 0. 用户发消息了，通知主动唤醒系统
         self.proactive_engine.on_user_message_received()
 
+        # 0.1 用户回来了，自动取消该 session 的待执行任务
+        _session_id = str(
+            (memory_turn_context or {}).get("session_id")
+            or getattr(getattr(self.memory, "working", None), "current_session", "")
+            or ""
+        )
+        if _session_id and self.conversation_task_store:
+            cancelled = self.conversation_task_store.cancel_pending_for_session(
+                self.id, _session_id, datetime.now()
+            )
+            if cancelled:
+                logger.info("[BotInstance] 用户回来，自动取消 %d 个待执行任务 session=%s", cancelled, _session_id)
+
         if is_skill_management_command(user_input):
             response = await self._handle_skill_command(user_input)
             self._record_skill_command_history(user_input, response)
@@ -737,7 +751,10 @@ class BotInstance:
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, ctx, relationship_state)
-            self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context)
+            self._track_background_task(
+                self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context),
+                name="closeout_analysis",
+            )
 
             # 6. 异步写入记忆
             self._track_background_task(
@@ -758,7 +775,10 @@ class BotInstance:
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, {}, relationship_state)
-            self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context)
+            self._track_background_task(
+                self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context),
+                name="closeout_analysis",
+            )
 
         if image_user_hint and image_user_hint not in response:
             response = f"{image_user_hint}\n{response}"
@@ -940,22 +960,13 @@ class BotInstance:
             return base
         return f"{base}\n\n{extra}"
 
-    def _run_proactive_closeout_analysis(
+    async def _run_proactive_closeout_analysis(
         self,
         user_input: str,
         response: str,
         memory_turn_context: dict | None,
     ) -> None:
-        if not self.proactive_config.continuity_enabled or not self.proactive_config.deferred_reply_enabled:
-            return
-
-        detector = DeferredReplyDetector(
-            default_delay_minutes=self.proactive_config.deferred_reply_default_delay_minutes,
-            min_delay_minutes=self.proactive_config.deferred_reply_min_delay_minutes,
-            max_delay_minutes=self.proactive_config.deferred_reply_max_delay_minutes,
-        )
-        detected = detector.detect(user_input, response)
-        if detected is None:
+        if not self.proactive_config.continuity_enabled:
             return
 
         context = memory_turn_context if isinstance(memory_turn_context, dict) else {}
@@ -972,25 +983,78 @@ class BotInstance:
             "chat_id": str(context.get("chat_id") or ""),
             "name": str(metadata.get("chat_name") or ""),
         }
-        task = ConversationTask(
-            id=uuid.uuid4().hex,
-            bot_id=self.id,
-            type=ConversationTaskType.DEFERRED_REPLY,
-            status=ConversationTaskStatus.PENDING,
-            session_id=session_id,
-            user_id=str(context.get("user_id") or "default_user"),
-            platform=platform,
-            target=target,
-            created_at=now,
-            due_at=now + timedelta(minutes=detected.delay_minutes),
-            expires_at=now + timedelta(hours=self.proactive_config.deferred_reply_expires_hours),
-            source_user_message=user_input,
-            source_bot_message=response,
-            topic_summary=detected.topic_summary,
-            priority=100,
-        )
-        self.conversation_task_store.upsert(task)
-        logger.info("[BotInstance] 已记录延迟回复任务: bot=%s session=%s", self.id, session_id)
+        user_id = str(context.get("user_id") or "default_user")
+
+        recent_turns = self.conversation_history[-6:] if self.conversation_history else []
+
+        analyzer = CloseoutAnalyzer(self.model, self.proactive_config)
+        result = await analyzer.analyze(user_input, response, recent_turns)
+
+        if result.deferred_reply and self.proactive_config.deferred_reply_enabled:
+            if not self.conversation_task_store.has_pending(self.id, session_id, ConversationTaskType.DEFERRED_REPLY.value):
+                task = ConversationTask(
+                    id=uuid.uuid4().hex,
+                    bot_id=self.id,
+                    type=ConversationTaskType.DEFERRED_REPLY,
+                    status=ConversationTaskStatus.PENDING,
+                    session_id=session_id,
+                    user_id=user_id,
+                    platform=platform,
+                    target=target,
+                    created_at=now,
+                    due_at=now + timedelta(minutes=result.deferred_reply.delay_minutes),
+                    expires_at=now + timedelta(hours=self.proactive_config.deferred_reply_expires_hours),
+                    source_user_message=user_input,
+                    source_bot_message=response,
+                    topic_summary=result.deferred_reply.summary,
+                    priority=100,
+                )
+                self.conversation_task_store.upsert(task)
+                logger.info("[BotInstance] 已记录延迟回复任务: bot=%s session=%s", self.id, session_id)
+
+        if result.unresolved_topic and self.proactive_config.topic_continuation_enabled:
+            if not self.conversation_task_store.has_pending(self.id, session_id, ConversationTaskType.TOPIC_CONTINUATION.value):
+                task = ConversationTask(
+                    id=uuid.uuid4().hex,
+                    bot_id=self.id,
+                    type=ConversationTaskType.TOPIC_CONTINUATION,
+                    status=ConversationTaskStatus.PENDING,
+                    session_id=session_id,
+                    user_id=user_id,
+                    platform=platform,
+                    target=target,
+                    created_at=now,
+                    due_at=now + timedelta(minutes=self.proactive_config.topic_continuation_idle_after_minutes),
+                    expires_at=now + timedelta(hours=self.proactive_config.topic_continuation_expires_hours),
+                    source_user_message=user_input,
+                    source_bot_message=response,
+                    topic_summary=result.unresolved_topic.summary,
+                    priority=70,
+                )
+                self.conversation_task_store.upsert(task)
+                logger.info("[BotInstance] 已记录话题续聊任务: bot=%s session=%s", self.id, session_id)
+
+        if result.emotion_followup and self.proactive_config.emotion_followup_enabled:
+            if not self.conversation_task_store.has_pending(self.id, session_id, ConversationTaskType.EMOTION_FOLLOWUP.value):
+                task = ConversationTask(
+                    id=uuid.uuid4().hex,
+                    bot_id=self.id,
+                    type=ConversationTaskType.EMOTION_FOLLOWUP,
+                    status=ConversationTaskStatus.PENDING,
+                    session_id=session_id,
+                    user_id=user_id,
+                    platform=platform,
+                    target=target,
+                    created_at=now,
+                    due_at=now + timedelta(minutes=self.proactive_config.emotion_followup_delay_minutes),
+                    expires_at=now + timedelta(hours=self.proactive_config.emotion_followup_expires_hours),
+                    source_user_message=user_input,
+                    source_bot_message=response,
+                    topic_summary=f"情绪跟进：{result.emotion_followup.emotion} - {result.emotion_followup.summary}",
+                    priority=85,
+                )
+                self.conversation_task_store.upsert(task)
+                logger.info("[BotInstance] 已记录情绪跟进任务: bot=%s session=%s", self.id, session_id)
 
     async def _handle_skill_command(self, user_input: str) -> str:
         context = self._build_skill_context()

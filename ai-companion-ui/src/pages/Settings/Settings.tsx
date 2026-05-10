@@ -268,6 +268,9 @@ const defaultProactive: ProactiveConfig = {
   emotion_followup_expires_hours: 24,
   life_event_motive_enabled: true,
   idle_ping_enabled: true,
+  closeout_analyzer_enabled: true,
+  closeout_analyzer_max_tokens: 200,
+  closeout_analyzer_fallback_to_regex: true,
 };
 
 const defaultLife: LifeConfig = {
@@ -902,7 +905,18 @@ export function Settings() {
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>普通陪伴问候</div>
               <Toggle checked={draft.proactive.idle_ping_enabled} onChange={(event) => patchProactive({ idle_ping_enabled: event.target.checked })} />
-              <FieldHint text="最低优先级。关闭后，没有具体动机时 Bot 不会只发“在吗”。" />
+              <FieldHint text={`最低优先级。关闭后，没有具体动机时 Bot 不会只发“在吗”。`} />
+            </div>
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-secondary)' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>智能分析（LLM）</div>
+              <Toggle checked={draft.proactive.closeout_analyzer_enabled} onChange={(event) => patchProactive({ closeout_analyzer_enabled: event.target.checked })} />
+              <FieldHint text={`每轮对话结束后用 LLM 分析是否需要后续跟进。关闭后降级为规则匹配（仅延迟回复）。`} />
+            </div>
+            <Input label="分析 max_tokens" type="number" min="50" max="500" value={draft.proactive.closeout_analyzer_max_tokens} onChange={(event) => patchProactive({ closeout_analyzer_max_tokens: Number(event.target.value) })} />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>LLM 失败时降级为规则</div>
+              <Toggle checked={draft.proactive.closeout_analyzer_fallback_to_regex} onChange={(event) => patchProactive({ closeout_analyzer_fallback_to_regex: event.target.checked })} />
+              <FieldHint text={"LLM 调用失败时，使用正则规则作为兜底检测延迟回复。"} />
             </div>
           </div>
         </div>

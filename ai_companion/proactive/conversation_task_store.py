@@ -124,6 +124,39 @@ class ConversationTaskStore:
     def mark_expired(self, task_id: str, expired_at: datetime) -> None:
         self._mark(task_id, ConversationTaskStatus.EXPIRED, expired_at)
 
+    def cancel_pending_for_session(self, bot_id: str, session_id: str, now: datetime) -> int:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.execute(
+                "UPDATE tasks SET status = ?, metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.cancelled_at', ?) "
+                "WHERE bot_id = ? AND session_id = ? AND status = ?",
+                (
+                    ConversationTaskStatus.CANCELLED.value,
+                    now.isoformat(),
+                    bot_id,
+                    session_id,
+                    ConversationTaskStatus.PENDING.value,
+                ),
+            )
+            conn.commit()
+            return cursor.rowcount
+
+    def expire_overdue(self, now: datetime) -> int:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.execute(
+                "UPDATE tasks SET status = ? WHERE status = ? AND expires_at < ?",
+                (ConversationTaskStatus.EXPIRED.value, ConversationTaskStatus.PENDING.value, now.isoformat()),
+            )
+            conn.commit()
+            return cursor.rowcount
+
+    def has_pending(self, bot_id: str, session_id: str, task_type: str) -> bool:
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM tasks WHERE bot_id = ? AND session_id = ? AND type = ? AND status = ? LIMIT 1",
+                (bot_id, session_id, task_type, ConversationTaskStatus.PENDING.value),
+            ).fetchone()
+        return row is not None
+
     def _mark(self, task_id: str, status: ConversationTaskStatus, when: datetime) -> None:
         with closing(sqlite3.connect(self.db_path)) as conn:
             row = conn.execute("SELECT metadata_json FROM tasks WHERE id = ?", (task_id,)).fetchone()
