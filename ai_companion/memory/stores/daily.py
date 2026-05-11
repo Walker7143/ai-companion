@@ -189,6 +189,61 @@ class DailyMemoryStore:
                 )
             await db.commit()
 
+    async def append_message(
+        self,
+        *,
+        bot_id: str,
+        user_id: str,
+        role: str,
+        content: str,
+        session_id: str | None = None,
+        context: MemoryTurnContext | None = None,
+    ):
+        if not self.enabled:
+            return
+        content = str(content or "").strip()
+        if not content:
+            return
+        role = str(role or "").strip()
+        if role not in {"user", "assistant", "system"}:
+            raise ValueError(f"unsupported daily memory role: {role}")
+
+        ctx = context or MemoryTurnContext()
+        now = datetime.now()
+        local_date = now.strftime("%Y-%m-%d")
+        created_at = now.isoformat(timespec="seconds")
+        platform = ctx.platform or "unknown"
+        sid = ctx.session_id or session_id
+        metadata_json = json.dumps(ctx.metadata or {}, ensure_ascii=False) if ctx.metadata else None
+        chat_hash = _hash_text(ctx.chat_id) if ctx.chat_id else None
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO daily_messages (
+                    bot_id, user_id, local_date, created_at, platform,
+                    session_id, channel_type, chat_id_hash, message_id,
+                    role, content, content_chars, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    bot_id,
+                    user_id,
+                    local_date,
+                    created_at,
+                    platform,
+                    sid,
+                    ctx.channel_type,
+                    chat_hash,
+                    ctx.message_id,
+                    role,
+                    content,
+                    len(content),
+                    metadata_json,
+                ),
+            )
+            await db.commit()
+
     def get_recent_context(
         self,
         *,

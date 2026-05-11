@@ -278,12 +278,16 @@ class ProactiveEngine:
         self.personality_type = personality_type
         self._scheduler_task = None
         self._platform_sender = None  # 设置为主动消息发送回调
+        self._next_record_context: dict | None = None
 
     def set_model(self, model: "MiniMaxAdapter"):
         self.model = model
 
     def set_memory(self, memory: "MemoryEngine"):
         self.memory = memory
+
+    def set_next_record_context(self, context: dict | None):
+        self._next_record_context = dict(context or {})
 
     def set_life_engine(self, life_engine):
         """注入 LifeEngine 引用"""
@@ -961,7 +965,24 @@ class ProactiveEngine:
         self.state.set_cooldown("idle_reminder", cooldown_end)
 
         logger.info(f"[ProactiveEngine] 主动消息已发送: {message[:50]}...")
+        await self._record_sent_message(message)
         return True
+
+    async def _record_sent_message(self, message: str):
+        if not self.memory:
+            self._next_record_context = None
+            return
+        context = self._next_record_context or {
+            "platform": getattr(self.config, "platform_type", "proactive") or "proactive",
+            "session_id": getattr(self.memory, "_session_id", None),
+            "user_id": getattr(self.memory, "user_id", "default_user"),
+            "channel_type": "proactive",
+        }
+        self._next_record_context = None
+        try:
+            await self.memory.record_assistant_message(message, turn_context=context)
+        except Exception as exc:
+            logger.warning("[ProactiveEngine] 主动消息已发送，但写入记忆失败: %s", exc)
 
     def on_user_message_received(self, has_real_content: bool = True):
         """用户发消息时调用

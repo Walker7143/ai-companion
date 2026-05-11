@@ -384,6 +384,13 @@ class BotInstance:
         try:
             chat_id = getattr(self, f"_{platform_type}_chat_id", None)
             send_metadata: dict[str, object] = {}
+            memory_context: dict[str, object] = {
+                "platform": platform_type,
+                "user_id": getattr(getattr(self, "memory", None), "user_id", "default_user"),
+                "channel_type": None,
+                "chat_id": None,
+                "metadata": {},
+            }
             if isinstance(target, dict):
                 explicit_chat_id = target.get("chat_id")
                 if explicit_chat_id:
@@ -411,6 +418,16 @@ class BotInstance:
             if not chat_id:
                 logger.warning("[BotInstance] %s 未配置 home_channel，无法发送主动消息", platform_type)
                 return False
+            chat_id = str(chat_id)
+            memory_context["chat_id"] = chat_id
+            memory_context["channel_type"] = "group" if chat_id.endswith("@chatroom") else "dm"
+            if send_metadata:
+                memory_context["metadata"] = dict(send_metadata)
+            session_id = getattr(getattr(self, "memory", None), "_session_id", None)
+            if platform_type == "weixin":
+                session_id = "gw_" + uuid.uuid5(uuid.NAMESPACE_URL, f"agent:main:{platform_type}:{memory_context['channel_type']}:{chat_id}").hex[:24]
+            if session_id:
+                memory_context["session_id"] = session_id
             send_kwargs = {"chat_id": chat_id, "content": message}
             if send_metadata:
                 send_kwargs["metadata"] = send_metadata
@@ -425,6 +442,8 @@ class BotInstance:
             if not success:
                 error = getattr(result, "error", "unknown") if result is not None else "unknown"
                 logger.warning("[BotInstance] %s 主动消息发送失败: %s", platform_type, error)
+            elif self.proactive_engine:
+                self.proactive_engine.set_next_record_context(memory_context)
             return success
         except Exception as e:
             logger.error("[BotInstance] %s 发送失败: %s", platform_type, e)

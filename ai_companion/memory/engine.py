@@ -305,6 +305,38 @@ class MemoryEngine:
         if self._maintenance_counter % 5 == 0:
             await self.maintenance.run_light(bot_id=self.bot_id, user_id=user_id, summarizer=self._summarizer)
 
+    async def record_assistant_message(
+        self,
+        content: str,
+        turn_context: MemoryTurnContext | dict | None = None,
+    ):
+        """Record an assistant-originated message that was not produced by a user turn."""
+        content = str(content or "").strip()
+        if not content:
+            return
+        current_sid = self._session_id or self.working.current_session or "default"
+        context = self._normalize_turn_context(turn_context, session_id=current_sid)
+        sid = context.session_id or current_sid
+        user_id = context.user_id or self.user_id
+        metadata_json = json.dumps(context.metadata or {}, ensure_ascii=False) if context.metadata else None
+
+        await self.working.append_message(
+            role="assistant",
+            content=content,
+            session_id=sid,
+            user_id=user_id,
+            platform=context.platform,
+            metadata_json=metadata_json,
+        )
+        await self.daily.append_message(
+            bot_id=self.bot_id,
+            user_id=user_id,
+            role="assistant",
+            content=content,
+            session_id=sid,
+            context=context,
+        )
+
     def _log_attitude_write(self, semantic_result):
         """attitude_score 写入日志（semantic 返回单个 dict 或 None）"""
         if isinstance(semantic_result, dict) and semantic_result.get("key") == "attitude_score":

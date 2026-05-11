@@ -4,6 +4,9 @@ import unittest
 from pathlib import Path
 
 from ai_companion.memory.engine import MemoryEngine
+from ai_companion.proactive.config import ProactiveConfig
+from ai_companion.proactive.engine import ProactiveEngine
+from ai_companion.proactive.state import ProactiveState
 
 
 class DailyMemoryTest(unittest.TestCase):
@@ -103,6 +106,124 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertEqual([item["content"] for item in working_gw], ["gateway user text", "gateway reply"])
         self.assertEqual(working_cli, [])
         self.assertEqual(daily_ctx["recent_messages"][0]["session_id"], "gw-session")
+
+    def test_assistant_originated_message_is_recorded_without_user_turn(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="daily-memory-assistant-") as tmp:
+                engine = MemoryEngine(
+                    "daily_assistant_bot",
+                    Path(tmp),
+                    config={"embedding": "none"},
+                )
+                await engine.init()
+                engine.start_session("gw-weixin-home")
+                await engine.record_assistant_message(
+                    "我刚刚主动分享了家里的小事",
+                    turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw-weixin-home",
+                        "user_id": "gateway-user",
+                        "channel_type": "dm",
+                        "chat_id": "wx-user",
+                    },
+                )
+                working = engine.working.get_all_messages("gw-weixin-home")
+                daily_ctx = engine.daily.get_recent_context(
+                    bot_id="daily_assistant_bot",
+                    user_id="gateway-user",
+                )
+                await engine.close()
+                return working, daily_ctx
+
+        working, daily_ctx = asyncio.run(run())
+        self.assertEqual([item["role"] for item in working], ["assistant"])
+        self.assertEqual(working[0]["content"], "我刚刚主动分享了家里的小事")
+        self.assertEqual(len(daily_ctx["recent_messages"]), 1)
+        self.assertEqual(daily_ctx["recent_messages"][0]["role"], "assistant")
+
+    def test_proactive_engine_records_successful_sends(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="daily-memory-proactive-") as tmp:
+                root = Path(tmp)
+                persona_dir = root / "persona"
+                persona_dir.mkdir(parents=True, exist_ok=True)
+                (persona_dir / "proactive.json").write_text(
+                    '{"enabled": true, "mode": "active"}',
+                    encoding="utf-8",
+                )
+                memory = MemoryEngine("proactive_memory_bot", root, config={"embedding": "none"})
+                await memory.init()
+                memory.start_session("default-proactive-session")
+                engine = ProactiveEngine(
+                    bot_id="proactive_memory_bot",
+                    config=ProactiveConfig(persona_dir),
+                    state=ProactiveState("proactive_memory_bot", root),
+                    memory=memory,
+                )
+
+                async def sender(message: str):
+                    return True
+
+                engine._platform_sender = sender
+                engine.set_next_record_context(
+                    {
+                        "platform": "cli",
+                        "session_id": "cli-proactive-session",
+                        "user_id": "default_user",
+                        "channel_type": "local",
+                    }
+                )
+                sent = await engine._send_proactive_message("主动消息统一出口测试")
+                working = memory.working.get_all_messages("cli-proactive-session")
+                daily_ctx = memory.daily.get_recent_context(
+                    bot_id="proactive_memory_bot",
+                    user_id="default_user",
+                )
+                await memory.close()
+                return sent, working, daily_ctx
+
+        sent, working, daily_ctx = asyncio.run(run())
+        self.assertTrue(sent)
+        self.assertEqual([item["content"] for item in working], ["主动消息统一出口测试"])
+        self.assertEqual(daily_ctx["recent_messages"][0]["content"], "主动消息统一出口测试")
+
+    def test_proactive_engine_does_not_record_failed_sends(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="daily-memory-proactive-failed-") as tmp:
+                root = Path(tmp)
+                persona_dir = root / "persona"
+                persona_dir.mkdir(parents=True, exist_ok=True)
+                (persona_dir / "proactive.json").write_text(
+                    '{"enabled": true, "mode": "active"}',
+                    encoding="utf-8",
+                )
+                memory = MemoryEngine("proactive_failed_bot", root, config={"embedding": "none"})
+                await memory.init()
+                memory.start_session("proactive-failed-session")
+                engine = ProactiveEngine(
+                    bot_id="proactive_failed_bot",
+                    config=ProactiveConfig(persona_dir),
+                    state=ProactiveState("proactive_failed_bot", root),
+                    memory=memory,
+                )
+
+                async def sender(message: str):
+                    return False
+
+                engine._platform_sender = sender
+                sent = await engine._send_proactive_message("不该入库")
+                working = memory.working.get_all_messages("proactive-failed-session")
+                daily_count = memory.daily.count_messages(
+                    bot_id="proactive_failed_bot",
+                    user_id="default_user",
+                )
+                await memory.close()
+                return sent, working, daily_count
+
+        sent, working, daily_count = asyncio.run(run())
+        self.assertFalse(sent)
+        self.assertEqual(working, [])
+        self.assertEqual(daily_count, 0)
 
 
 if __name__ == "__main__":

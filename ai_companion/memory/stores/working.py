@@ -120,6 +120,30 @@ class WorkingMemoryStore:
             )
             await db.commit()
 
+    async def append_message(
+        self,
+        *,
+        role: str,
+        content: str,
+        session_id: Optional[str] = None,
+        user_id: str = "default_user",
+        platform: Optional[str] = None,
+        metadata_json: Optional[str] = None,
+    ):
+        content = str(content or "").strip()
+        if not content:
+            return
+        role = str(role or "").strip()
+        if role not in {"user", "assistant", "system"}:
+            raise ValueError(f"unsupported memory role: {role}")
+        sid = session_id or self.get_or_create_session()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO messages (session_id, user_id, platform, role, content, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
+                (sid, user_id, platform, role, content, metadata_json)
+            )
+            await db.commit()
+
     def get_all(self, session_id: Optional[str] = None) -> list[dict]:
         """获取会话所有未压缩的原始消息（按时间正序）"""
         sid = session_id or self.current_session
