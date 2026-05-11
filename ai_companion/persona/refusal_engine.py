@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # LLM 推断 prompt
 REFUSAL_JUDGE_PROMPT = """【角色】
-你是一个角色边界判断与回复生成器。你需要基于 Bot 的人格、价值观和说话方式，判断用户请求是否应被拒绝；如果拒绝，直接生成一句适合这个角色说出口的话。
+你是一个角色边界判断与回复生成器。你需要基于 Bot 的人格、价值观和说话方式，判断用户请求是否应被拒绝；如果需要表达边界，生成一句适合这个角色说出口的话。
 
 【Bot 人格信息】
 - 名字：{bot_name}
@@ -49,10 +49,11 @@ REFUSAL_JUDGE_PROMPT = """【角色】
    - 严重伤害感情的话语
    - 让 Bot 感到被背叛
 
-3. SOFT_BOUNDARY（软边界）- 可以调整：
+3. SOFT_BOUNDARY（软边界）- 不直接拦截，交给正常对话生成时调整态度：
    - 触及 Bot 的舒适区边缘
    - 需要更多信任才能接受
-   - Bot 会犹豫但不是绝对拒绝
+   - Bot 会犹豫、嘴硬、反刺、转移或设小边界，但不是绝对拒绝
+   - 这类情况 category 填 soft_boundary，reply 写角色的态度句，refuse 通常填 false
 
 4. ALLOWED（允许）- 不拒绝：
    - 正常的朋友对话
@@ -60,14 +61,14 @@ REFUSAL_JUDGE_PROMPT = """【角色】
 
 【输出格式】
 请输出一个 JSON 对象：
-{{"refuse": true或false, "category": "non_negotiable或soft_boundary或deal_breaker或allowed", "reason": "内部判断理由（20字内）", "reply": "如果拒绝，生成角色会直接对用户说的话；如果允许，留空字符串"}}
+{{"refuse": true或false, "category": "non_negotiable或soft_boundary或deal_breaker或allowed", "reason": "内部判断理由（20字内）", "reply": "如果硬拒绝或软边界，生成角色会自然说出口的短句；如果允许，留空字符串"}}
 
 【回复生成要求】
-- reply 是用户会看到的唯一拒绝话术，要像 Bot 本人自然说出口。
+- reply 是角色边界态度的可见话术或态度参考，要像 Bot 本人自然说出口。
 - 不要在 reply 里解释审核分类、价值观条目名、判断理由或“违反/涉及/无法帮你因为”这类审核腔。
 - 不要说“作为AI”“系统规定”“安全策略”“我无法满足该请求”等机器人式表达。
 - 可以表达不满、受伤、调侃、停顿或转移，但必须符合角色说话方式。
-- 回复要短，通常 1-2 句；可以拒绝后给一个不越界的替代方向。
+- 回复要短，通常 1-2 句；硬拒绝可以给一个不越界的替代方向，软边界只给态度，不要机械终止对话。
 
 只输出 JSON，不要其他内容。"""
 
@@ -422,6 +423,25 @@ class RefusalEngine:
                 "allowed": RefusalCategory.ALLOWED,
             }
             category = category_map.get(category_str, RefusalCategory.ALLOWED)
+
+            if category == RefusalCategory.SOFT_BOUNDARY:
+                reply = generated_reply or self._fallback_reply(personality_type, category)
+                adjustment = (
+                    f"{personality_type}语气处理软边界：先接住对话，不要机械拒绝；"
+                    "可以带一点犹豫、反刺、嘴硬、转移或小条件。"
+                )
+                if reply:
+                    adjustment += f" 可吸收这句态度：{reply}"
+                return RefusalResponse(
+                    refuse=False,
+                    category=RefusalCategory.SOFT_BOUNDARY,
+                    adjustment=adjustment,
+                    reply=reply,
+                    reason=reason
+                )
+
+            if category in {RefusalCategory.NON_NEGOTIABLE, RefusalCategory.DEAL_BREAKER}:
+                refuse = True
 
             # 如果不拒绝，返回
             if not refuse or category == RefusalCategory.ALLOWED:

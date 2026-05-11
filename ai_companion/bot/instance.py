@@ -701,14 +701,24 @@ class BotInstance:
         )
 
         if refusal_response.refuse:
-            # 拒绝时直接返回，不调用 LLM
+            # 硬拒绝直接返回，但仍然记录为一轮真实对话，避免 Bot 丢失自己说过的边界。
             logger.info(f"[Refusal] 拒绝请求: {refusal_response.reason} | {refusal_response.category.value}")
-            return refusal_response.reply or "抱歉，我无法帮你处理这个请求。"
+            response = refusal_response.reply or "这件事我不能答应你。我们换个别的办法吧。"
+            self._record_refusal_turn(
+                effective_user_input,
+                response,
+                refusal_response,
+                memory_turn_context,
+            )
+            return response
 
         # 2. 软边界调整（不拒绝但返回调整后的回复）
         if refusal_response.category == RefusalCategory.SOFT_BOUNDARY and refusal_response.reply:
             logger.info(f"[Refusal] 软边界调整: {refusal_response.reason}")
-            adjustment_note = f"\n\n[态度提示: {refusal_response.adjustment}]"
+            adjustment_note = (
+                "\n\n[角色边界提示: 本轮触及软边界，但不要机械拒绝或停止对话。"
+                f"{refusal_response.adjustment}]"
+            )
         else:
             adjustment_note = ""
 
@@ -1153,6 +1163,39 @@ class BotInstance:
         history_input = redact_sensitive_tokens(user_input) if contains_sensitive_token(user_input) else user_input
         self.conversation_history.append({"role": "user", "content": history_input})
         self.conversation_history.append({"role": "assistant", "content": response})
+
+    def _record_refusal_turn(
+        self,
+        user_input: str,
+        response: str,
+        refusal_response,
+        turn_context: dict | None,
+    ) -> None:
+        self.conversation_history.append({"role": "user", "content": user_input})
+        self.conversation_history.append({"role": "assistant", "content": response})
+
+        if not self.memory:
+            return
+
+        context = self._with_refusal_metadata(turn_context, refusal_response)
+        self._track_background_task(
+            self.memory.on_message(user_input, response, turn_context=context),
+            name="memory.on_message.refusal",
+        )
+
+    def _with_refusal_metadata(self, turn_context: dict | None, refusal_response) -> dict:
+        context = dict(turn_context or {})
+        metadata = dict(context.get("metadata") or {})
+        category = getattr(refusal_response, "category", None)
+        metadata.update(
+            {
+                "refusal": True,
+                "refusal_category": getattr(category, "value", str(category or "")),
+                "refusal_reason": refusal_response.reason or "",
+            }
+        )
+        context["metadata"] = metadata
+        return context
 
     def _polish_response(self, response: str, memory_context: dict | None, relationship_state: dict | None) -> str:
         return self.response_polisher.polish(

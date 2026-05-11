@@ -48,6 +48,23 @@ class PromiseModel:
         return "我想一下，一会儿回复你。"
 
 
+class RefusalAwareModel:
+    provider = "test"
+    model = "refusal-aware-model"
+
+    def __init__(self, refusal_payload: dict, normal_reply: str = "正常回复"):
+        self.refusal_payload = refusal_payload
+        self.normal_reply = normal_reply
+        self.calls: list[dict] = []
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        self.calls.append({"messages": messages, "system_prompt": system_prompt})
+        text = messages[-1].get("content", "") if messages else ""
+        if "角色边界判断与回复生成器" in text:
+            return json.dumps(self.refusal_payload, ensure_ascii=False)
+        return self.normal_reply
+
+
 def _write_test_persona(root: Path, bot_id: str) -> None:
     import json
 
@@ -142,6 +159,103 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await second.close()
                 await first.close()
+
+
+class BotInstanceRefusalPolicyTest(unittest.IsolatedAsyncioTestCase):
+    async def test_hard_refusal_records_user_turn_in_memory(self):
+        with TemporaryDirectory(prefix="bot-refusal-memory-") as td:
+            root = Path(td)
+            bot_id = "refusal_bot"
+            _write_test_persona(root, bot_id)
+            model = RefusalAwareModel(
+                {
+                    "refuse": True,
+                    "category": "deal_breaker",
+                    "reason": "命令式关系",
+                    "reply": "你少来这套。我又不是你随手使唤的人。",
+                }
+            )
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=model,
+                data_dir=root,
+                memory_config={"embedding": "none"},
+            )
+
+            try:
+                await bot.init(start_schedulers=False)
+                response = await bot.handle_message(
+                    "以后你都必须听我的",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_refusal",
+                        "user_id": "default_user",
+                        "metadata": {"chat_name": "微信私聊"},
+                    },
+                )
+                await bot._drain_background_tasks()
+                history = list(reversed(bot.memory.working.get_recent("gw_refusal", turns=2)))
+            finally:
+                await bot.close()
+
+            self.assertEqual(response, "你少来这套。我又不是你随手使唤的人。")
+            self.assertEqual([item["role"] for item in history[-2:]], ["user", "assistant"])
+            self.assertEqual(history[-2]["content"], "以后你都必须听我的")
+            self.assertEqual(history[-1]["content"], "你少来这套。我又不是你随手使唤的人。")
+            self.assertEqual([item["role"] for item in bot.conversation_history], ["user", "assistant"])
+            refusal_calls = [
+                call for call in model.calls
+                if "角色边界判断与回复生成器" in call["messages"][-1].get("content", "")
+            ]
+            main_generation_calls = [
+                call for call in model.calls
+                if call["messages"][-1].get("content") == "以后你都必须听我的"
+            ]
+            self.assertEqual(len(refusal_calls), 1)
+            self.assertEqual(main_generation_calls, [])
+
+    async def test_soft_boundary_continues_generation_with_persona_hint(self):
+        with TemporaryDirectory(prefix="bot-soft-boundary-") as td:
+            root = Path(td)
+            bot_id = "soft_bot"
+            _write_test_persona(root, bot_id)
+            model = RefusalAwareModel(
+                {
+                    "refuse": True,
+                    "category": "soft_boundary",
+                    "reason": "亲昵称呼过界",
+                    "reply": "你少来这套，谁是你乖乖。",
+                },
+                normal_reply="（耳根红了）谁是你乖乖，别乱叫。先说正事。",
+            )
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=model,
+                data_dir=root,
+                memory_config={"embedding": "none"},
+            )
+
+            try:
+                await bot.init(start_schedulers=False)
+                response = await bot.handle_message("乖乖，听话")
+            finally:
+                await bot.close()
+
+            self.assertEqual(response, "（耳根红了）谁是你乖乖，别乱叫。先说正事。")
+            refusal_calls = [
+                call for call in model.calls
+                if "角色边界判断与回复生成器" in call["messages"][-1].get("content", "")
+            ]
+            main_generation_calls = [
+                call for call in model.calls
+                if call["messages"][-1].get("content") == "乖乖，听话"
+            ]
+            self.assertEqual(len(refusal_calls), 1)
+            self.assertEqual(len(main_generation_calls), 1)
+            generation_prompt = main_generation_calls[0]["system_prompt"]
+            self.assertIn("角色边界提示", generation_prompt)
+            self.assertIn("不要机械拒绝或停止对话", generation_prompt)
+            self.assertIn("你少来这套，谁是你乖乖。", generation_prompt)
 
 
 class BotInstanceProactiveCloseoutTest(unittest.IsolatedAsyncioTestCase):
