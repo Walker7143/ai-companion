@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 CLOSEOUT_ANALYSIS_PROMPT = """\
 你是对话分析助手。分析以下对话片段，判断是否存在以下情况：
 
-1. 延迟回复承诺：Bot 是否明确承诺稍后回复/告知/查找某事？
+1. 延迟回复承诺：Bot 是否明确承诺稍后回复/告知/查找某事，或用户要求 Bot 稍后告诉/提醒/发消息且 Bot 接受？
 2. 未完成话题：对话是否在某个话题中途结束，用户的核心问题未被充分回答？
 3. 情绪关怀需要：用户是否表达了明显的负面情绪（难过/焦虑/压力/生气/沮丧）需要后续关心？
 
@@ -22,6 +22,9 @@ CLOSEOUT_ANALYSIS_PROMPT = """\
 
 【判断规则】
 - "我想想也是"、"我觉得可以"等表示赞同/思考的话，不算延迟回复承诺
+- 用户说"一会告诉我/想好了告诉我/记得告诉我/忙完告诉我"，Bot 回答"行/知道了/好/我想好了给你发消息/我会告诉你"，算延迟回复承诺
+- Bot 不一定要主动说"稍后"才算承诺；只要上下文中用户提出延迟回告要求，Bot 接受或确认会后续发消息，也算
+- 如果 Bot 已经当场给出完整答案，或只是礼貌结束（"去忙吧"）且没有接受后续回告要求，不算延迟回复承诺
 - 否定句（"我不会稍后回复"、"不用等我"）不算承诺
 - 用户说了"好的/明白了/谢谢/嗯嗯/知道了"表示话题已结束，不算未完成话题
 - 反问句和修辞性问题不算未完成话题
@@ -87,7 +90,23 @@ class CloseoutAnalyzer:
                 system_prompt=None,
                 max_tokens=self.config.closeout_analyzer_max_tokens,
             )
-            return self._parse_response(response)
+            result = self._parse_response(response)
+            if self.config.closeout_analyzer_fallback_to_regex and not result.deferred_reply:
+                fallback = self._fallback_analyze(user_message, bot_message)
+                if fallback.deferred_reply:
+                    result.deferred_reply = fallback.deferred_reply
+                    logger.info(
+                        "[CloseoutAnalyzer] LLM 未命中延迟回复，规则兜底命中: %s",
+                        fallback.deferred_reply.summary,
+                    )
+            logger.info(
+                "[CloseoutAnalyzer] 判定结果 deferred=%s unresolved=%s emotion=%s raw=%s",
+                bool(result.deferred_reply),
+                bool(result.unresolved_topic),
+                bool(result.emotion_followup),
+                str(response or "").strip()[:500],
+            )
+            return result
         except Exception as e:
             logger.warning("[CloseoutAnalyzer] LLM 分析失败: %s，降级为规则检测", e)
             if self.config.closeout_analyzer_fallback_to_regex:

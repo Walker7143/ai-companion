@@ -17,11 +17,14 @@ class ProactiveOrchestrator:
 
     async def tick(self, now: datetime | None = None) -> bool:
         now = now or datetime.now()
-        if not self.config.continuity_enabled:
+        if not self._is_continuity_active():
             return False
-        self.task_store.expire_overdue(now)
+        if self.task_store is not None:
+            self.task_store.expire_overdue(now)
         motive = self._select_motive(now)
         if motive is None:
+            return False
+        if not self._can_dispatch(motive, now):
             return False
         sent = await self.engine.send_contextual_proactive_message(motive)
         if sent and motive.task:
@@ -38,6 +41,149 @@ class ProactiveOrchestrator:
         if not candidates:
             return None
         return sorted(candidates, key=lambda m: (-m.priority, m.task.due_at if m.task else now))[0]
+
+    def _is_continuity_active(self) -> bool:
+        return bool(getattr(self.config, "continuity_enabled", True)) and bool(
+            getattr(self.config, "is_active", True)
+        )
+
+    def _can_dispatch(self, motive: ProactiveMotive, now: datetime) -> bool:
+        if not getattr(self.config, "is_active", True):
+            logger.debug("[ProactiveOrchestrator] 跳过主动 motive：Bot 非 active 模式")
+            return False
+
+        state = getattr(self.engine, "state", None)
+        if state is not None:
+            annoyance_level = self._safe_int(getattr(state, "annoyance_level", 0), default=0)
+            if annoyance_level >= 9:
+                logger.info("[ProactiveOrchestrator] 跳过主动 motive：用户反感度过高")
+                return False
+
+            max_daily = self._safe_int(getattr(self.config, "max_daily", 5), default=5)
+            today_count = self._safe_int(getattr(state, "today_proactive_count", 0), default=0)
+            if today_count >= max_daily:
+                logger.info(
+                    "[ProactiveOrchestrator] 跳过主动 motive：已达每日上限 type=%s count=%s max=%s",
+                    self._motive_type_value(motive),
+                    today_count,
+                    max_daily,
+                )
+                return False
+
+            if self._is_cooldown_active(state, now):
+                logger.info(
+                    "[ProactiveOrchestrator] 跳过主动 motive：仍在最小间隔冷却中 type=%s",
+                    self._motive_type_value(motive),
+                )
+                return False
+
+        if not self._is_preferred_contact_time(now):
+            logger.info(
+                "[ProactiveOrchestrator] 跳过主动 motive：不在可主动联系时段 type=%s",
+                self._motive_type_value(motive),
+            )
+            return False
+
+        return True
+
+    def _is_cooldown_active(self, state, now: datetime) -> bool:
+        min_interval_hours = self._safe_float(getattr(self.config, "min_interval_hours", 0.0), default=0.0)
+        if min_interval_hours <= 0:
+            return False
+
+        if hasattr(state, "get_cooldown"):
+            cooldown_end = state.get_cooldown("idle_reminder")
+            if cooldown_end is None:
+                return False
+            cooldown_end = self._parse_datetime(cooldown_end)
+            if cooldown_end is None:
+                return False
+            return self._datetime_lt(now, cooldown_end)
+
+        if hasattr(state, "is_cooldown_active"):
+            return bool(state.is_cooldown_active("idle_reminder"))
+
+        return False
+
+    def _is_preferred_contact_time(self, now: datetime) -> bool:
+        preferred_times = getattr(self.config, "preferred_contact_times", None)
+        if not preferred_times:
+            return True
+
+        current_minute = now.hour * 60 + now.minute
+        saw_valid_range = False
+        for time_range in preferred_times:
+            parsed = self._parse_time_range(str(time_range))
+            if parsed is None:
+                continue
+            saw_valid_range = True
+            start_minute, end_minute = parsed
+            if self._minute_in_range(current_minute, start_minute, end_minute):
+                return True
+
+        if not saw_valid_range:
+            logger.warning("[ProactiveOrchestrator] preferred_contact_times 无有效时段，放行主动 motive")
+            return True
+        return False
+
+    def _parse_time_range(self, value: str) -> tuple[int, int] | None:
+        if "-" not in value:
+            return None
+        start_raw, end_raw = value.split("-", 1)
+        start = self._parse_clock_minute(start_raw)
+        end = self._parse_clock_minute(end_raw)
+        if start is None or end is None:
+            return None
+        return start, end
+
+    def _parse_clock_minute(self, value: str) -> int | None:
+        parts = str(value or "").strip().split(":")
+        if not parts or len(parts) > 2:
+            return None
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1]) if len(parts) == 2 else 0
+        except ValueError:
+            return None
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+        return hour * 60 + minute
+
+    def _minute_in_range(self, current: int, start: int, end: int) -> bool:
+        if start == end:
+            return True
+        if start < end:
+            return start <= current <= end
+        return current >= start or current <= end
+
+    def _parse_datetime(self, value) -> datetime | None:
+        if value is None or isinstance(value, datetime):
+            return value
+        try:
+            return datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    def _datetime_lt(self, left: datetime, right: datetime) -> bool:
+        try:
+            return left < right
+        except TypeError:
+            return left.replace(tzinfo=None) < right.replace(tzinfo=None)
+
+    def _safe_int(self, value, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _safe_float(self, value, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _motive_type_value(self, motive: ProactiveMotive) -> str:
+        return str(getattr(getattr(motive, "type", None), "value", getattr(motive, "type", "")))
 
     def _due_task_motives(self, now: datetime) -> list[ProactiveMotive]:
         motives: list[ProactiveMotive] = []

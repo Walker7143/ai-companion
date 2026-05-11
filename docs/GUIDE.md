@@ -882,7 +882,7 @@ Bot 知道自己活在 Bot 时间线中的哪一天：
 
 ### 4.10 time_ratio 时间加速
 
-`time_ratio` 控制 Bot 内部时间的流逝速度。实际检查间隔按 `daily_interval_seconds / time_ratio` 和 `major_interval_seconds / time_ratio` 缩放，LifeScheduler 会用 `1-10` 秒的自适应轮询观察是否到期。
+`time_ratio` 控制 Bot 内部时间的流逝速度。实际检查间隔按 `daily_interval_seconds / time_ratio` 和 `major_interval_seconds / time_ratio` 缩放，LifeScheduler 会用 `1-300` 秒的自适应轮询观察是否到期。
 
 | time_ratio | 默认日常检查间隔 | 常见效果 | 适用场景 |
 |------------|------------------|---------|---------|

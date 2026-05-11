@@ -85,8 +85,8 @@ class LifeScheduler:
                 import traceback
                 logger.error(f"[LifeScheduler] 堆栈: {traceback.format_exc()}")
 
-            # 自适应轮询：默认不超过 10s，极速测试可降到 1s。
-            poll_interval = max(1, min(10, self.config.daily_interval, self.config.major_interval))
+            # 自适应轮询：默认不超过 300s，极速测试可降到 1s。
+            poll_interval = max(1, min(300, self.config.daily_interval, self.config.major_interval))
             await asyncio.sleep(poll_interval)
 
     def get_status(self) -> dict:

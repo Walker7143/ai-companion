@@ -165,6 +165,30 @@ class DeferredReplyDetectorTest(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_detects_user_requested_deferred_reply_when_bot_accepts(self):
+        from ai_companion.proactive.deferred_detector import DeferredReplyDetector
+
+        detector = DeferredReplyDetector(default_delay_minutes=8, min_delay_minutes=2, max_delay_minutes=60)
+        result = detector.detect(
+            user_message="你要记得想好了告诉我啊",
+            bot_message="知道了，去吧去吧，开会别走神。我想好了给你发消息。",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.delay_minutes, 8)
+        self.assertIn("想好了告诉我", result.topic_summary)
+
+    def test_ignores_user_requested_deferred_reply_without_bot_acceptance(self):
+        from ai_companion.proactive.deferred_detector import DeferredReplyDetector
+
+        detector = DeferredReplyDetector(default_delay_minutes=8, min_delay_minutes=2, max_delay_minutes=60)
+        result = detector.detect(
+            user_message="是啊，你帮我好好想想，一会告诉我奥，我先忙个会",
+            bot_message="行。去忙你的。",
+        )
+
+        self.assertIsNone(result)
+
 
 class ProactiveOrchestratorTest(unittest.IsolatedAsyncioTestCase):
     async def test_dispatches_due_deferred_task_and_marks_completed(self):
@@ -392,6 +416,282 @@ class TopicContinuationMotiveTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(store.list_due("bot-a", now), [])
 
 
+class ProactiveOrchestratorGateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_topic_continuation_waits_when_daily_limit_reached(self):
+        from ai_companion.proactive.conversation_task_store import ConversationTaskStore
+        from ai_companion.proactive.motives import (
+            ConversationTask,
+            ConversationTaskStatus,
+            ConversationTaskType,
+        )
+        from ai_companion.proactive.orchestrator import ProactiveOrchestrator
+
+        class Config:
+            is_active = True
+            continuity_enabled = True
+            deferred_reply_enabled = True
+            deferred_reply_bypass_idle_threshold = True
+            topic_continuation_enabled = True
+            emotion_followup_enabled = True
+            life_event_motive_enabled = False
+            max_daily = 1
+            min_interval_hours = 0
+            preferred_contact_times = ["00:00-23:59"]
+
+        class State:
+            today_proactive_count = 1
+            annoyance_level = 0
+
+            def get_cooldown(self, trigger_name):
+                return None
+
+        class Engine:
+            bot_id = "bot-a"
+            config = Config()
+            state = State()
+
+            def __init__(self):
+                self.sent = []
+
+            async def send_contextual_proactive_message(self, motive):
+                self.sent.append(motive)
+                return True
+
+        with TemporaryDirectory(prefix="proactive-gate-daily-") as td:
+            now = datetime(2026, 5, 9, 10, 0, 0)
+            store = ConversationTaskStore(td)
+            store.upsert(
+                ConversationTask(
+                    id="topic-limit",
+                    bot_id="bot-a",
+                    type=ConversationTaskType.TOPIC_CONTINUATION,
+                    status=ConversationTaskStatus.PENDING,
+                    session_id="gw_abc",
+                    user_id="default_user",
+                    platform="weixin",
+                    target={"platform": "weixin", "chat_id": "wx-1"},
+                    created_at=now - timedelta(minutes=45),
+                    due_at=now,
+                    expires_at=now + timedelta(hours=12),
+                    topic_summary="用户询问是否继续做项目",
+                    priority=70,
+                )
+            )
+            engine = Engine()
+            orchestrator = ProactiveOrchestrator(engine=engine, task_store=store)
+
+            sent = await orchestrator.tick(now=now)
+
+            self.assertFalse(sent)
+            self.assertEqual(engine.sent, [])
+            self.assertEqual([task.id for task in store.list_due("bot-a", now)], ["topic-limit"])
+
+    async def test_topic_continuation_waits_during_min_interval_cooldown(self):
+        from ai_companion.proactive.conversation_task_store import ConversationTaskStore
+        from ai_companion.proactive.motives import (
+            ConversationTask,
+            ConversationTaskStatus,
+            ConversationTaskType,
+        )
+        from ai_companion.proactive.orchestrator import ProactiveOrchestrator
+
+        class Config:
+            is_active = True
+            continuity_enabled = True
+            deferred_reply_enabled = True
+            deferred_reply_bypass_idle_threshold = True
+            topic_continuation_enabled = True
+            emotion_followup_enabled = True
+            life_event_motive_enabled = False
+            max_daily = 5
+            min_interval_hours = 1
+            preferred_contact_times = ["00:00-23:59"]
+
+        class State:
+            today_proactive_count = 0
+            annoyance_level = 0
+
+            def __init__(self, cooldown_end):
+                self.cooldown_end = cooldown_end
+
+            def get_cooldown(self, trigger_name):
+                return self.cooldown_end
+
+        class Engine:
+            bot_id = "bot-a"
+            config = Config()
+
+            def __init__(self, cooldown_end):
+                self.state = State(cooldown_end)
+                self.sent = []
+
+            async def send_contextual_proactive_message(self, motive):
+                self.sent.append(motive)
+                return True
+
+        with TemporaryDirectory(prefix="proactive-gate-cooldown-") as td:
+            now = datetime(2026, 5, 9, 10, 0, 0)
+            store = ConversationTaskStore(td)
+            store.upsert(
+                ConversationTask(
+                    id="topic-cooldown",
+                    bot_id="bot-a",
+                    type=ConversationTaskType.TOPIC_CONTINUATION,
+                    status=ConversationTaskStatus.PENDING,
+                    session_id="gw_abc",
+                    user_id="default_user",
+                    platform="weixin",
+                    target={"platform": "weixin", "chat_id": "wx-1"},
+                    created_at=now - timedelta(minutes=45),
+                    due_at=now,
+                    expires_at=now + timedelta(hours=12),
+                    topic_summary="用户询问是否继续做项目",
+                    priority=70,
+                )
+            )
+            engine = Engine(now + timedelta(minutes=30))
+            orchestrator = ProactiveOrchestrator(engine=engine, task_store=store)
+
+            sent = await orchestrator.tick(now=now)
+
+            self.assertFalse(sent)
+            self.assertEqual(engine.sent, [])
+            self.assertEqual([task.id for task in store.list_due("bot-a", now)], ["topic-cooldown"])
+
+    async def test_deferred_reply_still_respects_preferred_contact_time(self):
+        from ai_companion.proactive.conversation_task_store import ConversationTaskStore
+        from ai_companion.proactive.motives import (
+            ConversationTask,
+            ConversationTaskStatus,
+            ConversationTaskType,
+        )
+        from ai_companion.proactive.orchestrator import ProactiveOrchestrator
+
+        class Config:
+            is_active = True
+            continuity_enabled = True
+            deferred_reply_enabled = True
+            deferred_reply_bypass_idle_threshold = True
+            topic_continuation_enabled = False
+            emotion_followup_enabled = False
+            life_event_motive_enabled = False
+            max_daily = 5
+            min_interval_hours = 0
+            preferred_contact_times = ["09:00-22:00"]
+
+        class State:
+            today_proactive_count = 0
+            annoyance_level = 0
+
+            def get_cooldown(self, trigger_name):
+                return None
+
+        class Engine:
+            bot_id = "bot-a"
+            config = Config()
+            state = State()
+
+            def __init__(self):
+                self.sent = []
+
+            async def send_contextual_proactive_message(self, motive):
+                self.sent.append(motive)
+                return True
+
+        with TemporaryDirectory(prefix="proactive-gate-hours-") as td:
+            now = datetime(2026, 5, 9, 23, 0, 0)
+            store = ConversationTaskStore(td)
+            store.upsert(
+                ConversationTask(
+                    id="deferred-late",
+                    bot_id="bot-a",
+                    type=ConversationTaskType.DEFERRED_REPLY,
+                    status=ConversationTaskStatus.PENDING,
+                    session_id="gw_abc",
+                    user_id="default_user",
+                    platform="weixin",
+                    target={"platform": "weixin", "chat_id": "wx-1"},
+                    created_at=now - timedelta(minutes=8),
+                    due_at=now,
+                    expires_at=now + timedelta(hours=1),
+                    source_user_message="想好了告诉我",
+                    source_bot_message="好，我想好了给你发消息",
+                    topic_summary="稍后回复",
+                    priority=100,
+                )
+            )
+            engine = Engine()
+            orchestrator = ProactiveOrchestrator(engine=engine, task_store=store)
+
+            sent = await orchestrator.tick(now=now)
+
+            self.assertFalse(sent)
+            self.assertEqual(engine.sent, [])
+            self.assertEqual([task.id for task in store.list_due("bot-a", now)], ["deferred-late"])
+
+    async def test_life_event_is_not_marked_shared_when_gate_blocks_send(self):
+        from ai_companion.proactive.conversation_task_store import ConversationTaskStore
+        from ai_companion.proactive.life_state import LifeEvent, LifeState
+        from ai_companion.proactive.orchestrator import ProactiveOrchestrator
+
+        class Config:
+            is_active = True
+            continuity_enabled = True
+            deferred_reply_enabled = False
+            topic_continuation_enabled = False
+            emotion_followup_enabled = False
+            life_event_motive_enabled = True
+            deferred_reply_bypass_idle_threshold = False
+            max_daily = 1
+            min_interval_hours = 0
+            preferred_contact_times = ["00:00-23:59"]
+
+        class State:
+            today_proactive_count = 1
+            annoyance_level = 0
+
+            def get_cooldown(self, trigger_name):
+                return None
+
+        class LifeEngine:
+            def __init__(self, root):
+                self.state = LifeState("bot-life", root)
+
+        class Engine:
+            bot_id = "bot-life"
+            config = Config()
+            state = State()
+
+            def __init__(self, root):
+                self.life_engine = LifeEngine(root)
+                self.sent = []
+
+            async def send_contextual_proactive_message(self, motive):
+                self.sent.append(motive)
+                return True
+
+        with TemporaryDirectory(prefix="proactive-life-gate-") as td:
+            now = datetime(2026, 5, 11, 10, 0, 0)
+            engine = Engine(Path(td))
+            event = LifeEvent(
+                description="今天整理文件时发现一张旧照片",
+                shareable=True,
+                topic_prompt="想跟你说个小事",
+            )
+            engine.life_engine.state.add_event(event)
+            orchestrator = ProactiveOrchestrator(
+                engine=engine,
+                task_store=ConversationTaskStore(Path(td) / "tasks"),
+            )
+
+            sent = await orchestrator.tick(now=now)
+            events = engine.life_engine.state.to_dict().get("life_events", [])
+
+            self.assertFalse(sent)
+            self.assertEqual(engine.sent, [])
+            self.assertFalse(events[0].get("shared_at"))
+
+
 class TaskCancelOnUserReturnTest(unittest.TestCase):
     def test_cancel_pending_for_session(self):
         from ai_companion.proactive.conversation_task_store import ConversationTaskStore
@@ -546,6 +846,32 @@ class CloseoutAnalyzerTest(unittest.IsolatedAsyncioTestCase):
 
         analyzer = CloseoutAnalyzer(Model(), Config())
         result = await analyzer.analyze("你怎么看？", "我想一下，一会儿回复你", [])
+
+        self.assertIsNotNone(result.deferred_reply)
+        self.assertEqual(result.deferred_reply.delay_minutes, 8)
+
+    async def test_fallback_to_regex_when_llm_misses_user_requested_deferred_reply(self):
+        from ai_companion.proactive.closeout_analyzer import CloseoutAnalyzer
+
+        class Config:
+            closeout_analyzer_enabled = True
+            closeout_analyzer_max_tokens = 200
+            closeout_analyzer_fallback_to_regex = True
+            deferred_reply_default_delay_minutes = 8
+            deferred_reply_min_delay_minutes = 2
+            deferred_reply_max_delay_minutes = 60
+            topic_continuation_min_score = 0.55
+
+        class Model:
+            async def chat(self, messages, system_prompt=None, max_tokens=200):
+                return '{"deferred_reply": {"detected": false, "summary": "", "delay_minutes": 0}, "unresolved_topic": {"detected": false, "summary": "", "confidence": 0.0}, "emotion_followup": {"detected": false, "emotion": "", "summary": ""}}'
+
+        analyzer = CloseoutAnalyzer(Model(), Config())
+        result = await analyzer.analyze(
+            "你要记得想好了告诉我啊",
+            "知道了，去吧去吧，开会别走神。我想好了给你发消息。",
+            [],
+        )
 
         self.assertIsNotNone(result.deferred_reply)
         self.assertEqual(result.deferred_reply.delay_minutes, 8)
