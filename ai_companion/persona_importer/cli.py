@@ -181,7 +181,7 @@ def _create_model(provider: str | None, request_timeout: float | None = None):
     if env_key and (not api_key or str(api_key).startswith("${")):
         raise RuntimeError(f"{selected_provider} API Key 未配置，请设置 {env_key} 或运行 ai-companion setup")
 
-    if request_timeout and selected_provider in {"minimax", "openai", "claude", "mimo", "ollama", "custom"}:
+    if request_timeout and selected_provider in {"minimax", "openai", "claude", "mimo", "tele", "ollama", "custom"}:
         model_cfg = {**model_cfg, "timeout": request_timeout}
 
     return ModelFactory.create_from_runtime_config(

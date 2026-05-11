@@ -15,6 +15,7 @@ from .adapters import (
     OpenAIAdapter,
     ClaudeAdapter,
     MimoAdapter,
+    TeleAdapter,
     OllamaAdapter,
     CustomAdapter,
 )
@@ -41,6 +42,7 @@ class ModelFactory:
         "openai": OpenAIAdapter,
         "claude": ClaudeAdapter,
         "mimo": MimoAdapter,
+        "tele": TeleAdapter,
         "ollama": OllamaAdapter,
         "custom": CustomAdapter,
     }
@@ -50,6 +52,7 @@ class ModelFactory:
         "openai": {"api_key", "base_url", "model", "timeout"},
         "claude": {"api_key", "base_url", "model", "timeout"},
         "mimo": {"api_key", "base_url", "model", "timeout", "auth_type"},
+        "tele": {"api_key", "base_url", "model", "auth_state_file", "timeout"},
         "ollama": {"base_url", "model", "timeout"},
         "custom": {
             "api_url",

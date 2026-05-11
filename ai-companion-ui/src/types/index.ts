@@ -250,6 +250,9 @@ export interface ModelConfig {
   model: string;
   temperature: number;
   max_tokens: number;
+  auth_state_file?: string;
+  timeout?: number;
+  max_context_tokens?: number;
 }
 
 export interface SkillEntryConfig {

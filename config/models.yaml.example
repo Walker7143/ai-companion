@@ -22,6 +22,17 @@ mimo:
   model: "mimo-v2.5-pro"
   max_context_tokens: 1048576 # 1M 上下文上限（token），超限触发压缩
 
+tele:
+  base_url: "https://agent.teleai.com.cn/superCowork/sapi/api/v1"
+  model: "glm-5-turbo"
+  # auth_state_file 可省略，程序会自动按平台查找：
+  # macOS: ~/Library/Application Support/TeleClaw/app-auth/state.json
+  # Windows: %APPDATA%\\TeleClaw\\app-auth\\state.json
+  # Linux: ~/.config/TeleClaw/app-auth/state.json
+  # 也可用 TELECLAW_AUTH_STATE_FILE 环境变量覆盖。
+  max_context_tokens: 200000 # GLM-5 Turbo 上下文上限（token），超限触发压缩
+  timeout: 600
+
 ollama:
   base_url: "http://localhost:11434"
   model: "qwen2.5:7b"

@@ -44,6 +44,7 @@ const providerOptions = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'claude', label: 'Claude' },
   { value: 'mimo', label: 'MiMo' },
+  { value: 'tele', label: 'TeleClaw' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'custom', label: '自定义' },
 ];
@@ -621,7 +622,13 @@ export function Settings() {
     if (!draft || !currentBotId) return;
     setTesting(true);
     try {
-      const result = await configApi.testConnection(draft.model.provider, draft.model.api_key, draft.model.base_url, currentBotId);
+      const result = await configApi.testConnection(
+        draft.model.provider,
+        draft.model.api_key,
+        draft.model.base_url,
+        draft.model.model,
+        currentBotId,
+      );
       if (result) {
         toast.success('API 连接测试成功');
       } else {

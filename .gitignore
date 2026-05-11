@@ -44,6 +44,7 @@ config/*.yaml
 config/*.yml
 !config/*.example.yaml
 !config/*.yaml.example
+.local/
 
 # User data (should not be tracked)
 data/bots/*/memory/

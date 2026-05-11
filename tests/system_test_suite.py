@@ -198,6 +198,7 @@ class SystemTestSuite:
         self._run_case("T04", "Config loader", self.case_config_loader)
         self._run_case("T05", "ModelFactory provider registry", self.case_model_factory_registry)
         self._run_case("T05b", "MiMo adapter OpenAI-compatible request", self.case_mimo_adapter_request_contract)
+        self._run_case("T05c", "Tele adapter TeleClaw header contract", self.case_tele_adapter_request_contract)
         self._run_case("T06", "Context compressor behavior", self.case_context_compressor)
         self._run_case("T07", "Memory engine offline roundtrip", self.case_memory_engine_roundtrip)
         self._run_case("T08", "BotInstance offline full flow", self.case_bot_instance_offline)
@@ -718,7 +719,7 @@ class SystemTestSuite:
         from ai_companion.model.factory import ModelFactory
 
         providers = set(ModelFactory.list_providers())
-        expected = {"minimax", "openai", "claude", "mimo", "ollama", "custom"}
+        expected = {"minimax", "openai", "claude", "mimo", "tele", "ollama", "custom"}
         passed = providers == expected
         detail = f"providers={sorted(providers)}"
         log = json.dumps({"providers": sorted(providers), "expected": sorted(expected)}, indent=2)
@@ -784,6 +785,103 @@ class SystemTestSuite:
         log = json.dumps(
             {
                 "seen": seen,
+                "response": response,
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+        return passed, detail, log
+
+    async def case_tele_adapter_request_contract(self) -> tuple[bool, str, str]:
+        from ai_companion.model.factory import ModelFactory
+
+        seen: dict = {}
+        state_file = self.artifacts_dir / "tele-state.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "token": "login-token",
+                    "deviceId": "device-id",
+                    "installId": "install-id",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        async def handle_chat(request):
+            seen["path"] = request.path
+            seen["headers"] = dict(request.headers)
+            seen["body"] = await request.json()
+            return web.json_response({
+                "choices": [
+                    {"message": {"content": "tele-ok", "reasoning_content": "hidden"}}
+                ]
+            })
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handle_chat)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        sockets = site._server.sockets if site._server else []
+        port = sockets[0].getsockname()[1]
+        adapter = ModelFactory.create_from_runtime_config(
+            {
+                "provider": "tele",
+                "base_url": f"http://127.0.0.1:{port}/v1",
+                "model": "ignored-model",
+                "auth_state_file": str(state_file),
+                "timeout": 5,
+            },
+            provider="tele",
+        )
+        try:
+            response = await adapter.chat(
+                [{"role": "user", "content": "hello"}],
+                system_prompt="sys",
+                max_tokens=123,
+                temperature=0.5,
+            )
+        finally:
+            await adapter.close()
+            await runner.cleanup()
+
+        body = seen.get("body", {})
+        headers = seen.get("headers", {})
+        passed = (
+            response == "tele-ok"
+            and seen.get("path") == "/v1/chat/completions"
+            and "Authorization" not in headers
+            and headers.get("X-Token") == "login-token"
+            and str(headers.get("X-SuperAgent-Timestamp", "")).isdigit()
+            and bool(headers.get("X-SuperAgent-Nonce"))
+            and headers.get("X-SuperAgent-Device-Id") == "device-id"
+            and headers.get("X-SuperAgent-Install-Id") == "install-id"
+            and body.get("model") == "glm-5-turbo"
+            and body.get("max_tokens") == 123
+            and body.get("messages", [])[0].get("role") == "system"
+            and body.get("messages", [])[1].get("role") == "user"
+        )
+        safe_headers = {
+            key: ("<redacted>" if key in {"Authorization", "X-Token"} else value)
+            for key, value in headers.items()
+            if key in {
+                "Authorization",
+                "X-Token",
+                "X-SuperAgent-Timestamp",
+                "X-SuperAgent-Nonce",
+                "X-SuperAgent-Device-Id",
+                "X-SuperAgent-Install-Id",
+            }
+        }
+        detail = f"response={response} path={seen.get('path')} model={body.get('model')}"
+        log = json.dumps(
+            {
+                "path": seen.get("path"),
+                "headers": safe_headers,
+                "body": body,
                 "response": response,
             },
             ensure_ascii=False,

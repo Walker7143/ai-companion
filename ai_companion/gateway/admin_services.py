@@ -20,6 +20,11 @@ PROVIDER_DEFAULTS = {
     "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
     "claude": {"base_url": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-20250514"},
     "mimo": {"base_url": "https://token-plan-cn.xiaomimimo.com/v1", "model": "mimo-v2.5-pro"},
+    "tele": {
+        "base_url": "https://agent.teleai.com.cn/superCowork/sapi/api/v1",
+        "model": "glm-5-turbo",
+        "timeout": 600,
+    },
     "ollama": {"base_url": "http://localhost:11434", "model": "qwen2.5:7b"},
     "custom": {"base_url": "", "model": ""},
 }
@@ -34,7 +39,7 @@ WEB_CONFIG_SCHEMA = {
             "description": "控制所有 Bot 默认使用的模型 provider、模型名和采样参数。",
             "restart": "保存后新请求生效；运行中 Gateway 不需要重启。",
             "fields": {
-                "provider": "选择 MiniMax、OpenAI、Claude、MiMo、Ollama 或自定义兼容接口。",
+                "provider": "选择 MiniMax、OpenAI、Claude、MiMo、TeleClaw、Ollama 或自定义兼容接口。",
                 "api_key": "敏感字段。留空或保留掩码表示继续使用旧值。",
                 "base_url": "Provider API 基础地址；Ollama 通常是 http://localhost:11434/v1。",
                 "model": "具体模型名称，例如 gpt-4o、qwen2.5-14b。",
@@ -186,7 +191,7 @@ def is_masked_secret(value: str | None) -> bool:
 def public_model_config(model_cfg: dict) -> dict:
     provider = model_cfg.get("provider", "minimax")
     defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["minimax"])
-    return {
+    public = {
         "provider": provider,
         "api_key": mask_secret(model_cfg.get("api_key", "")),
         "base_url": model_cfg.get("base_url", defaults["base_url"]),
@@ -194,6 +199,10 @@ def public_model_config(model_cfg: dict) -> dict:
         "temperature": model_cfg.get("temperature", 0.7),
         "max_tokens": model_cfg.get("max_tokens", 2000),
     }
+    for key in ("auth_state_file", "timeout", "max_context_tokens"):
+        if key in model_cfg or key in defaults:
+            public[key] = model_cfg.get(key, defaults.get(key))
+    return public
 
 
 def _deep_merge(base: dict, updates: dict) -> dict:
@@ -985,7 +994,26 @@ class ConfigAdminService:
         if _is_masked_or_empty(incoming_api_key):
             incoming_api_key = existing_provider.get("api_key", "")
         defaults = PROVIDER_DEFAULTS.get(provider, {})
+        preserved_extra = {
+            key: value
+            for key, value in existing_provider.items()
+            if key not in {"api_key", "base_url", "model"}
+        }
+        incoming_extra = {
+            key: value
+            for key, value in model_data.items()
+            if key not in {"provider", "api_key", "base_url", "model", "temperature", "max_tokens"}
+            and value not in (None, "")
+        }
+        default_extra = {
+            key: value
+            for key, value in defaults.items()
+            if key not in {"api_key", "base_url", "model"}
+        }
         models_data[provider] = {
+            **default_extra,
+            **preserved_extra,
+            **incoming_extra,
             "api_key": incoming_api_key,
             "base_url": model_data.get("base_url") or existing_provider.get("base_url") or defaults.get("base_url", ""),
             "model": model_data.get("model") or existing_provider.get("model") or defaults.get("model", ""),

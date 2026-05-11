@@ -162,7 +162,7 @@ export const configApi = {
       body: JSON.stringify(config),
     }),
 
-  testConnection: (provider: string, apiKey: string, baseUrl: string, botId = '_default'): Promise<boolean> =>
+  testConnection: (provider: string, apiKey: string, baseUrl: string, model = '', botId = '_default'): Promise<boolean> =>
     fetchApi<{ok: boolean; error?: string}>(`/admin/config/${encodeURIComponent(botId)}/test`, {
       method: 'POST',
       body: JSON.stringify({
@@ -170,6 +170,7 @@ export const configApi = {
           provider,
           api_key: apiKey,
           base_url: baseUrl,
+          model,
         },
       }),
     }).then(r => r.ok),
