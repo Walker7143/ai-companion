@@ -227,16 +227,32 @@ class ProactiveOrchestrator:
         if not events:
             return None
         event = events[0]
-        prompt_context = f"Bot 最近发生了一件事想分享：{event.description}"
-        if getattr(event, "topic_prompt", None):
-            prompt_context += f"\n可以这样提起：{event.topic_prompt}"
+        prompt_context = self._context_for_life_event(event)
         return ProactiveMotive(
             type=ProactiveMotiveType.LIFE_EVENT,
             priority=60,
-            reason="想分享最近发生的事",
+            reason="想把今天发生的一件小事随手讲给对方听",
             prompt_context=prompt_context,
             metadata={"life_event_id": event.id},
         )
+
+    def _context_for_life_event(self, event) -> str:
+        lines = [
+            "你准备主动发一条日常小事。",
+            f"这件事是你自己刚经历的，不要说成 Bot 状态：{event.description}",
+        ]
+        topic_prompt = str(getattr(event, "topic_prompt", "") or "").strip()
+        if topic_prompt:
+            lines.append(f"可以借这个切入口，但不要照抄：{topic_prompt}")
+        mood_before = str(getattr(event, "mood_before", "") or "").strip()
+        mood_after = str(getattr(event, "mood_after", "") or "").strip()
+        if mood_before or mood_after:
+            lines.append(f"你的情绪变化：{mood_before or '没特别起伏'} -> {mood_after or '没特别起伏'}")
+        mood_tags = getattr(event, "mood_tags", None)
+        if isinstance(mood_tags, list) and mood_tags:
+            lines.append(f"情绪标签：{'、'.join(str(item) for item in mood_tags[:5])}")
+        lines.append("写法：像熟人聊天里突然想起这事，短一点，有你的脾气和口吻；不要总结道理。")
+        return "\n".join(lines)
 
     def _mark_life_event_shared(self, motive: ProactiveMotive, now: datetime) -> None:
         event_id = (motive.metadata or {}).get("life_event_id")

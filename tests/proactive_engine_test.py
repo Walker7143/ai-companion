@@ -105,6 +105,79 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
+    async def test_structured_message_accepts_direct_message_field(self):
+        with TemporaryDirectory(prefix="proactive-direct-message-") as td:
+            engine = _build_engine(
+                Path(td),
+                '{"message":"你这人真没劲，我今天排队买咖啡差点被风吹成傻子。"}',
+            )
+
+            message = engine._parse_structured_message(
+                '{"message":"你这人真没劲，我今天排队买咖啡差点被风吹成傻子。"}'
+            )
+
+            self.assertEqual(message, "你这人真没劲，我今天排队买咖啡差点被风吹成傻子。")
+
+    async def test_contextual_life_event_prompt_includes_persona_style(self):
+        from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
+
+        with TemporaryDirectory(prefix="proactive-persona-style-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            (persona / "profile.json").write_text(
+                '{"name":"杨思思","personality_tags":["嘴硬","带刺"]}',
+                encoding="utf-8",
+            )
+            (persona / "speaking_style.json").write_text(
+                '{"tone":"直白、鲜活、嘴上带刺，喜欢反问和吐槽","口头禅":["你这人真没劲"],"special_expressions":["会把关心伪装成抱怨"]}',
+                encoding="utf-8",
+            )
+            (persona / "conversation_style_rules.json").write_text(
+                '{"natural_patterns":["可以用反问、停顿、轻微吐槽"],"reply_principles":["日常聊天可以短一点，有停顿和个人反应"],"avoid_phrases":["作为AI","我理解你的感受"]}',
+                encoding="utf-8",
+            )
+            model = CaptureModel('{"message":"你这人真没劲，我今天真是被咖啡外卖气笑了。"}')
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=model,
+            )
+            motive = ProactiveMotive(
+                type=ProactiveMotiveType.LIFE_EVENT,
+                priority=60,
+                reason="想把今天发生的一件小事随手讲给对方听",
+                prompt_context="你准备主动发一条日常小事。\n这件事是你自己刚经历的，不要说成 Bot 状态：咖啡外卖洒了。",
+            )
+
+            message = await engine.generate_contextual_message(motive)
+
+            prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("直白、鲜活、嘴上带刺", prompt)
+            self.assertIn("你这人真没劲", prompt)
+            self.assertIn("可以用反问、停顿、轻微吐槽", prompt)
+            self.assertIn("不要写成状态播报", prompt)
+            self.assertIn("你这人真没劲", message)
+
+    def test_personality_type_detects_yang_sisi_tags_as_tsun(self):
+        with TemporaryDirectory(prefix="proactive-personality-tags-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            (persona / "profile.json").write_text(
+                '{"personality_tags":["嘴硬心软","直白毒舌","敢爱敢恨"]}',
+                encoding="utf-8",
+            )
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=None,
+            )
+
+            self.assertEqual(engine._get_personality_type(), "傲娇")
+
     async def test_contextual_message_prompt_includes_motive_and_prior_topic(self):
         from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
 

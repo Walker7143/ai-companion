@@ -202,7 +202,7 @@ class BotInstance:
 
     def _detect_personality_type_from_profile(self, profile: dict) -> str:
         tags = "".join(profile.get("personality_tags", []))
-        if "傲娇" in tags or "外冷内热" in tags:
+        if any(marker in tags for marker in ("傲娇", "外冷内热", "嘴硬", "毒舌", "带刺", "敢爱敢恨")):
             return "傲娇"
         elif "活泼" in tags or "开朗" in tags:
             return "活泼"
@@ -770,6 +770,7 @@ class BotInstance:
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, ctx, relationship_state)
+            self._record_deferred_reply_task_if_detected(effective_user_input, response, memory_turn_context)
             self._track_background_task(
                 self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context),
                 name="closeout_analysis",
@@ -794,6 +795,7 @@ class BotInstance:
             if response is None:
                 return self._format_model_failure_message()
             response = self._polish_response(response, {}, relationship_state)
+            self._record_deferred_reply_task_if_detected(effective_user_input, response, memory_turn_context)
             self._track_background_task(
                 self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context),
                 name="closeout_analysis",
@@ -988,21 +990,15 @@ class BotInstance:
         if not self.proactive_config.continuity_enabled:
             return
 
-        context = memory_turn_context if isinstance(memory_turn_context, dict) else {}
-        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        delivery = self._build_proactive_task_delivery(memory_turn_context)
+        if delivery is None:
+            logger.debug("[BotInstance] 无会话 ID，跳过主动 closeout 分析")
+            return
         now = datetime.now()
-        platform = str(context.get("platform") or self.proactive_config.platform_type or "cli")
-        session_id = str(
-            context.get("session_id")
-            or getattr(getattr(self.memory, "working", None), "current_session", "")
-            or ""
-        )
-        target = {
-            "platform": platform,
-            "chat_id": str(context.get("chat_id") or ""),
-            "name": str(metadata.get("chat_name") or ""),
-        }
-        user_id = str(context.get("user_id") or "default_user")
+        platform = delivery["platform"]
+        session_id = delivery["session_id"]
+        target = delivery["target"]
+        user_id = delivery["user_id"]
 
         recent_turns = self.conversation_history[-6:] if self.conversation_history else []
 
@@ -1074,6 +1070,74 @@ class BotInstance:
                 )
                 self.conversation_task_store.upsert(task)
                 logger.info("[BotInstance] 已记录情绪跟进任务: bot=%s session=%s", self.id, session_id)
+
+    def _build_proactive_task_delivery(self, memory_turn_context: dict | None) -> dict | None:
+        context = memory_turn_context if isinstance(memory_turn_context, dict) else {}
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        session_id = str(
+            context.get("session_id")
+            or getattr(getattr(self.memory, "working", None), "current_session", "")
+            or ""
+        )
+        if not session_id:
+            return None
+        platform = str(context.get("platform") or self.proactive_config.platform_type or "cli")
+        return {
+            "platform": platform,
+            "session_id": session_id,
+            "user_id": str(context.get("user_id") or "default_user"),
+            "target": {
+                "platform": platform,
+                "chat_id": str(context.get("chat_id") or ""),
+                "name": str(metadata.get("chat_name") or ""),
+            },
+        }
+
+    def _record_deferred_reply_task_if_detected(
+        self,
+        user_input: str,
+        response: str,
+        memory_turn_context: dict | None,
+    ) -> bool:
+        if not (self.proactive_config.continuity_enabled and self.proactive_config.deferred_reply_enabled):
+            return False
+        delivery = self._build_proactive_task_delivery(memory_turn_context)
+        if delivery is None:
+            return False
+        session_id = delivery["session_id"]
+        if self.conversation_task_store.has_pending(self.id, session_id, ConversationTaskType.DEFERRED_REPLY.value):
+            return False
+
+        detector = DeferredReplyDetector(
+            default_delay_minutes=self.proactive_config.deferred_reply_default_delay_minutes,
+            min_delay_minutes=self.proactive_config.deferred_reply_min_delay_minutes,
+            max_delay_minutes=self.proactive_config.deferred_reply_max_delay_minutes,
+        )
+        detected = detector.detect(user_input, response)
+        if detected is None:
+            return False
+
+        now = datetime.now()
+        task = ConversationTask(
+            id=uuid.uuid4().hex,
+            bot_id=self.id,
+            type=ConversationTaskType.DEFERRED_REPLY,
+            status=ConversationTaskStatus.PENDING,
+            session_id=session_id,
+            user_id=delivery["user_id"],
+            platform=delivery["platform"],
+            target=delivery["target"],
+            created_at=now,
+            due_at=now + timedelta(minutes=detected.delay_minutes),
+            expires_at=now + timedelta(hours=self.proactive_config.deferred_reply_expires_hours),
+            source_user_message=user_input,
+            source_bot_message=response,
+            topic_summary=detected.topic_summary,
+            priority=100,
+        )
+        self.conversation_task_store.upsert(task)
+        logger.info("[BotInstance] 已同步记录延迟回复任务: bot=%s session=%s", self.id, session_id)
+        return True
 
     async def _handle_skill_command(self, user_input: str) -> str:
         context = self._build_skill_context()

@@ -12,6 +12,7 @@ import logging
 import random
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -90,6 +91,9 @@ SHOULD_CONTACT_PROMPT = """【角色】
 GENERATE_MESSAGE_PROMPT = """【角色】
 你是{bot_name}，性格：{personality_tags}
 
+【你的真实说话风格】
+{persona_style_context}
+
 【Bot 时间线】
 {bot_time_context}
 
@@ -118,6 +122,9 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 你是{bot_name}，性格：{personality_tags}
 
+【你的真实说话风格】
+{persona_style_context}
+
 【Bot 时间线】
 {bot_time_context}
 
@@ -133,11 +140,13 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 【要求】
 - 自然接上之前的话题，不要像重新开一个话题。
 - 如果这是稍后回复，要表现为你回来履行承诺。
+- 如果这是日常小事/生活事件，要像你本人随手发给熟人的一句话，不要写成状态播报、总结、感悟小作文或客服式关心。
 - 不要使用“在吗”“最近怎么样”这类无上下文开场。
-- 只写一条适合直接发送的短消息。
+- 不要说“Bot”“用户”“这件事让我意识到”“希望这能...”这类旁白或 AI 腔。
+- 只写一条适合直接发送的短消息，允许短句、停顿、吐槽、反问，保持你的个人脾气。
 
 【输出格式】
-输出 JSON：{{"opening":"开头","topic":"主体","ending":"结尾"}}
+输出 JSON：{{"message":"一条可以直接发送的消息"}}
 只输出 JSON，不要其他内容。"""
 
 # 性格消息模板（fallback 用）
@@ -476,12 +485,92 @@ class ProactiveEngine:
 
         return "\n".join(lines) if lines else "最近没什么特别的对话"
 
+    def _get_persona_dir(self) -> Path | None:
+        persona_dir = getattr(self.config, "persona_dir", None)
+        if persona_dir:
+            return Path(persona_dir)
+        backstory_path = getattr(self.memory, "persona_backstory_path", None) if self.memory else None
+        if backstory_path:
+            return Path(backstory_path).parent
+        return None
+
+    def _load_persona_json(self, filename: str) -> dict:
+        persona_dir = self._get_persona_dir()
+        if not persona_dir:
+            return {}
+        path = persona_dir / filename
+        if not path.exists():
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as exc:
+            logger.debug("[ProactiveEngine] 读取人格风格文件失败 %s: %s", path, exc)
+            return {}
+
+    def _build_persona_style_context(self) -> str:
+        profile = self._load_persona_json("profile.json")
+        speaking_style = self._load_persona_json("speaking_style.json")
+        conversation_style = self._load_persona_json("conversation_style_rules.json")
+
+        lines = []
+        tags = profile.get("personality_tags")
+        if isinstance(tags, list) and tags:
+            lines.append(f"- 性格底色：{'、'.join(str(item) for item in tags[:8])}")
+
+        tone = str(speaking_style.get("tone", "") or "").strip()
+        if tone:
+            lines.append(f"- 说话基调：{tone}")
+
+        greeting_style = str(speaking_style.get("greeting_style", "") or "").strip()
+        if greeting_style:
+            lines.append(f"- 开口方式：{greeting_style}")
+
+        catchphrases = speaking_style.get("口头禅")
+        if isinstance(catchphrases, list) and catchphrases:
+            lines.append(f"- 可偶尔借一点口头禅味道：{'、'.join(str(item) for item in catchphrases[:8])}")
+
+        special = speaking_style.get("special_expressions")
+        if isinstance(special, list) and special:
+            lines.append("- 个人表达习惯：")
+            for item in special[:5]:
+                lines.append(f"  * {item}")
+
+        natural_patterns = conversation_style.get("natural_patterns")
+        if isinstance(natural_patterns, list) and natural_patterns:
+            lines.append("- 自然说话方式：")
+            for item in natural_patterns[:5]:
+                lines.append(f"  * {item}")
+
+        reply_principles = conversation_style.get("reply_principles")
+        if isinstance(reply_principles, list) and reply_principles:
+            lines.append("- 回复原则：")
+            for item in reply_principles[:5]:
+                lines.append(f"  * {item}")
+
+        avoid_phrases = conversation_style.get("avoid_phrases")
+        if isinstance(avoid_phrases, list) and avoid_phrases:
+            lines.append(f"- 避免这些 AI/客服味说法：{'、'.join(str(item) for item in avoid_phrases[:8])}")
+
+        avoid_patterns = conversation_style.get("avoid_patterns")
+        if isinstance(avoid_patterns, list) and avoid_patterns:
+            lines.append("- 避免模式：")
+            for item in avoid_patterns[:4]:
+                lines.append(f"  * {item}")
+
+        if lines:
+            return "\n".join(lines)
+        return "保持具体、口语、短一点；不要用 AI/客服式开场，不要总结成说明文。"
+
     def _get_personality_type(self) -> str:
         """从 personality_tags 检测性格类型"""
+        profile = self._load_persona_json("profile.json")
+        if profile:
+            return self._detect_personality_type_from_tags(profile.get("personality_tags", []))
         if self.memory is None:
             return self.personality_type or "默认"
         try:
-            import asyncio
             # 尝试从 profile.json 读取
             backstory_path = getattr(self.memory, "persona_backstory_path", None)
             if not backstory_path:
@@ -490,17 +579,21 @@ class ProactiveEngine:
             if profile_path.exists():
                 with open(profile_path, encoding="utf-8") as f:
                     profile = json.load(f)
-                tags = "".join(profile.get("personality_tags", []))
-                if "傲娇" in tags or "外冷内热" in tags:
-                    return "傲娇"
-                elif "活泼" in tags or "开朗" in tags:
-                    return "活泼"
-                elif "高冷" in tags:
-                    return "高冷"
-                elif "温柔" in tags:
-                    return "温柔"
+                return self._detect_personality_type_from_tags(profile.get("personality_tags", []))
         except Exception:
             pass
+        return self.personality_type or "默认"
+
+    def _detect_personality_type_from_tags(self, tags_value) -> str:
+        tags = "".join(str(item) for item in (tags_value or []))
+        if any(marker in tags for marker in ("傲娇", "外冷内热", "嘴硬", "毒舌", "带刺", "敢爱敢恨")):
+            return "傲娇"
+        if "活泼" in tags or "开朗" in tags:
+            return "活泼"
+        if "高冷" in tags:
+            return "高冷"
+        if "温柔" in tags:
+            return "温柔"
         return self.personality_type or "默认"
 
     async def should_contact(self) -> ProactiveDecision:
@@ -601,6 +694,7 @@ class ProactiveEngine:
         personality_type = self._get_personality_type()
         feeling = self._get_mood_description()
         rel_desc = await self._get_relationship_desc()
+        persona_style_context = self._build_persona_style_context()
 
         # 获取 Bot 可分享的生活事件
         bot_life_context = ""
@@ -619,6 +713,7 @@ class ProactiveEngine:
         prompt = GENERATE_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
+            persona_style_context=persona_style_context,
             bot_time_context=self._build_bot_time_context(),
             relationship_desc=rel_desc,
             feeling_description=feeling,
@@ -651,9 +746,11 @@ class ProactiveEngine:
 
         personality_type = self._get_personality_type()
         rel_desc = await self._get_relationship_desc()
+        persona_style_context = self._build_persona_style_context()
         prompt = GENERATE_CONTEXTUAL_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
+            persona_style_context=persona_style_context,
             bot_time_context=self._build_bot_time_context(),
             motive_reason=motive.reason,
             motive_context=motive.prompt_context,
@@ -734,6 +831,9 @@ class ProactiveEngine:
 
         try:
             data = json.loads(json_match.group())
+            direct_message = str(data.get("message", "") or "").strip()
+            if direct_message and not self._is_placeholder_message(direct_message):
+                return direct_message
             opening = str(data.get("opening", "") or "").strip()
             topic = str(data.get("topic", "") or "").strip()
             ending = str(data.get("ending", "") or "").strip()
