@@ -25,12 +25,18 @@ _PLACEHOLDER_STRUCTURED_PARTS = (
     "开场白/称呼",
     "话题内容或空字符串",
     "结尾语",
+    "开头",
+    "主体",
+    "结尾",
 )
 
 _PLACEHOLDER_COMBINED_MESSAGES = (
     "开场白/称呼，话题内容或空字符串，结尾语",
     "开场白/称呼,话题内容或空字符串,结尾语",
     "开场白/称呼话题内容或空字符串结尾语",
+    "开头，主体，结尾",
+    "开头,主体,结尾",
+    "开头主体结尾",
 )
 
 
@@ -700,12 +706,22 @@ class ProactiveEngine:
         if not normalized:
             return False
 
+        if self._looks_like_structured_message_schema(message):
+            return True
+
         if normalized in _PLACEHOLDER_COMBINED_MESSAGES:
             return True
 
         # 兼容模型直接回显完整结构示例或其变体
         hit_count = sum(1 for token in _PLACEHOLDER_STRUCTURED_PARTS if token in normalized)
         return hit_count >= 2
+
+    def _looks_like_structured_message_schema(self, message: str) -> bool:
+        lowered = str(message or "").lower()
+        if not all(key in lowered for key in ('"opening"', '"topic"', '"ending"')):
+            return False
+        normalized = self._normalize_message_text(message)
+        return any(token in normalized for token in _PLACEHOLDER_STRUCTURED_PARTS)
 
     def _parse_structured_message(self, content: str) -> Optional[str]:
         """解析结构化消息输出，组合成最终消息"""

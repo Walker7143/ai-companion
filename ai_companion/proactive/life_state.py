@@ -531,8 +531,40 @@ class LifeState:
 
     def get_recent_shareable_events(self, limit: int = 2) -> list:
         """获取最近可分享的事件"""
-        shareable = [e for e in self.life_events if e.shareable]
+        shareable = [
+            e for e in self.life_events
+            if e.shareable and not self._event_shared_at(e.id)
+        ]
         return shareable[-limit:]
+
+    def mark_event_shared(self, event_id: str, shared_at: Optional[datetime] = None) -> bool:
+        """Mark a daily life event as already shared with the user."""
+        if not event_id:
+            return False
+        events = self._state.get("life_events", [])
+        for event in events:
+            if not isinstance(event, dict) or event.get("id") != event_id:
+                continue
+            event["shared_at"] = (shared_at or datetime.now()).isoformat()
+            self._state["life_events"] = events
+            self._append_journal_record(
+                record_type="daily_event_shared",
+                description=event.get("description", ""),
+                event_id=event_id,
+                metadata={"scenario_key": event.get("scenario_key")},
+            )
+            self.save()
+            return True
+        return False
+
+    def _event_shared_at(self, event_id: str) -> Optional[str]:
+        if not event_id:
+            return None
+        for event in self._state.get("life_events", []):
+            if isinstance(event, dict) and event.get("id") == event_id:
+                value = event.get("shared_at")
+                return str(value) if value else None
+        return None
 
     def to_dict(self) -> dict:
         return self._state.copy()

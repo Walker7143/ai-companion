@@ -103,3 +103,4 @@ class ProactiveMotive:
     task: ConversationTask | None = None
     target: dict[str, Any] | None = None
     bypass_idle_threshold: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)

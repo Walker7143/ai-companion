@@ -26,6 +26,8 @@ class ProactiveOrchestrator:
         sent = await self.engine.send_contextual_proactive_message(motive)
         if sent and motive.task:
             self.task_store.mark_completed(motive.task.id, completed_at=now)
+        if sent and motive.type == ProactiveMotiveType.LIFE_EVENT:
+            self._mark_life_event_shared(motive, now)
         return bool(sent)
 
     def _select_motive(self, now: datetime) -> ProactiveMotive | None:
@@ -87,7 +89,20 @@ class ProactiveOrchestrator:
             priority=60,
             reason="想分享最近发生的事",
             prompt_context=prompt_context,
+            metadata={"life_event_id": event.id},
         )
+
+    def _mark_life_event_shared(self, motive: ProactiveMotive, now: datetime) -> None:
+        event_id = (motive.metadata or {}).get("life_event_id")
+        if not event_id:
+            return
+        life_engine = getattr(self.engine, "life_engine", None)
+        if not life_engine:
+            return
+        try:
+            life_engine.state.mark_event_shared(str(event_id), shared_at=now)
+        except Exception as exc:
+            logger.warning("[ProactiveOrchestrator] 标记生活事件已分享失败: %s", exc)
 
     def _reason_for_task(self, task: ConversationTask) -> str:
         if task.type == ConversationTaskType.DEFERRED_REPLY:

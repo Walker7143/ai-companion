@@ -61,6 +61,14 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNone(parsed)
 
+    def test_parse_structured_message_rejects_contextual_placeholder_parts(self):
+        with TemporaryDirectory(prefix="proactive-placeholder-") as td:
+            engine = _build_engine(Path(td), "")
+            parsed = engine._parse_structured_message(
+                '{"opening":"开头","topic":"主体","ending":"结尾"}'
+            )
+            self.assertIsNone(parsed)
+
     def test_parse_structured_message_keeps_valid_parts(self):
         with TemporaryDirectory(prefix="proactive-placeholder-") as td:
             engine = _build_engine(Path(td), "")
@@ -77,6 +85,23 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("开场白/称呼", message)
             self.assertNotIn("话题内容或空字符串", message)
             self.assertNotIn("结尾语", message)
+
+    async def test_generate_contextual_message_falls_back_when_model_returns_schema_text(self):
+        from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
+
+        with TemporaryDirectory(prefix="proactive-placeholder-") as td:
+            engine = _build_engine(Path(td), '{"opening":"开头","topic":"主体","ending":"结尾"}')
+            motive = ProactiveMotive(
+                type=ProactiveMotiveType.LIFE_EVENT,
+                priority=60,
+                reason="想分享最近发生的事",
+                prompt_context="Bot 最近发生了一件事想分享：测试",
+            )
+            message = await engine.generate_contextual_message(motive)
+            self.assertNotIn('"opening"', message)
+            self.assertNotIn("开头", message)
+            self.assertNotIn("主体", message)
+            self.assertNotIn("结尾", message)
 
 
 class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):

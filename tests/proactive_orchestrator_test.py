@@ -228,6 +228,59 @@ class ProactiveOrchestratorTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(engine.sent[0].target["chat_id"], "wx-1")
             self.assertEqual(store.list_due("bot-a", now), [])
 
+    async def test_life_event_motive_marks_event_shared_after_send(self):
+        from ai_companion.proactive.conversation_task_store import ConversationTaskStore
+        from ai_companion.proactive.life_state import LifeEvent, LifeState
+        from ai_companion.proactive.orchestrator import ProactiveOrchestrator
+
+        class Config:
+            continuity_enabled = True
+            deferred_reply_enabled = False
+            topic_continuation_enabled = False
+            emotion_followup_enabled = False
+            life_event_motive_enabled = True
+            deferred_reply_bypass_idle_threshold = False
+
+        class LifeEngine:
+            def __init__(self, root):
+                self.state = LifeState("bot-life", root)
+
+        class Engine:
+            bot_id = "bot-life"
+            config = Config()
+
+            def __init__(self, root):
+                self.life_engine = LifeEngine(root)
+                self.sent = []
+
+            async def send_contextual_proactive_message(self, motive):
+                self.sent.append(motive)
+                return True
+
+        with TemporaryDirectory(prefix="proactive-life-shared-") as td:
+            now = datetime(2026, 5, 11, 10, 0, 0)
+            engine = Engine(Path(td))
+            event = LifeEvent(
+                description="今天整理文件时发现一张旧照片",
+                shareable=True,
+                topic_prompt="想跟你说个小事",
+            )
+            engine.life_engine.state.add_event(event)
+            orchestrator = ProactiveOrchestrator(
+                engine=engine,
+                task_store=ConversationTaskStore(Path(td) / "tasks"),
+            )
+
+            first_sent = await orchestrator.tick(now=now)
+            second_sent = await orchestrator.tick(now=now + timedelta(minutes=10))
+            events = engine.life_engine.state.to_dict().get("life_events", [])
+            shared_at = events[0].get("shared_at")
+
+            self.assertTrue(first_sent)
+            self.assertFalse(second_sent)
+            self.assertEqual(len(engine.sent), 1)
+            self.assertTrue(shared_at)
+
 
 class ProactiveTargetOverrideTest(unittest.IsolatedAsyncioTestCase):
     async def test_engine_sender_uses_motive_target_for_gateway_send(self):
