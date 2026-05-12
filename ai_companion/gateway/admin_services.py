@@ -1346,6 +1346,7 @@ class ConfigAdminService:
             "send_chunk_delay_seconds",
             "send_chunk_retries",
             "send_chunk_retry_delay_seconds",
+            "send_chunk_retry_max_delay_seconds",
         ):
             if key in incoming_extra and incoming_extra.get(key) is not None:
                 next_extra[key] = incoming_extra[key]
@@ -1353,6 +1354,11 @@ class ConfigAdminService:
             next_extra["split_multiline_messages"] = _as_bool(
                 incoming_extra.get("split_multiline_messages"),
                 _as_bool(existing_extra.get("split_multiline_messages"), False),
+            )
+        if "send_gradual_sentences" in incoming_extra:
+            next_extra["send_gradual_sentences"] = _as_bool(
+                incoming_extra.get("send_gradual_sentences"),
+                _as_bool(existing_extra.get("send_gradual_sentences"), False),
             )
         for key in ("allow_from", "group_allow_from"):
             if key in next_extra:

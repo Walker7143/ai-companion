@@ -163,7 +163,7 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].text, "same text")
 
-    async def test_weixin_send_splits_reply_into_gradual_sentences(self):
+    async def test_weixin_send_splits_reply_into_gradual_sentences_by_default(self):
         sent = []
 
         async def fake_send_message(session, *, text, **kwargs):
@@ -183,13 +183,80 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
         )
         adapter._send_session = object()
 
-        with patch("ai_companion.gateway.platforms.weixin._send_message", fake_send_message), patch(
-            "ai_companion.gateway.platforms.weixin.get_delay_for_sentence", return_value=0
-        ):
+        text = (
+            "…… （嘴角抽了一下） 孤苦伶仃？ 你两百斤的大男人。 好意思说这话。 "
+            "…… （顿了顿） 算了。 看在你腿脚不方便的份上。 不去接你。 "
+            "万一你倒在机场。 我还得赔钱。 …… （把便签纸揉成一团） 行吧。 去接。 "
+            '但是！ 你要是再叫那个称呼。 我就举牌子写"王啸威是大笨蛋"。 '
+            "在出口站着。 …… 你自己选。 哼。"
+        )
+
+        with patch("ai_companion.gateway.platforms.weixin._send_message", fake_send_message):
+            result = await adapter.send("user-1", text)
+
+        self.assertTrue(result.success)
+        self.assertGreater(len(sent), 1)
+        self.assertEqual(sent[5], "不去接你。")
+        self.assertEqual(sent[-1], "哼。")
+
+    async def test_weixin_send_can_opt_out_of_gradual_sentences(self):
+        sent = []
+
+        async def fake_send_message(session, *, text, **kwargs):
+            sent.append(text)
+            return {"ret": 0}
+
+        adapter = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={
+                    "account_id": "wxbot",
+                    "send_gradual_sentences": False,
+                    "send_chunk_delay_seconds": 0,
+                    "send_chunk_retries": 0,
+                },
+            )
+        )
+        adapter._send_session = object()
+
+        with patch("ai_companion.gateway.platforms.weixin._send_message", fake_send_message):
             result = await adapter.send("user-1", "我刚到家。外面下雨了！你吃饭了吗？")
 
         self.assertTrue(result.success)
-        self.assertEqual(sent, ["我刚到家。", "外面下雨了！", "你吃饭了吗？"])
+        self.assertEqual(sent, ["我刚到家。外面下雨了！你吃饭了吗？"])
+
+    async def test_weixin_send_retries_transient_chunk_before_next_sentence(self):
+        sent = []
+
+        async def fake_send_message(session, *, text, **kwargs):
+            sent.append(text)
+            if text == "第二句。" and sent.count("第二句。") < 3:
+                return {"ret": -2}
+            return {"ret": 0}
+
+        adapter = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={
+                    "account_id": "wxbot",
+                    "send_chunk_delay_seconds": 0,
+                    "send_chunk_retries": 3,
+                    "send_chunk_retry_delay_seconds": 0,
+                    "send_chunk_retry_max_delay_seconds": 0,
+                },
+            )
+        )
+        adapter._send_session = object()
+
+        with patch("ai_companion.gateway.platforms.weixin._send_message", fake_send_message), patch(
+            "ai_companion.gateway.platforms.weixin.get_delay_for_sentence", return_value=0
+        ):
+            result = await adapter.send("user-1", "第一句。第二句。第三句。")
+
+        self.assertTrue(result.success)
+        self.assertEqual(sent, ["第一句。", "第二句。", "第二句。", "第二句。", "第三句。"])
 
     async def test_weixin_send_retries_without_expired_context_token(self):
         sent_contexts = []

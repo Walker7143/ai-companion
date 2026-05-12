@@ -20,6 +20,7 @@ import json
 import logging
 import mimetypes
 import os
+import random
 import re
 import secrets
 import socket
@@ -1048,6 +1049,38 @@ def _coerce_bool(value: Any, default: bool = True) -> bool:
     return default
 
 
+def _config_or_env(extra: Dict[str, Any], key: str, env_name: str) -> Any:
+    if key in extra:
+        value = extra.get(key)
+        if value is not None and str(value).strip() != "":
+            return value
+    return os.getenv(env_name)
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    if value is None:
+        return default
+    text = str(value).strip()
+    if not text:
+        return default
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    if value is None:
+        return default
+    text = str(value).strip()
+    if not text:
+        return default
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return default
+
+
 def _extract_text(item_list: List[Dict[str, Any]]) -> str:
     for item in item_list:
         if item.get("type") == ITEM_TEXT:
@@ -1273,15 +1306,21 @@ class WeixinAdapter(BasePlatformAdapter):
         self._cdn_base_url = str(
             extra.get("cdn_base_url") or os.getenv("WEIXIN_CDN_BASE_URL", WEIXIN_CDN_BASE_URL)
         ).strip().rstrip("/")
-        self._send_chunk_delay_seconds = float(
-            extra.get("send_chunk_delay_seconds") or os.getenv("WEIXIN_SEND_CHUNK_DELAY_SECONDS", "0.35")
+        self._send_chunk_delay_seconds = _coerce_float(
+            _config_or_env(extra, "send_chunk_delay_seconds", "WEIXIN_SEND_CHUNK_DELAY_SECONDS"),
+            0.35,
         )
-        self._send_chunk_retries = int(
-            extra.get("send_chunk_retries") or os.getenv("WEIXIN_SEND_CHUNK_RETRIES", "2")
+        self._send_chunk_retries = _coerce_int(
+            _config_or_env(extra, "send_chunk_retries", "WEIXIN_SEND_CHUNK_RETRIES"),
+            6,
         )
-        self._send_chunk_retry_delay_seconds = float(
-            extra.get("send_chunk_retry_delay_seconds")
-            or os.getenv("WEIXIN_SEND_CHUNK_RETRY_DELAY_SECONDS", "1.0")
+        self._send_chunk_retry_delay_seconds = _coerce_float(
+            _config_or_env(extra, "send_chunk_retry_delay_seconds", "WEIXIN_SEND_CHUNK_RETRY_DELAY_SECONDS"),
+            1.5,
+        )
+        self._send_chunk_retry_max_delay_seconds = _coerce_float(
+            _config_or_env(extra, "send_chunk_retry_max_delay_seconds", "WEIXIN_SEND_CHUNK_RETRY_MAX_DELAY_SECONDS"),
+            15.0,
         )
         self._dm_policy = str(extra.get("dm_policy") or os.getenv("WEIXIN_DM_POLICY", "open")).strip().lower()
         self._group_policy = str(extra.get("group_policy") or os.getenv("WEIXIN_GROUP_POLICY", "disabled")).strip().lower()
@@ -1294,9 +1333,12 @@ class WeixinAdapter(BasePlatformAdapter):
         self._allow_from = self._coerce_list(allow_from)
         self._group_allow_from = self._coerce_list(group_allow_from)
         self._split_multiline_messages = _coerce_bool(
-            extra.get("split_multiline_messages")
-            or os.getenv("WEIXIN_SPLIT_MULTILINE_MESSAGES"),
+            _config_or_env(extra, "split_multiline_messages", "WEIXIN_SPLIT_MULTILINE_MESSAGES"),
             default=False,
+        )
+        self._send_gradual_sentences = _coerce_bool(
+            _config_or_env(extra, "send_gradual_sentences", "WEIXIN_SEND_GRADUAL_SENTENCES"),
+            default=True,
         )
 
         if self._account_id and not self._token:
@@ -1782,7 +1824,12 @@ class WeixinAdapter(BasePlatformAdapter):
                 last_error = exc
                 if attempt >= self._send_chunk_retries:
                     break
-                wait = self._send_chunk_retry_delay_seconds * (attempt + 1)
+                wait = min(
+                    self._send_chunk_retry_delay_seconds * (2 ** attempt),
+                    self._send_chunk_retry_max_delay_seconds,
+                )
+                if wait > 0:
+                    wait += random.uniform(0, min(0.75, wait * 0.2))
                 logger.warning(
                     "[%s] send chunk failed to=%s attempt=%d/%d, retrying in %.2fs: %s",
                     self.name,
@@ -1797,6 +1844,23 @@ class WeixinAdapter(BasePlatformAdapter):
                 attempt += 1
         assert last_error is not None
         raise last_error
+
+    async def _send_with_retry(
+        self,
+        chat_id: str,
+        content: str,
+        reply_to: Optional[str] = None,
+        metadata: Any = None,
+        max_retries: int = 2,
+        base_delay: float = 2.0,
+    ) -> SendResult:
+        result = await self.send(
+            chat_id=chat_id,
+            content=content,
+            reply_to=reply_to,
+            metadata=metadata,
+        )
+        return result
 
     async def send(
         self,
@@ -1845,17 +1909,47 @@ class WeixinAdapter(BasePlatformAdapter):
                 except Exception as exc:
                     logger.warning("[%s] local file delivery failed for %s: %s", self.name, Path(file_path).name, exc)
 
-            # Deliver text content sentence-by-sentence, then apply Weixin's
-            # length/Markdown chunking inside each sentence when needed.
+            # Deliver text content sentence-by-sentence by default. Each short
+            # bubble is retried on send failure before the next one is sent,
+            # so a transient iLink error does not silently drop the tail.
             formatted = self.format_message(final_content)
-            sentences = SentenceSplitter.split(formatted)
-            chunks_by_sentence = [
-                [c for c in self._split_text(sentence) if c and c.strip()]
-                for sentence in sentences
-            ]
-            chunks_by_sentence = [chunks for chunks in chunks_by_sentence if chunks]
+            if self._send_gradual_sentences:
+                sentences = SentenceSplitter.split(formatted)
+                chunks_by_sentence = [
+                    [c for c in self._split_text(sentence) if c and c.strip()]
+                    for sentence in sentences
+                ]
+                chunks_by_sentence = [chunks for chunks in chunks_by_sentence if chunks]
 
-            for sentence_idx, chunks in enumerate(chunks_by_sentence):
+                for sentence_idx, chunks in enumerate(chunks_by_sentence):
+                    for chunk_idx, chunk in enumerate(chunks):
+                        client_id = f"ai-companion-weixin-{uuid.uuid4().hex}"
+                        await self._send_text_chunk(
+                            chat_id=chat_id,
+                            chunk=chunk,
+                            context_token=context_token,
+                            client_id=client_id,
+                        )
+                        context_token = self._token_store.get(self._account_id, chat_id)
+                        last_message_id = client_id
+                        if (
+                            chunk_idx < len(chunks) - 1
+                            and self._send_chunk_delay_seconds > 0
+                        ):
+                            await asyncio.sleep(self._send_chunk_delay_seconds)
+                    if sentence_idx < len(chunks_by_sentence) - 1:
+                        delay = get_delay_for_sentence(chunks[-1])
+                        logger.debug(
+                            "[%s] gradual send: sleeping %.1fs before next sentence (%d/%d)",
+                            self.name,
+                            delay,
+                            sentence_idx + 1,
+                            len(chunks_by_sentence),
+                        )
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+            else:
+                chunks = [c for c in self._split_text(formatted) if c and c.strip()]
                 for chunk_idx, chunk in enumerate(chunks):
                     client_id = f"ai-companion-weixin-{uuid.uuid4().hex}"
                     await self._send_text_chunk(
@@ -1871,17 +1965,6 @@ class WeixinAdapter(BasePlatformAdapter):
                         and self._send_chunk_delay_seconds > 0
                     ):
                         await asyncio.sleep(self._send_chunk_delay_seconds)
-                if sentence_idx < len(chunks_by_sentence) - 1:
-                    delay = get_delay_for_sentence(chunks[-1])
-                    logger.debug(
-                        "[%s] gradual send: sleeping %.1fs before next sentence (%d/%d)",
-                        self.name,
-                        delay,
-                        sentence_idx + 1,
-                        len(chunks_by_sentence),
-                    )
-                    if delay > 0:
-                        await asyncio.sleep(delay)
             return SendResult(success=True, message_id=last_message_id)
         except Exception as exc:
             logger.error("[%s] send failed to=%s: %s", self.name, _safe_id(chat_id), exc)

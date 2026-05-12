@@ -300,6 +300,10 @@ platforms:
       group_policy: "disabled"
       group_allow_from: []
       split_multiline_messages: false
+      send_gradual_sentences: true
+      send_chunk_retries: 6
+      send_chunk_retry_delay_seconds: 1.5
+      send_chunk_retry_max_delay_seconds: 15
     routing:
       mode: "dedicated"
       bot_id: "lin_wanqing"

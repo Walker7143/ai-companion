@@ -1204,6 +1204,9 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         weixin_split_multiline = os.getenv("WEIXIN_SPLIT_MULTILINE_MESSAGES", "").strip()
         if weixin_split_multiline:
             extra["split_multiline_messages"] = weixin_split_multiline
+        weixin_send_gradual = os.getenv("WEIXIN_SEND_GRADUAL_SENTENCES", "").strip()
+        if weixin_send_gradual:
+            extra["send_gradual_sentences"] = weixin_send_gradual
         weixin_home = os.getenv("WEIXIN_HOME_CHANNEL", "").strip()
         if weixin_home:
             config.platforms[Platform.WEIXIN].home_channel = HomeChannel(

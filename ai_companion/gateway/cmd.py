@@ -1396,6 +1396,7 @@ def load_weixin_platform_config() -> dict | None:
                 "group_policy": os.getenv("WEIXIN_GROUP_POLICY", ""),
                 "group_allow_from": os.getenv("WEIXIN_GROUP_ALLOWED_USERS", ""),
                 "split_multiline_messages": os.getenv("WEIXIN_SPLIT_MULTILINE_MESSAGES", ""),
+                "send_gradual_sentences": os.getenv("WEIXIN_SEND_GRADUAL_SENTENCES", ""),
             },
             "routing": {"mode": "dedicated", "bot_id": bot_id} if bot_id else {},
         }
@@ -1416,9 +1417,11 @@ def _normalize_weixin_extra(weixin_platform_config: dict | None) -> dict:
         "group_policy",
         "group_allow_from",
         "split_multiline_messages",
+        "send_gradual_sentences",
         "send_chunk_delay_seconds",
         "send_chunk_retries",
         "send_chunk_retry_delay_seconds",
+        "send_chunk_retry_max_delay_seconds",
     ):
         if key in config and config.get(key) is not None:
             extra[key] = config[key]

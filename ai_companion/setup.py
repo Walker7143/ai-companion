@@ -157,6 +157,10 @@ def _build_weixin_config(
             "group_policy": group_policy,
             "group_allow_from": group_allow_from,
             "split_multiline_messages": _as_bool(existing_extra.get("split_multiline_messages"), False),
+            "send_gradual_sentences": _as_bool(existing_extra.get("send_gradual_sentences"), True),
+            "send_chunk_retries": existing_extra.get("send_chunk_retries", 6),
+            "send_chunk_retry_delay_seconds": existing_extra.get("send_chunk_retry_delay_seconds", 1.5),
+            "send_chunk_retry_max_delay_seconds": existing_extra.get("send_chunk_retry_max_delay_seconds", 15),
         },
         "routing": {"mode": "dedicated", "bot_id": bot_id},
     }
