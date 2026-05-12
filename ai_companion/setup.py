@@ -161,6 +161,9 @@ def _build_weixin_config(
             "send_chunk_retries": existing_extra.get("send_chunk_retries", 6),
             "send_chunk_retry_delay_seconds": existing_extra.get("send_chunk_retry_delay_seconds", 1.5),
             "send_chunk_retry_max_delay_seconds": existing_extra.get("send_chunk_retry_max_delay_seconds", 15),
+            "send_gradual_max_chunks": existing_extra.get("send_gradual_max_chunks", 5),
+            "send_gradual_group_max_chars": existing_extra.get("send_gradual_group_max_chars", 80),
+            "send_gradual_min_delay_seconds": existing_extra.get("send_gradual_min_delay_seconds", 1.0),
         },
         "routing": {"mode": "dedicated", "bot_id": bot_id},
     }

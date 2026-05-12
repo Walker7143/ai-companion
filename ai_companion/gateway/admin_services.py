@@ -1347,6 +1347,9 @@ class ConfigAdminService:
             "send_chunk_retries",
             "send_chunk_retry_delay_seconds",
             "send_chunk_retry_max_delay_seconds",
+            "send_gradual_max_chunks",
+            "send_gradual_group_max_chars",
+            "send_gradual_min_delay_seconds",
         ):
             if key in incoming_extra and incoming_extra.get(key) is not None:
                 next_extra[key] = incoming_extra[key]

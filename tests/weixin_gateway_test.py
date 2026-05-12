@@ -196,8 +196,42 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.success)
         self.assertGreater(len(sent), 1)
-        self.assertEqual(sent[5], "不去接你。")
-        self.assertEqual(sent[-1], "哼。")
+        self.assertLessEqual(len(sent), 5)
+        self.assertIn("不去接你。", "\n\n".join(sent))
+        self.assertTrue(sent[-1].endswith("哼。"))
+
+    async def test_weixin_gradual_send_caps_long_reply_bursts(self):
+        sent = []
+
+        async def fake_send_message(session, *, text, **kwargs):
+            sent.append(text)
+            return {"ret": 0}
+
+        adapter = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={
+                    "account_id": "wxbot",
+                    "send_chunk_delay_seconds": 0,
+                    "send_chunk_retries": 0,
+                    "send_gradual_max_chunks": 6,
+                    "send_gradual_min_delay_seconds": 0,
+                },
+            )
+        )
+        adapter._send_session = object()
+        text = "".join(f"第{i}句。" for i in range(1, 25))
+
+        with patch("ai_companion.gateway.platforms.weixin._send_message", fake_send_message), patch(
+            "ai_companion.gateway.platforms.weixin.get_delay_for_sentence", return_value=0
+        ):
+            result = await adapter.send("user-1", text)
+
+        self.assertTrue(result.success)
+        self.assertLessEqual(len(sent), 6)
+        self.assertIn("第1句。", sent[0])
+        self.assertTrue(sent[-1].endswith("第24句。"))
 
     async def test_weixin_send_can_opt_out_of_gradual_sentences(self):
         sent = []
@@ -241,6 +275,7 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
                 token="token-1",
                 extra={
                     "account_id": "wxbot",
+                    "send_gradual_max_chunks": 20,
                     "send_chunk_delay_seconds": 0,
                     "send_chunk_retries": 3,
                     "send_chunk_retry_delay_seconds": 0,

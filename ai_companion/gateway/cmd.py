@@ -1422,6 +1422,9 @@ def _normalize_weixin_extra(weixin_platform_config: dict | None) -> dict:
         "send_chunk_retries",
         "send_chunk_retry_delay_seconds",
         "send_chunk_retry_max_delay_seconds",
+        "send_gradual_max_chunks",
+        "send_gradual_group_max_chars",
+        "send_gradual_min_delay_seconds",
     ):
         if key in config and config.get(key) is not None:
             extra[key] = config[key]

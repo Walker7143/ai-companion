@@ -1322,6 +1322,27 @@ class WeixinAdapter(BasePlatformAdapter):
             _config_or_env(extra, "send_chunk_retry_max_delay_seconds", "WEIXIN_SEND_CHUNK_RETRY_MAX_DELAY_SECONDS"),
             15.0,
         )
+        self._send_gradual_max_chunks = max(
+            1,
+                _coerce_int(
+                    _config_or_env(extra, "send_gradual_max_chunks", "WEIXIN_SEND_GRADUAL_MAX_CHUNKS"),
+                5,
+            ),
+        )
+        self._send_gradual_group_max_chars = max(
+            1,
+            _coerce_int(
+                _config_or_env(extra, "send_gradual_group_max_chars", "WEIXIN_SEND_GRADUAL_GROUP_MAX_CHARS"),
+                80,
+            ),
+        )
+        self._send_gradual_min_delay_seconds = max(
+            0.0,
+            _coerce_float(
+                _config_or_env(extra, "send_gradual_min_delay_seconds", "WEIXIN_SEND_GRADUAL_MIN_DELAY_SECONDS"),
+                1.0,
+            ),
+        )
         self._dm_policy = str(extra.get("dm_policy") or os.getenv("WEIXIN_DM_POLICY", "open")).strip().lower()
         self._group_policy = str(extra.get("group_policy") or os.getenv("WEIXIN_GROUP_POLICY", "disabled")).strip().lower()
         allow_from = extra.get("allow_from")
@@ -1765,6 +1786,32 @@ class WeixinAdapter(BasePlatformAdapter):
             content, self.MAX_MESSAGE_LENGTH, self._split_multiline_messages,
         )
 
+    def _pack_gradual_chunks(self, chunks: List[str]) -> List[str]:
+        clean = [chunk.strip() for chunk in chunks if chunk and chunk.strip()]
+        if len(clean) <= self._send_gradual_max_chunks:
+            return clean
+
+        packed: List[str] = []
+        remaining = clean[:]
+        while remaining:
+            remaining_slots = max(1, self._send_gradual_max_chunks - len(packed))
+            take = max(1, (len(remaining) + remaining_slots - 1) // remaining_slots)
+
+            # Keep bubbles short when there are enough slots left, but prefer
+            # staying under the per-turn chunk cap over sending a burst.
+            while take > 1:
+                group = "\n\n".join(remaining[:take])
+                if len(group) <= self._send_gradual_group_max_chars:
+                    break
+                if len(remaining) - (take - 1) > remaining_slots - 1:
+                    break
+                take -= 1
+
+            packed.append("\n\n".join(remaining[:take]))
+            del remaining[:take]
+
+        return packed
+
     async def _send_text_chunk(
         self,
         *,
@@ -1915,36 +1962,35 @@ class WeixinAdapter(BasePlatformAdapter):
             formatted = self.format_message(final_content)
             if self._send_gradual_sentences:
                 sentences = SentenceSplitter.split(formatted)
-                chunks_by_sentence = [
-                    [c for c in self._split_text(sentence) if c and c.strip()]
+                sentence_chunks = [
+                    chunk
                     for sentence in sentences
+                    for chunk in self._split_text(sentence)
+                    if chunk and chunk.strip()
                 ]
-                chunks_by_sentence = [chunks for chunks in chunks_by_sentence if chunks]
+                chunks = self._pack_gradual_chunks(sentence_chunks)
 
-                for sentence_idx, chunks in enumerate(chunks_by_sentence):
-                    for chunk_idx, chunk in enumerate(chunks):
-                        client_id = f"ai-companion-weixin-{uuid.uuid4().hex}"
-                        await self._send_text_chunk(
-                            chat_id=chat_id,
-                            chunk=chunk,
-                            context_token=context_token,
-                            client_id=client_id,
+                for chunk_idx, chunk in enumerate(chunks):
+                    client_id = f"ai-companion-weixin-{uuid.uuid4().hex}"
+                    await self._send_text_chunk(
+                        chat_id=chat_id,
+                        chunk=chunk,
+                        context_token=context_token,
+                        client_id=client_id,
+                    )
+                    context_token = self._token_store.get(self._account_id, chat_id)
+                    last_message_id = client_id
+                    if chunk_idx < len(chunks) - 1:
+                        delay = max(
+                            get_delay_for_sentence(chunk),
+                            self._send_gradual_min_delay_seconds,
                         )
-                        context_token = self._token_store.get(self._account_id, chat_id)
-                        last_message_id = client_id
-                        if (
-                            chunk_idx < len(chunks) - 1
-                            and self._send_chunk_delay_seconds > 0
-                        ):
-                            await asyncio.sleep(self._send_chunk_delay_seconds)
-                    if sentence_idx < len(chunks_by_sentence) - 1:
-                        delay = get_delay_for_sentence(chunks[-1])
                         logger.debug(
-                            "[%s] gradual send: sleeping %.1fs before next sentence (%d/%d)",
+                            "[%s] gradual send: sleeping %.1fs before next chunk (%d/%d)",
                             self.name,
                             delay,
-                            sentence_idx + 1,
-                            len(chunks_by_sentence),
+                            chunk_idx + 1,
+                            len(chunks),
                         )
                         if delay > 0:
                             await asyncio.sleep(delay)

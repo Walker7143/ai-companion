@@ -1207,6 +1207,15 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         weixin_send_gradual = os.getenv("WEIXIN_SEND_GRADUAL_SENTENCES", "").strip()
         if weixin_send_gradual:
             extra["send_gradual_sentences"] = weixin_send_gradual
+        for env_name, key in (
+            ("WEIXIN_SEND_GRADUAL_MAX_CHUNKS", "send_gradual_max_chunks"),
+            ("WEIXIN_SEND_GRADUAL_GROUP_MAX_CHARS", "send_gradual_group_max_chars"),
+            ("WEIXIN_SEND_GRADUAL_MIN_DELAY_SECONDS", "send_gradual_min_delay_seconds"),
+            ("WEIXIN_SEND_CHUNK_RETRY_MAX_DELAY_SECONDS", "send_chunk_retry_max_delay_seconds"),
+        ):
+            value = os.getenv(env_name, "").strip()
+            if value:
+                extra[key] = value
         weixin_home = os.getenv("WEIXIN_HOME_CHANNEL", "").strip()
         if weixin_home:
             config.platforms[Platform.WEIXIN].home_channel = HomeChannel(
