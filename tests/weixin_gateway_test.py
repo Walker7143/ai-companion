@@ -232,6 +232,7 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(sent), 6)
         self.assertIn("第1句。", sent[0])
         self.assertTrue(sent[-1].endswith("第24句。"))
+        self.assertTrue(all("\n" not in chunk for chunk in sent))
 
     async def test_weixin_send_can_opt_out_of_gradual_sentences(self):
         sent = []

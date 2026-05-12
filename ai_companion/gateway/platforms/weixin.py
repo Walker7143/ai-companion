@@ -1791,6 +1791,9 @@ class WeixinAdapter(BasePlatformAdapter):
         if len(clean) <= self._send_gradual_max_chunks:
             return clean
 
+        def join_group(items: List[str]) -> str:
+            return " ".join(item.strip() for item in items if item.strip())
+
         packed: List[str] = []
         remaining = clean[:]
         while remaining:
@@ -1800,14 +1803,14 @@ class WeixinAdapter(BasePlatformAdapter):
             # Keep bubbles short when there are enough slots left, but prefer
             # staying under the per-turn chunk cap over sending a burst.
             while take > 1:
-                group = "\n\n".join(remaining[:take])
+                group = join_group(remaining[:take])
                 if len(group) <= self._send_gradual_group_max_chars:
                     break
                 if len(remaining) - (take - 1) > remaining_slots - 1:
                     break
                 take -= 1
 
-            packed.append("\n\n".join(remaining[:take]))
+            packed.append(join_group(remaining[:take]))
             del remaining[:take]
 
         return packed
