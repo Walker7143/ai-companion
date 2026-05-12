@@ -22,7 +22,7 @@ class MiniMaxAdapterResponseParsingTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "MiniMax API error 1008: rate limited"):
             MiniMaxAdapter._parse_chat_response(payload)
 
-    def test_parse_chat_response_uses_reasoning_when_content_empty(self):
+    def test_parse_chat_response_ignores_reasoning_when_content_empty(self):
         payload = {
             "choices": [
                 {"message": {"content": "", "reasoning_content": "fallback reply"}}
@@ -30,7 +30,7 @@ class MiniMaxAdapterResponseParsingTest(unittest.TestCase):
             "base_resp": {"status_code": 0, "status_msg": ""},
         }
 
-        self.assertEqual(MiniMaxAdapter._parse_chat_response(payload), "fallback reply")
+        self.assertEqual(MiniMaxAdapter._parse_chat_response(payload), "")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import logging
 from typing import Optional
 
 from .base import ModelAdapter
+from .response_parsing import user_visible_message_content
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +145,7 @@ class MiniMaxAdapter(ModelAdapter):
         # content = 实际回复（发给用户的话）
         # reasoning_content = 内部推理过程（角色内心独白等）
         # 优先用 content，reasoning_content 仅在 content 为空时降级使用
-        content = message.get("content") or ""
-        reasoning_content = message.get("reasoning_content") or ""
-        content = content if isinstance(content, str) else str(content)
-        reasoning_content = reasoning_content if isinstance(reasoning_content, str) else str(reasoning_content)
-        return content if content.strip() else reasoning_content
+        return user_visible_message_content(message, provider="MiniMax")
 
     async def embeddings(self, texts: list[str], type: str = "db") -> list[list[float]]:
         """

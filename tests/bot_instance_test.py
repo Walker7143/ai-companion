@@ -48,6 +48,20 @@ class PromiseModel:
         return "我想一下，一会儿回复你。"
 
 
+class ReasoningLeakModel:
+    provider = "test"
+    model = "reasoning-leak-model"
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        self.calls.append({"messages": messages, "system_prompt": system_prompt})
+        if len(self.calls) == 1:
+            return "用户在调侃/命令我一周内不许吃饵丝。这是一个俏皮的互动。\n\n**角色分析（杨思思）：**\n**性格：** 嘴硬心软。"
+        return "……\n\n行吧。\n\n一周内我不吃了。"
+
+
 class RefusalAwareModel:
     provider = "test"
     model = "refusal-aware-model"
@@ -109,6 +123,19 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(result)
         self.assertTrue(any("对话异常" in item for item in logs.output))
+
+    async def test_chat_with_fallback_retries_reasoning_like_output(self):
+        bot = BotInstance({"id": "shen_nian", "name": "沈念"}, model=ReasoningLeakModel())
+
+        try:
+            with self.assertLogs("ai_companion.bot.instance", level="WARNING") as logs:
+                result = await bot._chat_with_fallback([{"role": "user", "content": "我说没说过一周不许吃饵丝"}])
+        finally:
+            await bot.close()
+
+        self.assertEqual(result, "……\n\n行吧。\n\n一周内我不吃了。")
+        self.assertGreaterEqual(len(bot.model.calls), 2)
+        self.assertTrue(any("Suppressed likely reasoning artifact" in item for item in logs.output))
 
     async def test_handle_message_includes_model_failure_diagnostics(self):
         bot = BotInstance(

@@ -11,6 +11,7 @@ import logging
 from typing import Optional
 
 from .base import ModelAdapter
+from .response_parsing import user_visible_message_content
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +94,7 @@ class MimoAdapter(ModelAdapter):
                         raise RuntimeError(f"MiMo API error {resp.status}: {text}")
                     data = await resp.json()
                     choice = data["choices"][0]["message"]
-                    content = choice.get("content") or ""
-                    reasoning_content = choice.get("reasoning_content") or ""
-                    return content if content.strip() else reasoning_content
+                    return user_visible_message_content(choice, provider="MiMo")
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_error = e
                 if attempt < MAX_RETRIES - 1:

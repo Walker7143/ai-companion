@@ -1198,6 +1198,7 @@ class BotInstance:
         return context
 
     def _polish_response(self, response: str, memory_context: dict | None, relationship_state: dict | None) -> str:
+        response = self.response_polisher.strip_reasoning_artifacts(response)
         return self.response_polisher.polish(
             response,
             intent=(memory_context or {}).get("memory_intent", "casual_chat"),
@@ -1209,7 +1210,26 @@ class BotInstance:
         """调用模型聊天，失败时返回 None（由调用者处理友好提示）"""
         try:
             self._last_model_error = None
-            return await self.model.chat(messages, system_prompt)
+            response = await self.model.chat(messages, system_prompt)
+            cleaned = self.response_polisher.strip_reasoning_artifacts(response)
+            if cleaned and not self.response_polisher.looks_like_reasoning_artifact(cleaned):
+                return cleaned
+
+            logger.warning("[BotInstance] Suppressed likely reasoning artifact from model response; retrying once")
+            retry_messages = list(messages) + [
+                {
+                    "role": "user",
+                    "content": (
+                        "请重新生成上一条回复。只输出会直接发给用户的自然回复，"
+                        "不要输出分析、推理过程、角色分析、回复策略或标题。"
+                    ),
+                }
+            ]
+            response = await self.model.chat(retry_messages, system_prompt)
+            cleaned = self.response_polisher.strip_reasoning_artifacts(response)
+            if cleaned and not self.response_polisher.looks_like_reasoning_artifact(cleaned):
+                return cleaned
+            raise RuntimeError("model returned reasoning text instead of user-visible content")
         except RuntimeError as e:
             self._last_model_error = self._sanitize_model_error(e)
             logger.error(f"[BotInstance] 对话失败: {self._last_model_error}")

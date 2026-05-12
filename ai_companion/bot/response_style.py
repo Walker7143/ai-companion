@@ -41,6 +41,42 @@ class ResponseStylePolisher:
     ACTION_TEXT_RE = re.compile(r"[（(]([^（）()\n]{1,40})[）)]")
     GENERIC_ACTION_TEXT_RE = re.compile(r"[（(]\s*(?:消息|打字|停顿|小声|又发(?:了)?(?:一)?条)\s*[）)]")
 
+    INLINE_REASONING_RE = re.compile(
+        r"<\s*(?:think|thinking|reasoning|thought|REASONING_SCRATCHPAD)\s*>.*?"
+        r"<\s*/\s*(?:think|thinking|reasoning|thought|REASONING_SCRATCHPAD)\s*>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    ANALYSIS_PREFIXES = (
+        "\u7528\u6237\u5728",      # 用户在
+        "\u7528\u6237\u7684",      # 用户的
+        "\u7528\u6237\u8981\u6c42",  # 用户要求
+        "\u7528\u6237\u8bf7\u6c42",  # 用户请求
+        "\u89d2\u8272\u5206\u6790",  # 角色分析
+        "\u6027\u683c\u5206\u6790",  # 性格分析
+        "\u56de\u590d\u7b56\u7565",  # 回复策略
+        "\u5206\u6790\u8bf7\u6c42",  # 分析请求
+        "\u5206\u6790\u7528\u6237",  # 分析用户
+        "\u6211\u9700\u8981\u5148",  # 我需要先
+        "\u6211\u9700\u8981\u5206\u6790",  # 我需要分析
+    )
+    ANALYSIS_MARKERS = (
+        "\u89d2\u8272\u5206\u6790",  # 角色分析
+        "\u6027\u683c\u5206\u6790",  # 性格分析
+        "\u56de\u590d\u7b56\u7565",  # 回复策略
+        "\u5206\u6790\u8bf7\u6c42",  # 分析请求
+        "\u5206\u6790\u7528\u6237",  # 分析用户
+        "\u5206\u6790\u573a\u666f",  # 分析场景
+        "\u5185\u90e8\u63a8\u7406",  # 内部推理
+        "\u63a8\u7406\u8fc7\u7a0b",  # 推理过程
+        "\u7528\u6237\u5728",      # 用户在
+        "\u7528\u6237\u7684\u8bf7\u6c42",  # 用户的请求
+        "\u7528\u6237\u8981\u6c42",  # 用户要求
+        "\u6211\u9700\u8981\u5148",  # 我需要先
+        "\u6211\u9700\u8981\u5206\u6790",  # 我需要分析
+        "\u5e94\u8be5\u56de\u7b54",  # 应该回答
+        "\u6700\u7ec8\u56de\u590d",  # 最终回复
+    )
+
     def polish(
         self,
         text: str,
@@ -78,10 +114,40 @@ class ResponseStylePolisher:
         text = str(text or "")
         if not text:
             return text
+        text = self.strip_reasoning_artifacts(text)
         text = self.GENERIC_ACTION_TEXT_RE.sub("", text)
         text = re.sub(r"[ \t]+\n", "\n", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
+
+    def strip_reasoning_artifacts(self, text: str) -> str:
+        """Remove reasoning traces that providers may place in text content."""
+        text = str(text or "")
+        if not text:
+            return ""
+        text = self.INLINE_REASONING_RE.sub("", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+    def looks_like_reasoning_artifact(self, text: str) -> bool:
+        """Heuristic guard for analysis text accidentally returned as a reply."""
+        cleaned = self.strip_reasoning_artifacts(text)
+        if not cleaned:
+            return True
+
+        start = cleaned.lstrip("#* \t\r\n:：.-")
+        if any(start.startswith(prefix) for prefix in self.ANALYSIS_PREFIXES):
+            return True
+
+        marker_count = sum(1 for marker in self.ANALYSIS_MARKERS if marker in cleaned)
+        if marker_count >= 2:
+            return True
+        markdown_headings = len(re.findall(r"(?m)^\s{0,3}#{1,6}\s+", cleaned))
+        bold_labels = len(re.findall(
+            r"\*\*[^*\n]{1,24}(?:\u5206\u6790|\u7b56\u7565|\u6027\u683c|\u89d2\u8272|\u5224\u65ad)[^*\n]{0,12}\*\*",
+            cleaned,
+        ))
+        return markdown_headings + bold_labels >= 2
 
     def _remove_ai_disclaimers(self, text: str) -> str:
         for phrase in self.AI_PHRASES:
