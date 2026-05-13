@@ -26,6 +26,11 @@ class EpisodicStore:
 
     # sentence-transformers 模型名
     DEFAULT_ENCODER_MODEL = "all-MiniLM-L6-v2"
+    RECALL_COLUMNS = """
+        id, summary, content, session_id, importance, confidence,
+        participants_json, topics_json, emotion_tags_json, source_message_ids_json,
+        relationship_effect, sensitivity, recall_style, cue_tags_json
+    """
 
     # LLM 抽取情景摘要的 prompt
     EXTRACT_EPISODE_PROMPT = """对话：
@@ -69,6 +74,10 @@ class EpisodicStore:
                     topics_json TEXT,
                     emotion_tags_json TEXT,
                     source_message_ids_json TEXT,
+                    relationship_effect TEXT,
+                    sensitivity TEXT DEFAULT 'normal',
+                    recall_style TEXT,
+                    cue_tags_json TEXT,
                     last_recalled_at TEXT,
                     recall_count INTEGER DEFAULT 0,
                     decay_score REAL DEFAULT 1.0,
@@ -92,6 +101,10 @@ class EpisodicStore:
                 ("topics_json", "ALTER TABLE episodic_memory ADD COLUMN topics_json TEXT"),
                 ("emotion_tags_json", "ALTER TABLE episodic_memory ADD COLUMN emotion_tags_json TEXT"),
                 ("source_message_ids_json", "ALTER TABLE episodic_memory ADD COLUMN source_message_ids_json TEXT"),
+                ("relationship_effect", "ALTER TABLE episodic_memory ADD COLUMN relationship_effect TEXT"),
+                ("sensitivity", "ALTER TABLE episodic_memory ADD COLUMN sensitivity TEXT DEFAULT 'normal'"),
+                ("recall_style", "ALTER TABLE episodic_memory ADD COLUMN recall_style TEXT"),
+                ("cue_tags_json", "ALTER TABLE episodic_memory ADD COLUMN cue_tags_json TEXT"),
                 ("last_recalled_at", "ALTER TABLE episodic_memory ADD COLUMN last_recalled_at TEXT"),
                 ("recall_count", "ALTER TABLE episodic_memory ADD COLUMN recall_count INTEGER DEFAULT 0"),
                 ("decay_score", "ALTER TABLE episodic_memory ADD COLUMN decay_score REAL DEFAULT 1.0"),
@@ -183,23 +196,41 @@ class EpisodicStore:
         title: str = "",
         importance: float = 0.6,
         confidence: float = 0.7,
+        participants: Optional[list[str]] = None,
         topics: Optional[list[str]] = None,
         emotion_tags: Optional[list[str]] = None,
         source_message_ids: Optional[list[str]] = None,
+        relationship_effect: str = "",
+        sensitivity: str = "",
+        recall_style: str = "",
+        cue_tags: Optional[list[str]] = None,
     ):
         """Store an approved episodic memory."""
         sid = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
         content = content or summary
-        tokens = self._tokenize(summary) + " " + self._tokenize(content)
+        topics = _clean_list(topics)
+        emotion_tags = _clean_list(emotion_tags)
+        participants = _clean_list(participants)
+        source_message_ids = _clean_list(source_message_ids)
+        relationship_effect = (relationship_effect or self._infer_relationship_effect(summary, content)).strip()
+        sensitivity = (sensitivity or self._infer_sensitivity(summary, content)).strip() or "normal"
+        recall_style = (recall_style or self._default_recall_style(relationship_effect, sensitivity)).strip()
+        cue_tags = _clean_list(cue_tags) or self._infer_cue_tags(summary, content, topics, emotion_tags)
+        tokens = " ".join([
+            self._tokenize(summary),
+            self._tokenize(content),
+            self._tokenize(" ".join(cue_tags)),
+        ]).strip()
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
                 INSERT INTO episodic_memory (
                     bot_id, user_id, session_id, title, summary, content, tokens,
-                    importance, confidence, topics_json, emotion_tags_json,
-                    source_message_ids_json, decay_score, archived, created_at
+                    importance, confidence, participants_json, topics_json, emotion_tags_json,
+                    source_message_ids_json, relationship_effect, sensitivity, recall_style,
+                    cue_tags_json, decay_score, archived, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 bot_id,
                 user_id,
@@ -210,9 +241,14 @@ class EpisodicStore:
                 tokens,
                 float(importance),
                 float(confidence),
-                json.dumps(topics or [], ensure_ascii=False),
-                json.dumps(emotion_tags or [], ensure_ascii=False),
-                json.dumps(source_message_ids or [], ensure_ascii=False),
+                json.dumps(participants, ensure_ascii=False),
+                json.dumps(topics, ensure_ascii=False),
+                json.dumps(emotion_tags, ensure_ascii=False),
+                json.dumps(source_message_ids, ensure_ascii=False),
+                relationship_effect,
+                sensitivity,
+                recall_style,
+                json.dumps(cue_tags, ensure_ascii=False),
                 1.0,
                 0,
                 datetime.now().isoformat(),
@@ -228,7 +264,22 @@ class EpisodicStore:
                     ids=[str(datetime.now().timestamp())],
                     embeddings=[embedding],
                     documents=[f"{summary}\n\n原始：{content}"],
-                    metadatas=[{"summary": summary, "session_id": sid, "bot_id": bot_id, "user_id": user_id}]
+                    metadatas=[{
+                        "summary": summary,
+                        "session_id": sid,
+                        "bot_id": bot_id,
+                        "user_id": user_id,
+                        "importance": float(importance),
+                        "confidence": float(confidence),
+                        "participants_json": json.dumps(participants, ensure_ascii=False),
+                        "topics_json": json.dumps(topics, ensure_ascii=False),
+                        "emotion_tags_json": json.dumps(emotion_tags, ensure_ascii=False),
+                        "source_message_ids_json": json.dumps(source_message_ids, ensure_ascii=False),
+                        "relationship_effect": relationship_effect,
+                        "sensitivity": sensitivity,
+                        "recall_style": recall_style,
+                        "cue_tags_json": json.dumps(cue_tags, ensure_ascii=False),
+                    }]
                 )
             except Exception:
                 pass
@@ -271,6 +322,53 @@ class EpisodicStore:
         if any(k in text for k in medium):
             return 0.72
         return 0.6
+
+    def _infer_relationship_effect(self, summary: str, content: str) -> str:
+        text = f"{summary}\n{content}"
+        if any(k in text for k in ["吵架", "冲突", "生气", "冷淡", "疏远", "分手", "拒绝", "越界"]):
+            return "紧张"
+        if any(k in text for k in ["道歉", "和好", "修复", "原谅", "解释清楚"]):
+            return "修复"
+        if any(k in text for k in ["表白", "想你", "牵手", "晚安", "亲密", "关心", "承诺", "约定", "抱抱"]):
+            return "拉近"
+        return "普通"
+
+    def _infer_sensitivity(self, summary: str, content: str) -> str:
+        text = f"{summary}\n{content}"
+        sensitive_keywords = [
+            "身体", "隐私", "疾病", "病", "失禁", "乙肝", "创伤", "自伤", "自杀",
+            "跳楼", "霸凌", "骚扰", "性", "前任", "前女友", "前男友", "家庭暴力",
+            "父亲", "母亲", "抑郁", "焦虑症", "诊断", "药",
+        ]
+        return "sensitive" if any(keyword in text for keyword in sensitive_keywords) else "normal"
+
+    def _default_recall_style(self, relationship_effect: str, sensitivity: str) -> str:
+        if sensitivity == "sensitive":
+            return "只在用户主动提起或高度相关时使用，优先保护隐私和安全感。"
+        if relationship_effect in {"拉近", "修复", "紧张"}:
+            return "可轻轻提起关系含义，不要炫耀记忆或强行升温。"
+        return "自然相关时使用，更多影响分寸而不是直接复述。"
+
+    def _infer_cue_tags(
+        self,
+        summary: str,
+        content: str,
+        topics: list[str],
+        emotion_tags: list[str],
+    ) -> list[str]:
+        cues: list[str] = []
+        cues.extend(topics)
+        cues.extend(emotion_tags)
+        text = f"{summary}\n{content}"
+        for keyword in [
+            "面试", "考试", "失眠", "焦虑", "难过", "吵架", "和好", "道歉", "表白",
+            "承诺", "约定", "牵手", "晚安", "海边", "作品集", "搬家", "家人",
+        ]:
+            if keyword in text:
+                cues.append(keyword)
+        for word in re.findall(r"[\u4e00-\u9fa5]{2,4}", summary)[:8]:
+            cues.append(word)
+        return _dedupe(_clean_list(cues))[:12]
 
     def _get_embedding(self, text: str) -> list[float]:
         encoder = self._get_encoder()
@@ -349,7 +447,7 @@ class EpisodicStore:
 
             if session_id or bot_id is not None or not include_archived:
                 sql = f"""
-                    SELECT id, summary, content, session_id, importance, confidence,
+                    SELECT {self.RECALL_COLUMNS},
                            ({' + '.join(['(CASE WHEN tokens LIKE ? THEN 1 ELSE 0 END)' for _ in q_tokens])}) AS match_count
                     FROM episodic_memory
                     WHERE ({like_clauses}){where_suffix}
@@ -359,7 +457,7 @@ class EpisodicStore:
                 cursor = conn.execute(sql, params * 2 + filter_params + [top_k])
             else:
                 sql = f"""
-                    SELECT id, summary, content, session_id, importance, confidence,
+                    SELECT {self.RECALL_COLUMNS},
                            ({' + '.join(['(CASE WHEN tokens LIKE ? THEN 1 ELSE 0 END)' for _ in q_tokens])}) AS match_count
                     FROM episodic_memory
                     WHERE {like_clauses}
@@ -371,7 +469,7 @@ class EpisodicStore:
             rows = cursor.fetchall()
             self._mark_recalled(conn, [r["id"] for r in rows])
             conn.close()
-            return [dict(r) for r in rows] if rows else []
+            return [_episode_row_to_dict(r) for r in rows] if rows else []
         except Exception:
             return []
 
@@ -394,6 +492,16 @@ class EpisodicStore:
                         "summary": meta.get("summary", ""),
                         "content": doc,
                         "session_id": meta.get("session_id", ""),
+                        "importance": _safe_float(meta.get("importance"), 0.0),
+                        "confidence": _safe_float(meta.get("confidence"), 0.0),
+                        "participants": _loads_list(meta.get("participants_json")),
+                        "topics": _loads_list(meta.get("topics_json")),
+                        "emotion_tags": _loads_list(meta.get("emotion_tags_json")),
+                        "source_message_ids": _loads_list(meta.get("source_message_ids_json")),
+                        "relationship_effect": meta.get("relationship_effect", ""),
+                        "sensitivity": meta.get("sensitivity", "normal") or "normal",
+                        "recall_style": meta.get("recall_style", ""),
+                        "cue_tags": _loads_list(meta.get("cue_tags_json")),
                     })
             return episodes
         except Exception:
@@ -434,7 +542,7 @@ class EpisodicStore:
 
         if filters:
             cursor = conn.execute(f"""
-                SELECT id, summary, content, session_id, importance, confidence
+                SELECT {self.RECALL_COLUMNS}
                 FROM episodic_memory
                 WHERE ({like_clauses}){where_suffix}
                 ORDER BY importance DESC, confidence DESC, decay_score DESC, created_at DESC
@@ -442,7 +550,7 @@ class EpisodicStore:
             """, params + filter_params + [top_k])
         else:
             cursor = conn.execute(f"""
-                SELECT id, summary, content, session_id, importance, confidence
+                SELECT {self.RECALL_COLUMNS}
                 FROM episodic_memory
                 WHERE {like_clauses}
                 ORDER BY importance DESC, confidence DESC, decay_score DESC, created_at DESC
@@ -452,7 +560,7 @@ class EpisodicStore:
         rows = cursor.fetchall()
         self._mark_recalled(conn, [r["id"] for r in rows])
         conn.close()
-        return [dict(r) for r in rows] if rows else []
+        return [_episode_row_to_dict(r) for r in rows] if rows else []
 
     def _mark_recalled(self, conn: sqlite3.Connection, ids: list[int]):
         if not ids:
@@ -482,15 +590,80 @@ class EpisodicStore:
     def list_recent(self, limit: int = 20) -> list[dict]:
         """返回最近的情景记忆片段"""
         conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
         rows = conn.execute("""
-            SELECT id, session_id, summary, content, importance, created_at
+            SELECT id, session_id, summary, content, importance, created_at,
+                   confidence, participants_json, topics_json, emotion_tags_json,
+                   source_message_ids_json, relationship_effect, sensitivity,
+                   recall_style, cue_tags_json
             FROM episodic_memory
             ORDER BY id DESC
             LIMIT ?
         """, (limit,)).fetchall()
         conn.close()
-        return [{"id": str(r[0]), "session_id": r[1], "summary": r[2],
-                 "content": r[3], "importance": r[4], "created_at": r[5]} for r in rows]
+        return [_episode_row_to_dict(r, include_created_at=True) for r in rows]
 
     async def close(self):
         pass
+
+
+def _clean_list(value: Optional[list[str]]) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        key = " ".join(str(item).split())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(key)
+    return result
+
+
+def _loads_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return _clean_list(value)
+    if value is None:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return _clean_list(parsed) if isinstance(parsed, list) else []
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _episode_row_to_dict(row: sqlite3.Row, *, include_created_at: bool = False) -> dict:
+    item = dict(row)
+    result = {
+        "id": str(item.get("id", "")),
+        "summary": item.get("summary") or "",
+        "content": item.get("content") or "",
+        "session_id": item.get("session_id") or "",
+        "importance": _safe_float(item.get("importance"), 0.0),
+        "confidence": _safe_float(item.get("confidence"), 0.0),
+        "participants": _loads_list(item.get("participants_json")),
+        "topics": _loads_list(item.get("topics_json")),
+        "emotion_tags": _loads_list(item.get("emotion_tags_json")),
+        "source_message_ids": _loads_list(item.get("source_message_ids_json")),
+        "relationship_effect": item.get("relationship_effect") or "普通",
+        "sensitivity": item.get("sensitivity") or "normal",
+        "recall_style": item.get("recall_style") or "",
+        "cue_tags": _loads_list(item.get("cue_tags_json")),
+    }
+    if "match_count" in item:
+        result["match_count"] = item.get("match_count")
+    if include_created_at:
+        result["created_at"] = item.get("created_at")
+    return result

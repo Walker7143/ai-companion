@@ -28,15 +28,24 @@ class MemoryRetriever:
         "relationship_repair": ["生气", "道歉", "冷淡", "吵架", "和好", "原谅"],
         "task_request": ["写代码", "总结", "翻译", "生成", "分析", "实现", "修复", "优化"],
     }
+    TASK_CONTEXT_KEYWORDS = {
+        "代码", "函数", "报错", "bug", "接口", "测试", "文档", "文件", "实现",
+        "优化", "编译", "安装", "部署", "日志", "数据库", "token", "prompt",
+        "api", "python", "javascript", "typescript", "react", "sql", "git",
+    }
+    RELATIONSHIP_CONTEXT_KEYWORDS = {
+        "关系", "我们", "你", "我", "感情", "态度", "喜欢", "爱", "冷淡",
+        "生气", "道歉", "和好", "原谅", "委屈", "吵架",
+    }
 
     FACT_CATEGORIES_BY_INTENT = {
-        "emotional_support": {"communication_style", "boundaries", "life_context", "important_people"},
-        "recall_past": {"identity", "important_people", "life_context", "goals"},
-        "planning": {"goals", "life_context", "open_threads", "routines"},
-        "relationship_repair": {"boundaries", "communication_style", "important_people"},
-        "task_request": {"identity", "preferences", "communication_style"},
-        "casual_chat": {"identity", "preferences", "communication_style", "boundaries"},
-        "proactive_generation": {"life_context", "goals", "open_threads", "communication_style"},
+        "emotional_support": {"communication_style", "boundaries", "life_context", "important_people", "dislikes"},
+        "recall_past": {"identity", "important_people", "life_context", "goals", "dislikes"},
+        "planning": {"goals", "life_context", "open_threads", "routines", "dislikes"},
+        "relationship_repair": {"boundaries", "communication_style", "important_people", "dislikes"},
+        "task_request": {"identity", "preferences", "communication_style", "dislikes"},
+        "casual_chat": {"identity", "preferences", "communication_style", "boundaries", "dislikes"},
+        "proactive_generation": {"life_context", "goals", "open_threads", "communication_style", "dislikes"},
     }
 
     def __init__(
@@ -49,6 +58,7 @@ class MemoryRetriever:
         relationship_store,
         user_understanding,
         max_working_turns: int = 20,
+        max_summaries: int = 5,
     ):
         self.working = working_store
         self.daily = daily_store
@@ -57,6 +67,7 @@ class MemoryRetriever:
         self.relationship = relationship_store
         self.user_understanding = user_understanding
         self.max_working_turns = max_working_turns
+        self.max_summaries = max_summaries
 
     async def retrieve(
         self,
@@ -68,7 +79,11 @@ class MemoryRetriever:
         intent: str | None = None,
     ) -> RetrievedMemory:
         detected_intent = intent or self.classify_intent(current_input)
-        working = self.working.load_context(session_id, max_working_turns=self.max_working_turns)
+        working = self.working.load_context(
+            session_id,
+            max_working_turns=self.max_working_turns,
+            max_summaries=self.max_summaries,
+        )
         daily_context = {}
         if self.daily is not None:
             daily_context = self.daily.get_recent_context(
@@ -81,12 +96,13 @@ class MemoryRetriever:
         relationship = await self.relationship.get_state(bot_id=bot_id, user_id=user_id)
 
         categories = self.FACT_CATEGORIES_BY_INTENT.get(detected_intent, self.FACT_CATEGORIES_BY_INTENT["casual_chat"])
-        semantic_items = await self.semantic.list_facts(
+        semantic_items = await self.semantic.search_facts(
+            current_input,
             bot_id=bot_id,
             user_id=user_id,
             categories=categories,
             include_archived=False,
-            limit=20,
+            limit=24,
         )
         semantic_facts = {item["key"]: item["value"] for item in semantic_items}
 
@@ -115,7 +131,33 @@ class MemoryRetriever:
 
     def classify_intent(self, text: str) -> str:
         text = text or ""
+        lowered = text.lower()
+        matched: dict[str, int] = {}
         for intent, keywords in self.INTENT_KEYWORDS.items():
-            if any(keyword in text for keyword in keywords):
+            count = sum(1 for keyword in keywords if keyword in text or keyword.lower() in lowered)
+            if count:
+                matched[intent] = count
+        if not matched:
+            return "casual_chat"
+
+        task_context = sum(1 for keyword in self.TASK_CONTEXT_KEYWORDS if keyword in text or keyword.lower() in lowered)
+        relationship_context = sum(1 for keyword in self.RELATIONSHIP_CONTEXT_KEYWORDS if keyword in text)
+
+        if matched.get("task_request") and task_context:
+            return "task_request"
+        if matched.get("relationship_repair") and relationship_context and not task_context:
+            return "relationship_repair"
+        if matched.get("emotional_support") and not task_context:
+            return "emotional_support"
+        if matched.get("recall_past"):
+            return "recall_past"
+        if matched.get("planning"):
+            return "planning"
+        if matched.get("task_request"):
+            return "task_request"
+        if matched.get("relationship_repair"):
+            return "relationship_repair"
+        for intent in self.INTENT_KEYWORDS:
+            if intent in matched:
                 return intent
         return "casual_chat"

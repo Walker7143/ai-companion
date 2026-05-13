@@ -69,6 +69,9 @@ class RelationshipStore:
                     last_stage_change_at TEXT,
                     open_emotional_threads_json TEXT,
                     key_moments_json TEXT,
+                    relationship_narrative TEXT,
+                    current_posture TEXT,
+                    interaction_guidance TEXT,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(bot_id, user_id)
                 )
@@ -89,6 +92,9 @@ class RelationshipStore:
             ("negative_streak", "ALTER TABLE relationship_state ADD COLUMN negative_streak INTEGER DEFAULT 0"),
             ("score_scale", "ALTER TABLE relationship_state ADD COLUMN score_scale INTEGER DEFAULT 10"),
             ("last_stage_change_at", "ALTER TABLE relationship_state ADD COLUMN last_stage_change_at TEXT"),
+            ("relationship_narrative", "ALTER TABLE relationship_state ADD COLUMN relationship_narrative TEXT"),
+            ("current_posture", "ALTER TABLE relationship_state ADD COLUMN current_posture TEXT"),
+            ("interaction_guidance", "ALTER TABLE relationship_state ADD COLUMN interaction_guidance TEXT"),
         ]
         for name, ddl in migrations:
             if name not in columns:
@@ -167,7 +173,8 @@ class RelationshipStore:
                        stage_confidence, positive_streak, negative_streak, score_scale,
                        last_conflict_at, last_repair_at, last_meaningful_contact_at,
                        last_stage_change_at, open_emotional_threads_json,
-                       key_moments_json, updated_at
+                       key_moments_json, relationship_narrative, current_posture,
+                       interaction_guidance, updated_at
                 FROM relationship_state
                 WHERE bot_id = ? AND user_id = ?
                 """,
@@ -198,7 +205,10 @@ class RelationshipStore:
             "last_stage_change_at": row[15],
             "open_emotional_threads": _load_json_list(row[16]),
             "key_moments": _load_json_list(row[17]),
-            "updated_at": row[18],
+            "relationship_narrative": row[18],
+            "current_posture": row[19],
+            "interaction_guidance": row[20],
+            "updated_at": row[21],
         }
         if state["score_scale"] != self.SCORE_SCALE:
             state = self._normalize_legacy_state(state)
@@ -293,6 +303,7 @@ class RelationshipStore:
             ]
         ):
             state["last_meaningful_contact_at"] = now
+        state.update(self._build_relationship_narrative(state, event=event))
 
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -303,8 +314,9 @@ class RelationshipStore:
                     attitude_score, relationship_score, stage_confidence,
                     positive_streak, negative_streak, score_scale, last_conflict_at,
                     last_repair_at, last_meaningful_contact_at, last_stage_change_at,
-                    open_emotional_threads_json, key_moments_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    open_emotional_threads_json, key_moments_json, relationship_narrative,
+                    current_posture, interaction_guidance, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     bot_id,
@@ -327,6 +339,9 @@ class RelationshipStore:
                     state.get("last_stage_change_at"),
                     json.dumps(state.get("open_emotional_threads", []), ensure_ascii=False),
                     json.dumps(state.get("key_moments", []), ensure_ascii=False),
+                    state.get("relationship_narrative", ""),
+                    state.get("current_posture", ""),
+                    state.get("interaction_guidance", ""),
                     now,
                 ),
             )
@@ -374,6 +389,7 @@ class RelationshipStore:
             "updated_at": datetime.now().isoformat(),
         }
         state["relationship_score"] = self._calculate_relationship_score(state)
+        state.update(self._build_relationship_narrative(state))
         return self._with_derived_fields(state)
 
     def _normalize_legacy_state(self, state: dict) -> dict:
@@ -396,6 +412,10 @@ class RelationshipStore:
         state["relationship_score_100"] = state["relationship_score"]
         state["relationship_level_index"] = self._relationship_level_index(state)
         state["score_scale"] = self.SCORE_SCALE
+        narrative = self._build_relationship_narrative(state)
+        for key, value in narrative.items():
+            if not str(state.get(key) or "").strip():
+                state[key] = value
         return state
 
     def _calculate_relationship_score(self, state: dict) -> float:
@@ -416,6 +436,57 @@ class RelationshipStore:
         if score <= 20:
             return "疏远"
         return self.DEFAULT_STATUS
+
+    def _build_relationship_narrative(self, state: dict, event: dict | None = None) -> dict[str, str]:
+        label = _normalize_stage(state.get("relationship_label")) or self.DEFAULT_LABEL
+        status = str(state.get("relationship_status") or self.DEFAULT_STATUS)
+        tension = _score(state.get("tension_score"), 0)
+        trust = _score(state.get("trust_score"), 0)
+        intimacy = _score(state.get("intimacy_score"), 0)
+        affection = _score(state.get("affection_score"), 0)
+        score = _score(state.get("relationship_score"), self._calculate_relationship_score(state))
+        key_moments = _load_json_list(json.dumps(state.get("key_moments") or [], ensure_ascii=False))
+        open_threads = _load_json_list(json.dumps(state.get("open_emotional_threads") or [], ensure_ascii=False))
+
+        if tension >= 65:
+            posture = "关系里有明显紧张，先放慢、承认感受，不要用玩笑压过去。"
+        elif tension >= 40:
+            posture = "关系里有一点绷，回复要柔和，少做过度亲密推进。"
+        elif label in {"暧昧中", "恋人"} or affection >= 62:
+            posture = "可以保留熟悉和亲近感，但亲密表达要自然，不要为了升温而用力。"
+        elif label == "好朋友" or trust >= 48:
+            posture = "关系有稳定信任，可以像熟人一样承接，但保持分寸。"
+        else:
+            posture = "关系仍在建立，保持轻松、真诚和克制。"
+
+        if open_threads:
+            guidance = f"优先照顾未完成话题：{open_threads[-1]}。"
+        elif tension >= 45:
+            guidance = "先修复情绪，再解释或推进任务。"
+        elif event and event.get("repair_signal"):
+            guidance = "修复刚发生过，回应里要让用户感到被认真接住。"
+        elif label in {"暧昧中", "恋人"}:
+            guidance = "可用少量共同记忆和亲近语气，但不要把关系状态说成报告。"
+        else:
+            guidance = "让关系背景影响语气即可，不主动报数值或阶段。"
+
+        closeness = "还在建立"
+        if score >= 75:
+            closeness = "很亲近"
+        elif score >= 55:
+            closeness = "逐渐亲近"
+        elif score >= 35:
+            closeness = "有基本信任"
+        if tension >= 45:
+            closeness += "，但近期有紧张需要照顾"
+
+        moment_text = f"最近重要时刻：{key_moments[-1]}" if key_moments else "还没有特别明确的共同关键时刻"
+        narrative = f"你们目前像{label}，关系{closeness}；{moment_text}。"
+        return {
+            "relationship_narrative": _compact(narrative, 180),
+            "current_posture": _compact(posture, 140),
+            "interaction_guidance": _compact(guidance, 160),
+        }
 
     def _base_stage_from_scores(self, state: dict) -> str:
         score = _score(state.get("relationship_score"), self._calculate_relationship_score(state))
@@ -610,6 +681,9 @@ class RelationshipStore:
         data["relationship_state"] = {
             "stage": state.get("relationship_label", self.DEFAULT_LABEL),
             "status": state.get("relationship_status", self.DEFAULT_STATUS),
+            "narrative": state.get("relationship_narrative", ""),
+            "current_posture": state.get("current_posture", ""),
+            "interaction_guidance": state.get("interaction_guidance", ""),
             "relationship_score": state.get("relationship_score", 0),
             "intimacy_score": state.get("intimacy_score", 0),
             "trust_score": state.get("trust_score", 0),
@@ -639,6 +713,13 @@ def _load_json_list(value: str | None) -> list[str]:
     if not isinstance(data, list):
         return []
     return [str(item) for item in data if str(item).strip()]
+
+
+def _compact(text: object, limit: int) -> str:
+    clean = " ".join(str(text or "").split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _normalize_stage(label: object) -> str:

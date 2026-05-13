@@ -28,7 +28,17 @@ _project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(_project_root))
 
 
+def _configure_utf8_stdio():
+    """Keep subprocess CLI output decodable across Windows locales."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main():
+    _configure_utf8_stdio()
+
     from ai_companion.main import main as start_main
     from ai_companion.setup import run_setup, run_weixin_setup
     from ai_companion.main import show_status

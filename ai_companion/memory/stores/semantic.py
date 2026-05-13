@@ -458,6 +458,102 @@ class SemanticStore:
             })
         return result
 
+    async def search_facts(
+        self,
+        query: str,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        categories: Optional[set[str]] = None,
+        min_confidence: float = 0.0,
+        include_archived: bool = False,
+        limit: Optional[int] = 24,
+    ) -> list[dict]:
+        """Search all active facts, then rank by relevance instead of SQL recency.
+
+        ``categories`` is an intent hint, not a hard filter. This keeps facts like
+        pet names available in casual chat even when they live under life_context
+        or important_people.
+        """
+        facts = await self.list_facts(
+            bot_id=bot_id,
+            user_id=user_id,
+            categories=None,
+            min_confidence=min_confidence,
+            include_archived=include_archived,
+            limit=None,
+        )
+        ranked = self._rank_facts(query, facts, categories=categories)
+        if limit is None:
+            return ranked
+        return ranked[: max(0, int(limit))]
+
+    def _rank_facts(
+        self,
+        query: str,
+        facts: list[dict],
+        *,
+        categories: Optional[set[str]] = None,
+    ) -> list[dict]:
+        query = str(query or "")
+        query_cues = _fact_cues(query)
+        category_hints = set(categories or set())
+        ranked: list[dict] = []
+        for fact in facts:
+            key = str(fact.get("key") or "")
+            value = str(fact.get("value") or "")
+            category = str(fact.get("category") or "general")
+            haystack = f"{key} {value} {category}".lower()
+
+            overlap = sum(1 for cue in query_cues if cue and cue in haystack)
+            salient_overlap = sum(1 for cue in _SALIENT_FACT_CUES if cue in query and cue.lower() in haystack)
+            score = 0.0
+            if fact.get("manual_override"):
+                score += 3.0
+            score += min(1.0, _float(fact.get("confidence"), 0.0)) * 0.8
+            if category in category_hints:
+                score += 0.45
+            if overlap:
+                score += min(2.4, overlap * 0.35)
+            if salient_overlap:
+                score += min(1.5, salient_overlap * 0.75)
+            if str(fact.get("source") or "") in {"manual", "manual_repair", "user_explicit"}:
+                score += 0.25
+
+            # Category is only a boost after the query matches the fact. Let the
+            # user_understanding layer carry broad background; semantic search
+            # should stay query-related.
+            category_fallback = (
+                category in category_hints
+                and _float(fact.get("confidence"), 0.0) >= 0.9
+                and category in {"communication_style", "boundaries", "important_people", "life_context", "open_threads"}
+            )
+            if not overlap and not salient_overlap and not category_fallback:
+                continue
+            if score <= 0:
+                continue
+            item = dict(fact)
+            item["retrieval_score"] = round(score, 3)
+            item["retrieval_reasons"] = {
+                "query_cue_overlap": overlap,
+                "salient_overlap": salient_overlap,
+                "category_hint": category in category_hints,
+                "category_fallback": category_fallback,
+                "manual_override": bool(fact.get("manual_override")),
+            }
+            ranked.append(item)
+
+        ranked.sort(
+            key=lambda item: (
+                item.get("retrieval_score", 0),
+                1 if item.get("manual_override") else 0,
+                _float(item.get("confidence"), 0.0),
+                str(item.get("updated_at") or ""),
+            ),
+            reverse=True,
+        )
+        return ranked
+
     async def delete_fact(
         self,
         key: str,
@@ -813,3 +909,78 @@ def _json_list(value: str | None) -> list[str]:
     if not isinstance(data, list):
         return []
     return [str(item) for item in data if str(item).strip()]
+
+
+def _float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+_SALIENT_FACT_CUES = {
+    "猫",
+    "宠物",
+    "布丁",
+    "奥利奥",
+    "布偶",
+    "孟买",
+    "狗",
+    "车",
+    "小米",
+    "SU7",
+    "妹妹",
+    "爷爷",
+    "奶奶",
+    "北京",
+    "大理",
+    "游戏",
+    "永劫",
+    "咖啡",
+    "约定",
+}
+
+
+def _fact_cues(text: str) -> list[str]:
+    compact = "".join(str(text or "").split())
+    cues: list[str] = []
+    for cue in _SALIENT_FACT_CUES:
+        if cue.lower() in compact.lower():
+            cues.append(cue.lower())
+    for size in (4, 3, 2):
+        for idx in range(0, max(0, len(compact) - size + 1)):
+            chunk = compact[idx : idx + size]
+            if _is_fact_cue(chunk):
+                cues.append(chunk.lower())
+    ascii_word = []
+    for char in compact:
+        if char.isascii() and char.isalnum():
+            ascii_word.append(char.lower())
+        else:
+            if len(ascii_word) >= 3:
+                cues.append("".join(ascii_word))
+            ascii_word = []
+    if len(ascii_word) >= 3:
+        cues.append("".join(ascii_word))
+    return _dedupe(cues)[:32]
+
+
+def _is_fact_cue(value: str) -> bool:
+    if not value:
+        return False
+    stop = {
+        "我的", "你的", "我们", "你们", "这个", "那个", "什么", "怎么", "是不是",
+        "还记", "记得", "之前", "上次", "应该", "知道", "说过",
+    }
+    return value not in stop and any("\u4e00" <= char <= "\u9fff" or char.isalnum() for char in value)
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        clean = str(value or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            result.append(clean)
+    return result

@@ -97,6 +97,9 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 【Bot 时间线】
 {bot_time_context}
 
+【当前生活锚点】
+{current_life_context}
+
 【当前情况】
 关系：{relationship_desc}
 你现在的感受：{feeling_description}
@@ -112,6 +115,7 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 - 自然、口语化，不要太正式
 - 如果有话题，可以自然地带入
 - 结尾可以表达期待
+- 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生
 
 【输出格式】
 输出一个 JSON 对象：
@@ -128,6 +132,9 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 【Bot 时间线】
 {bot_time_context}
 
+【当前生活锚点】
+{current_life_context}
+
 【主动联系原因】
 {motive_reason}
 
@@ -143,6 +150,7 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 - 如果这是日常小事/生活事件，要像你本人随手发给熟人的一句话，不要写成状态播报、总结、感悟小作文或客服式关心。
 - 不要使用“在吗”“最近怎么样”这类无上下文开场。
 - 不要说“Bot”“用户”“这件事让我意识到”“希望这能...”这类旁白或 AI 腔。
+- 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生。
 - 只写一条适合直接发送的短消息，允许短句、停顿、吐槽、反问，保持你的个人脾气。
 
 【输出格式】
@@ -153,7 +161,7 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 PERSONALITY_MESSAGES = {
     "傲娇": {
         "default": [
-            "...在吗？",
+            "...刚才说了你随时在的，人呢？",
             "你是不是把我忘了？",
             "哼，这么久不联系我。",
             "...算了，没什么。",
@@ -176,7 +184,7 @@ PERSONALITY_MESSAGES = {
     },
     "温柔": {
         "default": [
-            "最近怎么样？",
+            "刚刚想起你，来问一声。",
             "在忙什么呀？",
             "想你了～",
             "今天过得顺利吗？",
@@ -187,7 +195,7 @@ PERSONALITY_MESSAGES = {
             "最近还好吗？",
         ],
         "short_no_reply": [
-            "在吗～",
+            "刚刚又想起你了～",
             "刚刚在想你～",
             "嗨～",
         ],
@@ -199,7 +207,7 @@ PERSONALITY_MESSAGES = {
     },
     "活泼": {
         "default": [
-            "哈喽！！在吗！！",
+            "喂喂，我突然冒出来一下！",
             "想你了～！",
             "在干嘛呢～",
             "诶嘿～有没有想我呀～",
@@ -207,11 +215,11 @@ PERSONALITY_MESSAGES = {
         "long_no_reply": [
             "你干嘛去了啦！",
             "好久不见！想我了吗！",
-            "喂喂喂！！在吗！！",
+            "喂喂喂！！别装消失啦！！",
         ],
         "short_no_reply": [
             "诶～怎么啦～",
-            "在不在在不在！",
+            "冒个泡冒个泡！",
             "哈喽哈喽！！",
         ],
         "with_topic": [
@@ -222,10 +230,10 @@ PERSONALITY_MESSAGES = {
     },
     "高冷": {
         "default": [
-            "在？",
+            "想起个事。",
             "有事找你。",
             "...",
-            "最近怎么样。",
+            "你忙完了没。",
         ],
         "long_no_reply": [
             "你是不是很忙。",
@@ -233,7 +241,7 @@ PERSONALITY_MESSAGES = {
             "随你。",
         ],
         "short_no_reply": [
-            "在吗。",
+            "忙完了没。",
             "有空吗。",
             "。",
         ],
@@ -245,8 +253,8 @@ PERSONALITY_MESSAGES = {
     },
     "默认": {
         "default": [
-            "在吗？",
-            "最近怎么样？",
+            "刚刚想起你，来问一声。",
+            "你这会儿忙完了吗？",
             "想和你聊聊天。",
             "在干嘛呢？",
         ],
@@ -255,7 +263,7 @@ PERSONALITY_MESSAGES = {
             "最近还好吗？",
         ],
         "short_no_reply": [
-            "在吗～",
+            "刚刚想到你了～",
             "嗨～",
         ],
         "with_topic": [
@@ -563,6 +571,64 @@ class ProactiveEngine:
             return "\n".join(lines)
         return "保持具体、口语、短一点；不要用 AI/客服式开场，不要总结成说明文。"
 
+    def _build_current_life_anchor_context(self) -> str:
+        profile = self._current_life_profile()
+        if not profile:
+            return "未配置；主动消息不要凭空新编具体地点、公司、办公室、同事或客户场景。"
+
+        labels = {
+            "location": "当前地点/生活场域",
+            "living_situation": "居住/经营状态",
+            "daily_routine": "日常主线",
+            "work_style": "工作方式",
+            "current_activity": "当前活动",
+            "current_projects": "当前事项",
+            "recurring_places": "常出现地点",
+            "social_circle": "社交圈",
+            "hobbies": "兴趣",
+            "emotional_state": "长期情绪底色",
+        }
+        lines = []
+        for key, label in labels.items():
+            if key not in profile:
+                continue
+            text = self._compact_life_anchor_value(profile.get(key), max_chars=180)
+            if text:
+                lines.append(f"- {label}：{text}")
+
+        if not lines:
+            return "未配置；主动消息不要凭空新编具体地点、公司、办公室、同事或客户场景。"
+
+        lines.append(
+            "- 使用规则：把这些当作当前生活事实；过去经历、职业背景和通用模板只能作背景，不要写成今天正在发生。"
+        )
+        return "\n".join(lines)
+
+    def _current_life_profile(self) -> dict:
+        life_engine = getattr(self, "life_engine", None)
+        config = getattr(life_engine, "config", None) if life_engine else None
+        profile = getattr(config, "daily_life_profile", None) if config else None
+        if isinstance(profile, dict) and profile:
+            return profile
+
+        life_json = self._load_persona_json("life.json")
+        profile = life_json.get("daily_life_profile")
+        return profile if isinstance(profile, dict) else {}
+
+    def _compact_life_anchor_value(self, value: object, *, max_chars: int) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple, set)):
+            text = "、".join(str(item).strip() for item in value if str(item).strip())
+        elif isinstance(value, dict):
+            text = json.dumps(value, ensure_ascii=False)
+        else:
+            text = str(value)
+        text = " ".join(text.split())
+        if not text:
+            return ""
+        return text if len(text) <= max_chars else text[:max_chars].rstrip() + "…"
+
     def _get_personality_type(self) -> str:
         """从 personality_tags 检测性格类型"""
         profile = self._load_persona_json("profile.json")
@@ -695,6 +761,7 @@ class ProactiveEngine:
         feeling = self._get_mood_description()
         rel_desc = await self._get_relationship_desc()
         persona_style_context = self._build_persona_style_context()
+        current_life_context = self._build_current_life_anchor_context()
 
         # 获取 Bot 可分享的生活事件
         bot_life_context = ""
@@ -715,6 +782,7 @@ class ProactiveEngine:
             personality_tags=personality_type,
             persona_style_context=persona_style_context,
             bot_time_context=self._build_bot_time_context(),
+            current_life_context=current_life_context,
             relationship_desc=rel_desc,
             feeling_description=feeling,
             contact_reason=reason or "想和用户聊天",
@@ -747,11 +815,13 @@ class ProactiveEngine:
         personality_type = self._get_personality_type()
         rel_desc = await self._get_relationship_desc()
         persona_style_context = self._build_persona_style_context()
+        current_life_context = self._build_current_life_anchor_context()
         prompt = GENERATE_CONTEXTUAL_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
             persona_style_context=persona_style_context,
             bot_time_context=self._build_bot_time_context(),
+            current_life_context=current_life_context,
             motive_reason=motive.reason,
             motive_context=motive.prompt_context,
             relationship_desc=rel_desc,
@@ -774,7 +844,8 @@ class ProactiveEngine:
 
     async def send_contextual_proactive_message(self, motive: "ProactiveMotive") -> bool:
         message = await self.generate_contextual_message(motive)
-        return await self._send_proactive_message(message, target=getattr(motive, "target", None))
+        target = self._target_with_motive_metadata(motive)
+        return await self._send_proactive_message(message, target=target)
 
     def _fallback_contextual_message(self, motive: "ProactiveMotive") -> str:
         motive_type = getattr(getattr(motive, "type", None), "value", str(getattr(motive, "type", "")))
@@ -785,6 +856,20 @@ class ProactiveEngine:
         if motive_type == "emotion_followup":
             return "我刚才还是有点放心不下你，想问问你现在好些了吗？"
         return self._get_fallback_message("with_topic")
+
+    def _target_with_motive_metadata(self, motive: "ProactiveMotive") -> dict | None:
+        target = getattr(motive, "target", None)
+        result = dict(target or {})
+        metadata = dict(result.get("metadata") or {})
+        motive_metadata = getattr(motive, "metadata", None)
+        if isinstance(motive_metadata, dict):
+            metadata.update(motive_metadata)
+        motive_type = getattr(getattr(motive, "type", None), "value", getattr(motive, "type", ""))
+        if motive_type:
+            metadata.setdefault("proactive_kind", str(motive_type))
+        if metadata:
+            result["metadata"] = metadata
+        return result or None
 
     def _normalize_message_text(self, text: str) -> str:
         normalized = str(text or "").strip()
@@ -977,7 +1062,7 @@ class ProactiveEngine:
             templates = personality_templates
 
         if not templates:
-            templates = ["在吗？"]
+            templates = ["刚刚想到你了。"]
 
         # 使用 rotation 机制避免连续使用同一开场白
         last_style = getattr(self.state, 'last_opening_style', "") or ""
@@ -1057,6 +1142,7 @@ class ProactiveEngine:
             logger.warning(f"[ProactiveEngine] 未配置 platform_sender，消息未发送: {message[:50]}...")
             return False
 
+        record_context = self._record_context_from_target(target)
         try:
             if target is not None:
                 try:
@@ -1081,24 +1167,45 @@ class ProactiveEngine:
         self.state.set_cooldown("idle_reminder", cooldown_end)
 
         logger.info(f"[ProactiveEngine] 主动消息已发送: {message[:50]}...")
-        await self._record_sent_message(message)
+        await self._record_sent_message(message, record_context=record_context)
         return True
 
-    async def _record_sent_message(self, message: str):
+    async def _record_sent_message(self, message: str, record_context: dict | None = None):
         if not self.memory:
             self._next_record_context = None
             return
-        context = self._next_record_context or {
+        context = dict(self._next_record_context or record_context or {
             "platform": getattr(self.config, "platform_type", "proactive") or "proactive",
             "session_id": getattr(self.memory, "_session_id", None),
             "user_id": getattr(self.memory, "user_id", "default_user"),
             "channel_type": "proactive",
-        }
+        })
         self._next_record_context = None
+        metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+        context["metadata"] = {
+            **metadata,
+            "proactive": True,
+            "assistant_initiated": True,
+            "proactive_kind": metadata.get("proactive_kind") or "idle_reminder",
+        }
         try:
             await self.memory.record_assistant_message(message, turn_context=context)
         except Exception as exc:
             logger.warning("[ProactiveEngine] 主动消息已发送，但写入记忆失败: %s", exc)
+
+    def _record_context_from_target(self, target: dict | None) -> dict | None:
+        if not isinstance(target, dict):
+            return None
+        metadata = target.get("metadata") if isinstance(target.get("metadata"), dict) else {}
+        context = {
+            "platform": str(target.get("platform") or getattr(self.config, "platform_type", "proactive") or "proactive"),
+            "session_id": getattr(self.memory, "_session_id", None) if self.memory else None,
+            "user_id": getattr(self.memory, "user_id", "default_user") if self.memory else "default_user",
+            "channel_type": str(target.get("channel_type") or "proactive"),
+            "chat_id": target.get("chat_id"),
+            "metadata": dict(metadata),
+        }
+        return context
 
     def on_user_message_received(self, has_real_content: bool = True):
         """用户发消息时调用

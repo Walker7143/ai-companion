@@ -76,6 +76,7 @@ Bot 出生天数：{bot_age_days} 天
    - 职场人有加班、项目完成、职业发展
    - 夏天可能游泳、晒黑、空调病
    - 冬天可能滑雪、感冒、年终总结
+   - 但当前生活画像优先级最高；地点、工作方式、日常主线必须服从“生活画像”
 3. 只有有情绪波动、有意义的事才生成
 4. 如果 Bot 状态平稳，输出空数组 []
 5. 生成的事件 importance 在 1-10 之间
@@ -85,6 +86,7 @@ Bot 出生天数：{bot_age_days} 天
    禁止使用“状态更稳定了”“有一些变化”这类抽象空话。
 8. 不要复用“近期禁止复用的场景 key”；如果只能想到这些场景，输出空数组 []。
 9. scenario_key 必须从“本次可选场景 key”里选择，除非确实需要输出空数组。
+10. 如果生活画像没有公司、办公室、同事、通勤等当前设定，不要生成这些通用职场/城市通勤事件；可以输出空数组。
 
 【输出格式】
 输出一个 JSON 数组，每个元素如下：
@@ -2008,6 +2010,9 @@ class LifeEngine:
         allowed = [
             "city_type", "commute_mode", "living_status", "work_style",
             "hobbies", "family_contact_style", "social_style",
+            "location", "daily_routine", "living_situation", "emotional_state",
+            "current_activity", "current_projects", "recurring_places",
+            "social_circle",
         ]
         compact = {key: profile.get(key) for key in allowed if profile.get(key)}
         return json.dumps(compact, ensure_ascii=False) if compact else "未配置"
@@ -2062,7 +2067,32 @@ class LifeEngine:
         for tag in item.get("life_tags", []) or []:
             if str(tag) and str(tag) in profile_text:
                 multiplier += 0.35
+        multiplier *= self._current_life_anchor_multiplier(item, profile_text)
         return max(0.0, min(multiplier, 4.0))
+
+    def _current_life_anchor_multiplier(self, item: dict[str, Any], profile_text: str) -> float:
+        """Keep generic daily events from drifting away from the configured current life."""
+        text = profile_text or ""
+        category = str(item.get("category", ""))
+        tags = " ".join(str(tag) for tag in item.get("life_tags", []) or [])
+        combined = f"{category} {tags}"
+
+        workish = category in {"work", "work_social", "commute"} or any(
+            token in combined for token in ("办公室", "通勤", "同事", "项目", "远程办公", "混合办公")
+        )
+        has_work_anchor = any(
+            token in text for token in ("公司", "办公室", "同事", "通勤", "项目", "远程办公", "混合办公")
+        )
+        if workish and not has_work_anchor:
+            return 0.0
+
+        if "客栈" in text or "大理" in text:
+            if category in {"commute", "work_social"}:
+                return 0.05
+            if category in {"city", "food", "weather", "social", "hobby", "home"}:
+                return 1.4
+
+        return 1.0
 
     def _render_scenario_description(self, scenario: dict[str, Any]) -> str:
         if self._should_sync_realtime_with_local_time():

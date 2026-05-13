@@ -294,30 +294,51 @@ export function Memory() {
           emptyIcon={<Brain style={{ width: 48, height: 48, color: 'var(--text-muted)', opacity: 0.5 }} />}
           emptyText="情景记忆为空"
         >
-          {episodicMemory.map((item) => (
-            <div key={item.id} style={{ padding: 16, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  {getImportanceStars(item.importance)}
-                  {typeof item.confidence === 'number' && <Badge variant="info">置信度 {(item.confidence * 100).toFixed(0)}%</Badge>}
-                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{new Date(item.created_at).toLocaleDateString('zh-CN')}</span>
+          {episodicMemory.map((item) => {
+            const cueTags = parseList(item.cue_tags_json);
+            const topics = parseList(item.topics_json);
+            const emotionTags = parseList(item.emotion_tags_json);
+            return (
+              <div key={item.id} style={{ padding: 16, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    {getImportanceStars(item.importance)}
+                    {typeof item.confidence === 'number' && <Badge variant="info">置信度 {(item.confidence * 100).toFixed(0)}%</Badge>}
+                    {item.relationship_effect && item.relationship_effect !== '普通' && <Badge variant="warning">{item.relationship_effect}</Badge>}
+                    {item.sensitivity === 'sensitive' && <Badge variant="error">敏感</Badge>}
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{new Date(item.created_at).toLocaleDateString('zh-CN')}</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setDeleteTarget({ type: 'episodic', id: item.id });
+                      setDeleteModalOpen(true);
+                    }}
+                    style={{ padding: 4 }}
+                  >
+                    <Trash2 style={{ width: 14, height: 14 }} />
+                  </Button>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setDeleteTarget({ type: 'episodic', id: item.id });
-                    setDeleteModalOpen(true);
-                  }}
-                  style={{ padding: 4 }}
-                >
-                  <Trash2 style={{ width: 14, height: 14 }} />
-                </Button>
+                <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 4 }}>{item.summary}</p>
+                <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{item.content}</p>
+                {(cueTags.length > 0 || topics.length > 0 || emotionTags.length > 0 || item.recall_style) && (
+                  <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+                    {(cueTags.length > 0 || topics.length > 0 || emotionTags.length > 0) && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {cueTags.slice(0, 5).map((tag) => <Badge key={`cue-${item.id}-${tag}`}>{tag}</Badge>)}
+                        {topics.slice(0, 3).map((topic) => <Badge key={`topic-${item.id}-${topic}`} variant="info">{topic}</Badge>)}
+                        {emotionTags.slice(0, 3).map((tag) => <Badge key={`emotion-${item.id}-${tag}`} variant="success">{tag}</Badge>)}
+                      </div>
+                    )}
+                    {item.recall_style && (
+                      <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>使用方式：{item.recall_style}</p>
+                    )}
+                  </div>
+                )}
               </div>
-              <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-primary)', marginBottom: 4 }}>{item.summary}</p>
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{item.content}</p>
-            </div>
-          ))}
+            );
+          })}
         </MemoryListCard>
       )}
 
@@ -358,11 +379,20 @@ export function Memory() {
                 {(() => {
                   const relationship = semanticMemory.relationship_state ?? {};
                   return (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 14 }}>
-                      <RelationshipMetric label="亲密" value={scoreValue(relationship.intimacy_score)} tone="var(--accent)" />
-                      <RelationshipMetric label="信任" value={scoreValue(relationship.trust_score)} tone="var(--success)" />
-                      <RelationshipMetric label="心动/好感" value={scoreValue(relationship.affection_score ?? relationship.attitude_score)} tone="var(--error)" />
-                      <RelationshipMetric label="紧张" value={scoreValue(relationship.tension_score)} tone="var(--warning)" />
+                    <div style={{ display: 'grid', gap: 14 }}>
+                      {(relationship.relationship_narrative || relationship.current_posture || relationship.interaction_guidance) && (
+                        <div style={{ display: 'grid', gap: 8, padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
+                          {relationship.relationship_narrative && <p style={{ fontSize: 14, color: 'var(--text-primary)' }}>{relationship.relationship_narrative}</p>}
+                          {relationship.current_posture && <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>当前姿态：{relationship.current_posture}</p>}
+                          {relationship.interaction_guidance && <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>互动建议：{relationship.interaction_guidance}</p>}
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 14 }}>
+                        <RelationshipMetric label="亲密" value={scoreValue(relationship.intimacy_score)} tone="var(--accent)" />
+                        <RelationshipMetric label="信任" value={scoreValue(relationship.trust_score)} tone="var(--success)" />
+                        <RelationshipMetric label="心动/好感" value={scoreValue(relationship.affection_score ?? relationship.attitude_score)} tone="var(--error)" />
+                        <RelationshipMetric label="紧张" value={scoreValue(relationship.tension_score)} tone="var(--warning)" />
+                      </div>
                     </div>
                   );
                 })()}

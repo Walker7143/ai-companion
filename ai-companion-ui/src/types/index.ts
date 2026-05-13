@@ -103,6 +103,12 @@ export interface EpisodicItem {
   content: string;
   importance: number;
   confidence?: number;
+  relationship_effect?: string;
+  sensitivity?: string;
+  recall_style?: string;
+  cue_tags_json?: string | null;
+  topics_json?: string | null;
+  emotion_tags_json?: string | null;
   created_at: string;
   session_id?: string;
   related_session?: string;
@@ -140,6 +146,9 @@ export interface SemanticMemory {
 export interface RelationshipState {
   relationship_label?: string;
   relationship_status?: string;
+  relationship_narrative?: string;
+  current_posture?: string;
+  interaction_guidance?: string;
   relationship_score?: number;
   attitude_score?: number;
   intimacy_score?: number;
@@ -161,10 +170,17 @@ export interface DebugContextPayload {
   bot_id: string;
   last_context: {
     system_prompt: string;
-    memory_suffix: Record<string, unknown>;
+    memory_suffix: string | Record<string, unknown>;
+    system_suffix?: string;
+    memory_prompt_diagnostics?: Record<string, unknown>;
     working_history: Message[];
     retrieved_memory: Record<string, unknown>;
     response_style_trace: Record<string, unknown>;
+    conscious_context?: Record<string, unknown>;
+    memory_intent?: string;
+    relationship_state?: Record<string, unknown>;
+    daily_context?: Record<string, unknown>;
+    user_understanding?: Record<string, unknown>;
   };
 }
 

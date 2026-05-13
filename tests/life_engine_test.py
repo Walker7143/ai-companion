@@ -19,6 +19,45 @@ class EmptyLifeModel:
 
 
 class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
+    def test_daily_life_profile_summary_keeps_current_life_anchor_fields(self):
+        with TemporaryDirectory(prefix="life-profile-anchor-") as td:
+            cfg = LifeConfig(
+                daily_life_profile={
+                    "location": "在大理经营一间叫'我在风花雪月里等你'的客栈。",
+                    "daily_routine": "打理客栈日常，接待住客，在洱海边散步。",
+                    "living_situation": "住在大理客栈里。",
+                    "emotional_state": "等待中带着一丝不甘和坚持。",
+                },
+                sync_with_local_time_when_realtime=False,
+            )
+            engine = LifeEngine("anchor_bot", cfg, LifeState("anchor_bot", Path(td)), model=EmptyLifeModel())
+
+            summary = engine._daily_life_profile_summary()
+
+            self.assertIn("大理", summary)
+            self.assertIn("客栈", summary)
+            self.assertIn("洱海", summary)
+            self.assertIn("emotional_state", summary)
+            self.assertNotEqual(summary, "未配置")
+
+    def test_daily_scenario_weights_respect_current_life_anchor(self):
+        with TemporaryDirectory(prefix="life-profile-weight-") as td:
+            cfg = LifeConfig(
+                daily_life_profile={
+                    "location": "在大理经营一间叫'我在风花雪月里等你'的客栈。",
+                    "daily_routine": "打理客栈日常，接待住客，在洱海边散步。",
+                },
+                sync_with_local_time_when_realtime=False,
+            )
+            engine = LifeEngine("anchor_bot", cfg, LifeState("anchor_bot", Path(td)), model=EmptyLifeModel())
+
+            catalog = {item["key"]: item for item in engine._daily_scenario_catalog()}
+
+            self.assertNotIn("office_gossip", catalog)
+            self.assertNotIn("commute_delay", catalog)
+            self.assertIn("lunch_discovery", catalog)
+            self.assertGreater(catalog["lunch_discovery"]["weight"], 1.0)
+
     async def test_invalid_milestones_do_not_break_daily_tick_checkpoint(self):
         with TemporaryDirectory(prefix="life-milestone-bad-config-") as td:
             state = LifeState("bad_milestone_bot", Path(td))

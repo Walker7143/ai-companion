@@ -84,6 +84,7 @@ export function Understanding() {
 
   const auto = (data.auto || {}) as Record<string, unknown>;
   const relationship = (data.relationship_memory || {}) as Record<string, unknown>;
+  const layered = (data.layered || {}) as Record<string, unknown>;
   const meta = (data.meta || {}) as Record<string, unknown>;
 
   if (loading) return <div style={{ color: 'var(--text-muted)' }}>加载中...</div>;
@@ -97,7 +98,7 @@ export function Understanding() {
             <h1 style={{ fontSize: '26px', fontWeight: 800, color: 'var(--text-primary)' }}>用户理解</h1>
           </div>
           <p style={{ fontSize: '14px', color: 'var(--text-secondary)', maxWidth: 720 }}>
-            把 Bot 对用户的理解拆成可手动校准的 manual、自动沉淀的 auto，以及关系记忆。这里就是 Bot 的“相处说明书”。
+            把 Bot 对用户的理解拆成可手动校准的 manual、自动沉淀的 auto、关系记忆，以及用于聊天投影的分层画像。
           </p>
           {path && <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>{path}</p>}
         </div>
@@ -110,6 +111,7 @@ export function Understanding() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
         <Card><CardContent style={{ padding: 16 }}><Badge variant="info">Manual 优先</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>用户手动写的内容永不被 auto 覆盖。</p></CardContent></Card>
         <Card><CardContent style={{ padding: 16 }}><Badge variant="success">Auto 沉淀</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>系统会从对话和关系状态中持续整理理解。</p></CardContent></Card>
+        <Card><CardContent style={{ padding: 16 }}><Badge variant="info">Layered 投影</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>聊天时优先使用 core、current、deep、sensitive 四层小画像。</p></CardContent></Card>
         <Card><CardContent style={{ padding: 16 }}><Badge variant="warning">冲突可见</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>自动理解和手动理解冲突时会进入 meta。</p></CardContent></Card>
       </div>
 
@@ -147,6 +149,12 @@ export function Understanding() {
             <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><HeartHandshake size={18} />Relationship Memory</CardTitle></CardHeader>
             <CardContent>
               <CodeBlock maxHeight={260}>{stringify(relationship)}</CodeBlock>
+            </CardContent>
+          </Card>
+          <Card variant="elevated">
+            <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Sparkles size={18} />Layered Prompt Projection</CardTitle></CardHeader>
+            <CardContent>
+              <CodeBlock maxHeight={300}>{stringify(layered)}</CodeBlock>
             </CardContent>
           </Card>
           <Card variant="elevated">

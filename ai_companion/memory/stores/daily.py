@@ -286,7 +286,7 @@ class DailyMemoryStore:
             dict(row)
             for row in conn.execute(
                 f"""
-                SELECT local_date, created_at, platform, session_id, role, content
+                SELECT local_date, created_at, platform, session_id, role, content, metadata_json
                 FROM daily_messages
                 WHERE bot_id = ? AND user_id = ? AND archived = 0
                   {session_filter}
@@ -296,13 +296,30 @@ class DailyMemoryStore:
                 tuple(message_params),
             ).fetchall()
         ]
+        self_memory = [
+            _row_to_self_memory(row)
+            for row in conn.execute(
+                """
+                SELECT local_date, created_at, platform, session_id, role, content, metadata_json
+                FROM daily_messages
+                WHERE bot_id = ? AND user_id = ? AND archived = 0
+                  AND role = 'assistant'
+                  AND metadata_json IS NOT NULL
+                ORDER BY id DESC
+                LIMIT 8
+                """,
+                (bot_id, user_id),
+            ).fetchall()
+        ]
         conn.close()
 
         messages = list(reversed(messages))
+        self_memory = [item for item in self_memory if item]
         context = {
             "today": today,
             "summaries": summaries,
             "recent_messages": messages,
+            "self_memory": self_memory,
         }
         return self._trim_context(context, max_chars=self._prompt_limit_for_intent(intent))
 
@@ -546,6 +563,8 @@ class DailyMemoryStore:
             context["recent_messages"].pop(0)
         while size(context) > max_chars and context.get("summaries"):
             context["summaries"].pop()
+        while size(context) > max_chars and context.get("self_memory"):
+            context["self_memory"].pop()
         return context
 
 
@@ -582,6 +601,36 @@ def _row_to_summary(row) -> dict[str, Any]:
         "updated_at": row["updated_at"],
         "message_count": row["message_count"],
     }
+
+
+def _row_to_self_memory(row) -> dict[str, Any] | None:
+    metadata = _loads_dict(row["metadata_json"])
+    if not metadata:
+        return None
+    if not (metadata.get("assistant_initiated") or metadata.get("proactive")):
+        return None
+    content = str(row["content"] or "").strip()
+    if not content:
+        return None
+    return {
+        "local_date": row["local_date"],
+        "created_at": row["created_at"],
+        "platform": row["platform"] or "unknown",
+        "session_id": row["session_id"],
+        "content": content,
+        "kind": metadata.get("proactive_kind") or metadata.get("kind") or "assistant_initiated",
+        "metadata": metadata,
+    }
+
+
+def _loads_dict(value: object) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        data = json.loads(str(value))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _parse_json_object(raw: str) -> dict[str, Any]:

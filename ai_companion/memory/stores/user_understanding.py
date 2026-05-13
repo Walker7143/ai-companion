@@ -25,6 +25,7 @@ class UserUnderstandingStore:
 
     SECTIONS = (
         "preferences",
+        "dislikes",
         "communication_style",
         "boundaries",
         "important_people",
@@ -40,6 +41,7 @@ class UserUnderstandingStore:
             "identity": {},
             "facts": {},
             "preferences": [],
+            "dislikes": [],
             "communication_style": [],
             "boundaries": [],
             "relationship_expectations": [],
@@ -59,6 +61,7 @@ class UserUnderstandingStore:
             "profile_summary": "",
             "facts": {},
             "preferences": [],
+            "dislikes": [],
             "communication_style": [],
             "boundaries": [],
             "important_people": [],
@@ -90,6 +93,41 @@ class UserUnderstandingStore:
             "things_that_created_tension": [],
             "repair_preferences": [],
         },
+        "layered": {
+            "core": {
+                "summary": "",
+                "identity": {},
+                "facts": {},
+                "preferences": [],
+                "dislikes": [],
+                "communication_style": [],
+                "boundaries": [],
+                "relationship_expectations": [],
+            },
+            "current": {
+                "current_context": [],
+                "open_threads": [],
+                "goals_and_projects": [],
+                "recent_changes": [],
+                "stressors": [],
+                "routines": [],
+            },
+            "deep": {
+                "personality_observations": [],
+                "emotional_patterns": [],
+                "comfort_strategies": [],
+                "attachment_and_distance": [],
+                "values_and_principles": [],
+                "life_context": [],
+                "relationship_memory": {},
+            },
+            "sensitive": {
+                "topics": [],
+                "guidance": [],
+                "source_keys": [],
+            },
+            "generated_at": None,
+        },
         "meta": {
             "confidence_notes": [],
             "contradictions": [],
@@ -99,6 +137,7 @@ class UserUnderstandingStore:
         "summary": "",
         "facts": {},
         "preferences": [],
+        "dislikes": [],
         "communication_style": [],
         "boundaries": [],
         "important_people": [],
@@ -280,9 +319,11 @@ class UserUnderstandingStore:
     ):
         data = self.load()
         manual = data.setdefault("manual", self._empty_section())
-        auto = self._empty_section(include_refresh=True)
+        auto = self._normalize_section(data.get("auto"), include_refresh=True)
         relationship_memory = self._normalize_relationship_memory(data.get("relationship_memory"))
-        meta = self._empty_meta()
+        meta = self._normalize_meta(data.get("meta"))
+        meta["confidence_notes"] = []
+        meta["contradictions"] = []
 
         manual_fact_keys = set(self._clean_dict(manual.get("facts")).keys())
         manual_lists = {
@@ -335,6 +376,8 @@ class UserUnderstandingStore:
                 auto.setdefault("facts", {})[key] = value
             elif category in {"preferences"}:
                 self._append_unique(auto["preferences"], value)
+            elif category in {"dislikes"}:
+                self._append_unique(auto["dislikes"], value)
             elif category in {"important_people"}:
                 self._append_unique(auto["important_people"], value)
             else:
@@ -344,6 +387,15 @@ class UserUnderstandingStore:
 
         if relationship:
             label = str(relationship.get("relationship_label") or "").strip()
+            narrative = str(relationship.get("relationship_narrative") or "").strip()
+            posture = str(relationship.get("current_posture") or "").strip()
+            guidance = str(relationship.get("interaction_guidance") or "").strip()
+            if narrative:
+                self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], narrative)
+            if posture:
+                self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], posture)
+            if guidance:
+                self._append_unique(relationship_memory["repair_preferences"], guidance)
             if label:
                 self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], f"当前关系标签：{label}")
             if _float(relationship.get("tension_score"), 0) >= 45:
@@ -420,6 +472,7 @@ class UserUnderstandingStore:
 
         for key, title in [
             ("preferences", "用户手动设定的偏好"),
+            ("dislikes", "用户手动设定的不喜欢/避开的事"),
             ("communication_style", "用户手动设定的沟通方式"),
             ("boundaries", "用户手动设定的边界"),
             ("relationship_expectations", "用户手动设定的关系期待"),
@@ -487,6 +540,7 @@ class UserUnderstandingStore:
 
         for key, title in [
             ("preferences", "自动补充的用户偏好"),
+            ("dislikes", "自动补充的不喜欢/避开的事"),
             ("communication_style", "自动补充的沟通方式"),
             ("boundaries", "自动补充的边界和雷区"),
             ("important_people", "自动补充的重要关系"),
@@ -571,6 +625,7 @@ class UserUnderstandingStore:
             normalized["updated_at"] = data.get("updated_at")
 
         normalized["version"] = 3
+        normalized["layered"] = self._build_layered_projection(normalized)
         return self._with_compat_aliases(normalized)
 
     def _normalize_section(self, value: Any, include_refresh: bool = False) -> dict[str, Any]:
@@ -597,6 +652,7 @@ class UserUnderstandingStore:
             "identity": {},
             "facts": {},
             "preferences": [],
+            "dislikes": [],
             "communication_style": [],
             "boundaries": [],
             "relationship_expectations": [],
@@ -634,6 +690,107 @@ class UserUnderstandingStore:
             for key in self.RELATIONSHIP_SECTIONS:
                 result[key] = self._clean_list(value.get(key))
         return result
+
+    def _build_layered_projection(self, data: dict[str, Any]) -> dict[str, Any]:
+        manual = data.get("manual") if isinstance(data.get("manual"), dict) else self._empty_section()
+        auto = data.get("auto") if isinstance(data.get("auto"), dict) else self._empty_section(include_refresh=True)
+        relationship = self._normalize_relationship_memory(data.get("relationship_memory"))
+
+        core = {
+            "summary": self._trim_layer_text(manual.get("summary") or auto.get("profile_summary") or "", 360),
+            "identity": self._layer_dict(manual.get("identity"), auto.get("identity"), limit=8),
+            "facts": self._layer_dict(manual.get("facts"), auto.get("facts"), limit=10),
+            "preferences": self._layer_list(manual.get("preferences"), auto.get("preferences"), limit=8),
+            "dislikes": self._layer_list(manual.get("dislikes"), auto.get("dislikes"), limit=8),
+            "communication_style": self._layer_list(manual.get("communication_style"), auto.get("communication_style"), limit=8),
+            "boundaries": self._layer_list(manual.get("boundaries"), auto.get("boundaries"), limit=8),
+            "relationship_expectations": self._layer_list(manual.get("relationship_expectations"), [], limit=6),
+        }
+        current = {
+            "current_context": self._layer_list(manual.get("current_context"), auto.get("current_context"), limit=8),
+            "open_threads": self._layer_list(manual.get("open_threads"), auto.get("open_threads"), limit=8),
+            "goals_and_projects": self._layer_list(manual.get("goals_and_projects"), auto.get("goals_and_projects"), limit=8),
+            "recent_changes": self._layer_list(manual.get("recent_changes"), auto.get("recent_changes"), limit=8),
+            "stressors": self._layer_list(manual.get("stressors"), auto.get("stressors"), limit=8),
+            "routines": self._layer_list(manual.get("routines"), auto.get("routines"), limit=6),
+        }
+        deep_relationship = {
+            key: self._layer_list(relationship.get(key), [], limit=8)
+            for key in self.RELATIONSHIP_SECTIONS
+        }
+        deep = {
+            "personality_observations": self._layer_list(manual.get("personality_observations"), auto.get("personality_observations"), limit=6),
+            "emotional_patterns": self._layer_list(manual.get("emotional_patterns"), auto.get("emotional_patterns"), limit=8),
+            "comfort_strategies": self._layer_list(manual.get("comfort_strategies"), auto.get("comfort_strategies"), limit=8),
+            "attachment_and_distance": self._layer_list(manual.get("attachment_and_distance"), auto.get("attachment_and_distance"), limit=6),
+            "values_and_principles": self._layer_list(manual.get("values_and_principles"), auto.get("values_and_principles"), limit=6),
+            "life_context": self._layer_list(manual.get("life_context"), auto.get("life_context"), limit=6),
+            "relationship_memory": deep_relationship,
+        }
+        sensitive = self._build_sensitive_projection(
+            {
+                "manual": manual,
+                "auto": auto,
+                "relationship_memory": relationship,
+                "core": core,
+                "current": current,
+                "deep": deep,
+            }
+        )
+        return {
+            "core": core,
+            "current": current,
+            "deep": deep,
+            "sensitive": sensitive,
+            "generated_at": datetime.now().isoformat(),
+        }
+
+    def _layer_dict(self, manual_value: Any, auto_value: Any, *, limit: int) -> dict[str, str]:
+        result = {}
+        for source in (self._clean_dict(manual_value), self._clean_dict(auto_value)):
+            for key, value in source.items():
+                if key not in result:
+                    result[key] = self._trim_layer_text(value, 180)
+        return dict(list(result.items())[:limit])
+
+    def _layer_list(self, manual_value: Any, auto_value: Any, *, limit: int) -> list[str]:
+        items: list[str] = []
+        for source in (self._clean_list(auto_value), self._clean_list(manual_value)):
+            for item in source:
+                clean = self._trim_layer_text(item, 220)
+                if clean and clean not in items:
+                    items.append(clean)
+        return items[-limit:]
+
+    def _trim_layer_text(self, value: Any, limit: int) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) > limit:
+            return text[: max(0, limit - 3)].rstrip() + "..."
+        return text
+
+    def _build_sensitive_projection(self, layered_source: dict[str, Any]) -> dict[str, list[str]]:
+        topics: list[str] = []
+        guidance: list[str] = []
+        source_keys: list[str] = []
+        for path, value in _walk_values(layered_source):
+            text = str(value or "")
+            matched = [keyword for keyword in _SENSITIVE_KEYWORDS if keyword in text]
+            if not matched:
+                continue
+            for keyword in matched:
+                if keyword not in topics:
+                    topics.append(keyword)
+            source_key = ".".join(path)
+            if source_key not in source_keys:
+                source_keys.append(source_key)
+        if topics:
+            guidance.append("涉及身体、创伤、家庭、前任或隐私的话题，只在用户主动提起或高度相关时使用。")
+            guidance.append("不要直接复述敏感事实；先确认用户是否愿意继续，并保持模糊、轻放。")
+        return {
+            "topics": topics[:12],
+            "guidance": guidance,
+            "source_keys": source_keys[:12],
+        }
 
     def _normalize_meta(self, value: Any) -> dict[str, Any]:
         result = self._empty_meta()
@@ -696,6 +853,7 @@ class UserUnderstandingStore:
             "identity",
             "facts",
             "preferences",
+            "dislikes",
             "communication_style",
             "boundaries",
             "relationship_expectations",
@@ -753,6 +911,7 @@ class UserUnderstandingStore:
             "identity",
             "facts",
             "preferences",
+            "dislikes",
             "communication_style",
             "boundaries",
             "relationship_expectations",
@@ -771,10 +930,12 @@ class UserUnderstandingStore:
             "manual",
             "auto",
             "relationship_memory",
+            "layered",
             "meta",
             "summary",
             "facts",
             "preferences",
+            "dislikes",
             "communication_style",
             "boundaries",
             "important_people",
@@ -885,3 +1046,36 @@ def _float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+_SENSITIVE_KEYWORDS = (
+    "身体",
+    "隐私",
+    "疾病",
+    "病",
+    "创伤",
+    "自伤",
+    "自杀",
+    "霸凌",
+    "骚扰",
+    "前任",
+    "前女友",
+    "前男友",
+    "家庭暴力",
+    "父亲",
+    "母亲",
+    "抑郁",
+    "诊断",
+    "药",
+)
+
+
+def _walk_values(value: Any, path: tuple[str, ...] = ()):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk_values(item, (*path, str(key)))
+    elif isinstance(value, list):
+        for idx, item in enumerate(value):
+            yield from _walk_values(item, (*path, str(idx)))
+    else:
+        yield path, value

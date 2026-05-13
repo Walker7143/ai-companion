@@ -24,6 +24,10 @@ export function Debug() {
   }, [currentBotId]);
 
   const ctx = payload?.last_context;
+  const diagnostics = (ctx?.memory_prompt_diagnostics || {}) as Record<string, unknown>;
+  const budget = (diagnostics.prompt_budget || {}) as Record<string, unknown>;
+  const blocks = (budget.blocks || {}) as Record<string, unknown>;
+  const blockEntries = Object.entries(blocks).map(([name, value]) => ({ name, value: value as Record<string, unknown> }));
   const heroStyle: React.CSSProperties = {
     borderRadius: 18,
     padding: 24,
@@ -52,6 +56,37 @@ export function Debug() {
       </div>
 
       <Card variant="elevated">
+        <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><FileSearch size={18} />Prompt Budget</CardTitle></CardHeader>
+        <CardContent>
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+              <Metric label="Suffix chars" value={String(diagnostics.system_suffix_chars ?? ctx?.system_prompt?.length ?? 0)} />
+              <Metric label="Truncated" value={String(Boolean(diagnostics.prompt_truncated ?? budget.truncated))} />
+              <Metric label="Blocks" value={String(diagnostics.prompt_block_count ?? blockEntries.length)} />
+            </div>
+            {blockEntries.length > 0 && (
+              <div style={{ display: 'grid', gap: 10 }}>
+                {blockEntries.map(({ name, value }) => (
+                  <div key={name} style={{ padding: 12, borderRadius: 10, backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+                      <strong style={{ color: 'var(--text-primary)' }}>{name}</strong>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{String(value.budget_chars ?? 0)} chars</span>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                      <span>raw {String(value.raw_body_chars ?? 0)}</span>
+                      <span>final {String(value.final_body_chars ?? 0)}</span>
+                      <span>rendered {String(value.rendered_chars ?? 0)}</span>
+                      <span>{value.truncated ? 'truncated' : 'ok'}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card variant="elevated">
         <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Bug size={18} />Working History</CardTitle></CardHeader>
         <CardContent>
           <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 420, overflow: 'auto', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 14 }}>{JSON.stringify(ctx?.working_history || [], null, 2)}</pre>
@@ -69,5 +104,14 @@ function DebugCard({ icon, title, data }: { icon: React.ReactNode; title: string
         <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)', borderRadius: 12, padding: 14 }}>{typeof data === 'string' ? data : JSON.stringify(data || {}, null, 2)}</pre>
       </CardContent>
     </Card>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div style={{ padding: 12, borderRadius: 10, backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>{value}</div>
+    </div>
   );
 }

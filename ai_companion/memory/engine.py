@@ -37,8 +37,10 @@ from .stores.daily import DailyMemoryStore, MemoryTurnContext
 from .extractor import MemoryExtractor
 from .governor import MemoryGovernor
 from .maintenance import MemoryMaintenance
+from .conscious import ConsciousContextBuilder
 from .prompt_builder import MemoryPromptBuilder
 from .retriever import MemoryRetriever
+from ..context.tokenizer import TokenEstimator
 
 # 上下文压缩器（可选）
 try:
@@ -155,8 +157,10 @@ class MemoryEngine:
             relationship_store=self.relationship,
             user_understanding=self.user_understanding,
             max_working_turns=self.max_working_turns,
+            max_summaries=self.max_summaries,
         )
         self.prompt_builder = MemoryPromptBuilder(max_chars=self.prompt_char_limit)
+        self.conscious_builder = ConsciousContextBuilder()
         self.maintenance = MemoryMaintenance(
             semantic_store=self.semantic,
             episodic_store=self.episodic,
@@ -224,18 +228,27 @@ class MemoryEngine:
             user_id=self.user_id,
             session_id=sid,
         )
-        facts = await self.semantic.get_all_facts(bot_id=self.bot_id, user_id=self.user_id)
         logger.info(f"[Memory]  load_context 召回语义记忆: {retrieved.semantic_facts}")
-        suffix = self.prompt_builder.build(retrieved)
+        conscious = self.conscious_builder.build(retrieved, current_input)
+        suffix, prompt_budget_diagnostics = self.prompt_builder.build_with_diagnostics(retrieved, conscious=conscious)
+        diagnostics = self._build_prompt_diagnostics(
+            retrieved=retrieved,
+            system_suffix=suffix,
+            conscious=conscious,
+            prompt_budget_diagnostics=prompt_budget_diagnostics,
+        )
+        logger.info("[Memory] prompt diagnostics: %s", diagnostics)
 
         return {
             "working_history": retrieved.working_history,
             "episodic_recall": retrieved.episodic_recall,
-            "semantic_facts": facts,
+            "semantic_facts": retrieved.semantic_facts,
             "relationship_state": retrieved.relationship_state,
             "daily_context": retrieved.daily_context,
             "memory_intent": retrieved.intent,
             "user_understanding": self.user_understanding.load(),
+            "conscious_context": conscious.to_dict(),
+            "memory_prompt_diagnostics": diagnostics,
             "system_suffix": suffix,
         }
 
@@ -245,6 +258,11 @@ class MemoryEngine:
         1. 存储本轮对话到工作记忆
         2. 异步抽取并更新情景记忆和语义记忆
         """
+        context = await self.record_turn(user_input, llm_output, turn_context=turn_context)
+        await self.extract_turn_memory(user_input, llm_output, turn_context=context)
+
+    async def record_turn(self, user_input: str, llm_output: str, turn_context: MemoryTurnContext | dict | None = None) -> MemoryTurnContext:
+        """Persist the raw turn immediately so the next user message can see it."""
         current_sid = self._session_id or self.working.current_session or "default"
         context = self._normalize_turn_context(turn_context, session_id=current_sid)
         sid = context.session_id or current_sid
@@ -264,6 +282,14 @@ class MemoryEngine:
             session_id=sid,
             context=context,
         )
+        return context
+
+    async def extract_turn_memory(self, user_input: str, llm_output: str, turn_context: MemoryTurnContext | dict | None = None):
+        """Promote a recorded turn into long-term memory candidates."""
+        current_sid = self._session_id or self.working.current_session or "default"
+        context = self._normalize_turn_context(turn_context, session_id=current_sid)
+        sid = context.session_id or current_sid
+        user_id = context.user_id or self.user_id
 
         # 2. 获取最近 3 轮对话上下文（用于判断整体语气：撒娇/吵架/调侃等）
         recent = self.working.get_recent(sid, turns=3)
@@ -412,6 +438,82 @@ class MemoryEngine:
             return
         if self.user_understanding.seed_manual_from(seed_path):
             logger.info("[Memory]  已从内置模板补充 user_understanding.manual: %s", seed_path)
+
+    def _build_prompt_diagnostics(self, *, retrieved, system_suffix: str, conscious, prompt_budget_diagnostics: dict | None = None) -> dict:
+        daily = retrieved.daily_context or {}
+        daily_summaries = daily.get("summaries") if isinstance(daily.get("summaries"), list) else []
+        daily_messages = daily.get("recent_messages") if isinstance(daily.get("recent_messages"), list) else []
+        self_memory = daily.get("self_memory") if isinstance(daily.get("self_memory"), list) else []
+        summary_chars = sum(
+            len(str(item.get("content", "") or ""))
+            for item in retrieved.working_history
+            if isinstance(item, dict) and item.get("role") == "system"
+        )
+        recent_chars = sum(
+            len(str(item.get("content", "") or ""))
+            for item in retrieved.working_history
+            if isinstance(item, dict) and item.get("role") != "system"
+        )
+        daily_chars = (
+            len(json.dumps(daily_summaries, ensure_ascii=False))
+            + len(json.dumps(daily_messages, ensure_ascii=False))
+            + len(json.dumps(self_memory, ensure_ascii=False))
+        )
+        episodic_chars = sum(len(str(item.get("summary", "") or "")) for item in retrieved.episodic_recall)
+        semantic_chars = sum(
+            len(str(item.get("key", "") or "")) + len(str(item.get("value", "") or ""))
+            for item in retrieved.semantic_items
+        )
+        conscious_text = conscious.render(max_chars=4000) if conscious is not None else ""
+        working_summary_text = "\n".join(
+            str(item.get("content", "") or "")
+            for item in retrieved.working_history
+            if isinstance(item, dict) and item.get("role") == "system"
+        )
+        working_recent_text = "\n".join(
+            str(item.get("content", "") or "")
+            for item in retrieved.working_history
+            if isinstance(item, dict) and item.get("role") != "system"
+        )
+        daily_text = (
+            json.dumps(daily_summaries, ensure_ascii=False)
+            + json.dumps(daily_messages, ensure_ascii=False)
+            + json.dumps(self_memory, ensure_ascii=False)
+        )
+        episodic_text = "\n".join(str(item.get("summary", "") or "") for item in retrieved.episodic_recall)
+        semantic_text = "\n".join(
+            f"{item.get('key', '')}: {item.get('value', '')}"
+            for item in retrieved.semantic_items
+        )
+        diagnostics = {
+            "intent": retrieved.intent,
+            "system_suffix_chars": len(system_suffix or ""),
+            "system_suffix_tokens_est": TokenEstimator.estimate(system_suffix or ""),
+            "conscious_chars": len(conscious_text),
+            "conscious_tokens_est": TokenEstimator.estimate(conscious_text),
+            "working_summary_count": sum(1 for item in retrieved.working_history if isinstance(item, dict) and item.get("role") == "system"),
+            "working_summary_chars": summary_chars,
+            "working_summary_tokens_est": TokenEstimator.estimate(working_summary_text),
+            "working_recent_message_count": sum(1 for item in retrieved.working_history if isinstance(item, dict) and item.get("role") != "system"),
+            "working_recent_chars": recent_chars,
+            "working_recent_tokens_est": TokenEstimator.estimate(working_recent_text),
+            "daily_summary_count": len(daily_summaries),
+            "daily_recent_message_count": len(daily_messages),
+            "self_memory_count": len(self_memory),
+            "daily_context_chars": daily_chars,
+            "daily_context_tokens_est": TokenEstimator.estimate(daily_text),
+            "episodic_count": len(retrieved.episodic_recall),
+            "episodic_summary_chars": episodic_chars,
+            "episodic_summary_tokens_est": TokenEstimator.estimate(episodic_text),
+            "semantic_item_count": len(retrieved.semantic_items),
+            "semantic_item_chars": semantic_chars,
+            "semantic_item_tokens_est": TokenEstimator.estimate(semantic_text),
+        }
+        if prompt_budget_diagnostics:
+            diagnostics["prompt_budget"] = prompt_budget_diagnostics
+            diagnostics["prompt_block_count"] = len(prompt_budget_diagnostics.get("blocks", {}))
+            diagnostics["prompt_truncated"] = bool(prompt_budget_diagnostics.get("truncated"))
+        return diagnostics
 
     def _normalize_turn_context(self, value, *, session_id: str) -> MemoryTurnContext:
         if isinstance(value, MemoryTurnContext):

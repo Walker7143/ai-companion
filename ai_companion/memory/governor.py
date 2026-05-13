@@ -130,6 +130,7 @@ class MemoryGovernor:
         if candidate.confidence < self.MIN_EPISODE_CONFIDENCE:
             result.skipped.append((candidate, "low_confidence"))
             return
+        meta = candidate.metadata or {}
         await self.episodic.store_episode(
             summary=candidate.summary,
             content=candidate.content,
@@ -139,9 +140,14 @@ class MemoryGovernor:
             title=candidate.title,
             importance=candidate.importance,
             confidence=candidate.confidence,
-            topics=candidate.metadata.get("topics") or [],
-            emotion_tags=candidate.metadata.get("emotion_tags") or [],
+            participants=meta.get("participants") or [],
+            topics=meta.get("topics") or [],
+            emotion_tags=meta.get("emotion_tags") or [],
             source_message_ids=candidate.evidence,
+            relationship_effect=str(meta.get("relationship_effect") or ""),
+            sensitivity=str(meta.get("sensitivity") or ""),
+            recall_style=str(meta.get("recall_style") or ""),
+            cue_tags=meta.get("cue_tags") or [],
         )
         result.written.append(candidate)
 

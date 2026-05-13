@@ -16,6 +16,7 @@ import random
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -234,11 +235,14 @@ class SystemTestSuite:
         self._run_case("T37", "User profile memory guides natural replies", self.case_user_profile_memory_guidance)
         self._run_case("T38", "Memory governor skips casual episodic writes", self.case_memory_governor_skips_casual_episodes)
         self._run_case("T39", "Memory stores important episodes with metadata", self.case_memory_stores_important_episode_metadata)
+        self._run_case("T39b", "Episodic scene capsules survive recall", self.case_episodic_scene_capsule_recall)
         self._run_case("T40", "User understanding manual override wins", self.case_user_understanding_manual_override)
         self._run_case("T41", "Intent retriever trims task emotional memory", self.case_memory_retriever_intent_filtering)
         self._run_case("T42", "Relationship state is separate from semantic facts", self.case_relationship_state_separate)
         self._run_case("T42b", "Relationship stage is stable and multi-dimensional", self.case_relationship_stage_stability)
+        self._run_case("T42c", "Relationship narrative guides prompt context", self.case_relationship_narrative_prompt)
         self._run_case("T43", "Admin memory API supports new memory schema", self.case_admin_memory_api_schema_compatibility)
+        self._run_case("T43b", "Debug last-context exposes real prompt diagnostics", self.case_debug_last_context_prompt_snapshot)
         self._run_case("T44", "User understanding v3 captures deep relationship insight", self.case_user_understanding_v3_deep_projection)
         self._run_case("T45", "Response style polisher removes AI tone", self.case_response_style_polisher)
         self._run_case("T46", "Built-in bots include style and understanding seeds", self.case_builtin_bot_style_and_understanding_seeds)
@@ -246,6 +250,11 @@ class SystemTestSuite:
         self._run_case("T48", "Runtime understanding seeds from bundled defaults", self.case_user_understanding_runtime_seed)
         self._run_case("T49", "Manual custom fields enter memory prompt", self.case_user_understanding_manual_custom_fields_prompt)
         self._run_case("T50", "Memory prompt limit handles large user understanding", self.case_memory_prompt_limit_large_understanding)
+        self._run_case("T50a", "Layered user understanding gates deep and sensitive memory", self.case_layered_user_understanding_gating)
+        self._run_case("T50b", "Working memory summary prompt respects max_summaries", self.case_working_memory_summary_prompt_limit)
+        self._run_case("T50c", "Conscious memory context and diagnostics are returned", self.case_conscious_memory_context_diagnostics)
+        self._run_case("T50e", "Prompt budget diagnostics expose block truncation", self.case_prompt_budget_diagnostics)
+        self._run_case("T50d", "Sensitive scene capsules are gated by intent", self.case_sensitive_scene_capsule_gating)
         self._run_case("T51", "Persona importer plans, applies, and resumes drafts", self.case_persona_importer_plan_apply_resume)
         self._run_case("T52", "Deferred proactive continuity", self.case_deferred_reply_proactive_continuity)
 
@@ -2525,14 +2534,74 @@ class SystemTestSuite:
             db_path = root / "episode_bot" / "memory" / "episodic.db"
             conn = sqlite3.connect(str(db_path))
             row = conn.execute(
-                "SELECT summary, importance, confidence, user_id, archived FROM episodic_memory LIMIT 1"
+                """
+                SELECT summary, importance, confidence, user_id, archived,
+                       relationship_effect, sensitivity, recall_style, cue_tags_json
+                FROM episodic_memory
+                LIMIT 1
+                """
             ).fetchone()
             conn.close()
             await engine.close()
 
-        passed = bool(row and row[1] >= 0.68 and row[2] >= 0.6 and row[3] == "default_user" and row[4] == 0)
+        cue_tags = json.loads(row[8]) if row and row[8] else []
+        passed = bool(
+            row
+            and row[1] >= 0.68
+            and row[2] >= 0.6
+            and row[3] == "default_user"
+            and row[4] == 0
+            and row[5] in {"普通", "拉近", "修复", "紧张"}
+            and row[6] in {"normal", "sensitive"}
+            and row[7]
+            and "面试" in cue_tags
+        )
         log = json.dumps({"row": row}, ensure_ascii=False, indent=2)
         return passed, f"row={bool(row)}", log
+
+    async def case_episodic_scene_capsule_recall(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-memory-scene-capsule-") as td:
+            root = Path(td)
+            engine = MemoryEngine("capsule_bot", root, config={"embedding": "none"})
+            await engine.init()
+            await engine.episodic.store_episode(
+                summary="用户曾在海边想象牵手唱歌，助手害羞但被触动。",
+                content="用户：想在海边牵着手唱歌\n助手：我会害羞，但会记住。",
+                bot_id="capsule_bot",
+                user_id="default_user",
+                session_id="old",
+                importance=0.92,
+                confidence=0.91,
+                topics=["海边"],
+                emotion_tags=["害羞", "亲近"],
+                relationship_effect="拉近",
+                recall_style="可轻轻提起，不要炫耀记忆。",
+                cue_tags=["海边", "牵手", "唱歌"],
+            )
+            recalled = engine.episodic.recall(
+                "还记得海边牵手唱歌吗",
+                bot_id="capsule_bot",
+                user_id="default_user",
+                top_k=3,
+            )
+            await engine.close()
+
+        first = recalled[0] if recalled else {}
+        passed = (
+            bool(first)
+            and first.get("relationship_effect") == "拉近"
+            and first.get("sensitivity") == "normal"
+            and "海边" in (first.get("topics") or [])
+            and "牵手" in (first.get("cue_tags") or [])
+            and "轻轻" in first.get("recall_style", "")
+        )
+        return passed, f"recalled={len(recalled)} effect={first.get('relationship_effect')}", json.dumps(
+            {"recalled": recalled},
+            ensure_ascii=False,
+            indent=2,
+        )
 
     async def case_user_understanding_manual_override(self) -> tuple[bool, str, str]:
         from ai_companion.memory.engine import MemoryEngine
@@ -2647,6 +2716,9 @@ class SystemTestSuite:
             and relationship.get("attitude_score") == 62
             and relationship.get("relationship_score") > 35
             and relationship.get("score_scale") == 100
+            and relationship.get("relationship_narrative")
+            and relationship.get("current_posture")
+            and relationship.get("interaction_guidance")
         )
         log = json.dumps({"facts": facts, "relationship": relationship}, ensure_ascii=False, indent=2)
         return passed, f"relationship={relationship.get('relationship_label')}", log
@@ -2697,6 +2769,47 @@ class SystemTestSuite:
         log = json.dumps({"first": first, "second": second, "third": third, "final": final}, ensure_ascii=False, indent=2)
         return passed, f"final={final.get('relationship_label')} score={final.get('relationship_score')}", log
 
+    async def case_relationship_narrative_prompt(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-relationship-narrative-") as td:
+            root = Path(td)
+            engine = MemoryEngine("narrative_bot", root, config={"embedding": "none"})
+            await engine.init()
+            await engine.relationship.apply_event(
+                bot_id="narrative_bot",
+                user_id="default_user",
+                label="暧昧中",
+                intimacy_delta=20,
+                affection_delta=28,
+                trust_delta=12,
+                key_moment="用户认真表白，关系进入暧昧期",
+            )
+            context = await engine.load_context("我今天想起我们之前聊过的事")
+            await engine.close()
+
+        relationship = context.get("relationship_state") or {}
+        suffix = context.get("system_suffix", "")
+        conscious = context.get("conscious_context") or {}
+        passed = (
+            relationship.get("relationship_narrative")
+            and relationship.get("current_posture")
+            and "关系叙事" in suffix
+            and "当前姿态" in suffix
+            and "互动建议" in suffix
+            and "综合关系温度" not in suffix
+            and "暧昧期" in conscious.get("relationship_posture", "")
+        )
+        return passed, f"narrative={bool(relationship.get('relationship_narrative'))}", json.dumps(
+            {
+                "relationship": relationship,
+                "conscious": conscious,
+                "system_suffix": suffix,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
     def case_admin_memory_api_schema_compatibility(self) -> tuple[bool, str, str]:
         gateway_text = (self.root / "ai_companion" / "gateway" / "cmd.py").read_text(encoding="utf-8")
         types_text = (self.root / "ai-companion-ui" / "src" / "types" / "index.ts").read_text(encoding="utf-8")
@@ -2706,12 +2819,68 @@ class SystemTestSuite:
             "gateway_reads_relationship": "relationship_state" in gateway_text,
             "gateway_returns_relationship_state": '"relationship_state": relationship_state' in gateway_text,
             "gateway_returns_fact_metadata": '"category": r[3]' in gateway_text and '"confidence": r[4]' in gateway_text,
+            "gateway_returns_scene_capsule": '"relationship_effect": r[7]' in gateway_text and '"cue_tags_json": r[10]' in gateway_text,
+            "gateway_returns_relationship_narrative": '"relationship_narrative": rel_row[12]' in gateway_text,
             "ui_fact_metadata_types": "category?: string" in types_text and "confidence?: number" in types_text,
+            "ui_scene_capsule_types": "relationship_effect?: string" in types_text and "cue_tags_json?: string" in types_text,
+            "ui_relationship_narrative_types": "relationship_narrative?: string" in types_text and "interaction_guidance?: string" in types_text,
             "ui_displays_metadata": "fact.category" in memory_ui and "fact.confidence" in memory_ui,
+            "ui_displays_scene_capsule": "item.relationship_effect" in memory_ui and "item.recall_style" in memory_ui,
+            "ui_displays_relationship_narrative": "relationship.relationship_narrative" in memory_ui and "relationship.interaction_guidance" in memory_ui,
             "ui_displays_relationship_dimensions": "RelationshipMetric" in memory_ui and "综合关系温度" in memory_ui,
         }
         passed = all(checks.values())
         return passed, f"checks={sum(checks.values())}/{len(checks)}", json.dumps(checks, ensure_ascii=False, indent=2)
+
+    async def case_debug_last_context_prompt_snapshot(self) -> tuple[bool, str, str]:
+        from ai_companion.bot.instance import BotInstance
+
+        fake_model = FakeModel()
+        memory_config = {
+            "embedding": "none",
+            "max_working_turns": 4,
+            "max_summaries": 2,
+            "prompt_char_limit": 1600,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-debug-context-") as td:
+            data_dir = Path(td)
+            bot = BotInstance(
+                config={"id": "debug_bot", "name": "调试妞", "description": "", "data_dir": str(data_dir)},
+                model=fake_model,
+                memory_config=memory_config,
+                refusal_enabled=False,
+            )
+            try:
+                await bot.init()
+                reply = await bot.handle_message("我今天有点累，想安静聊聊")
+                debug_context = bot.get_last_debug_context()
+                diagnostics = (debug_context or {}).get("memory_prompt_diagnostics", {})
+                passed = bool(
+                    reply
+                    and debug_context
+                    and diagnostics.get("prompt_block_count", 0) >= 1
+                    and "retrieved_memory" in debug_context
+                    and "response_style_trace" in debug_context
+                    and debug_context.get("system_prompt")
+                    and debug_context.get("memory_intent") == "emotional_support"
+                )
+                detail = (
+                    f"blocks={diagnostics.get('prompt_block_count', 0)} "
+                    f"suffix_chars={diagnostics.get('system_suffix_chars', 0)}"
+                )
+                log = json.dumps(
+                    {
+                        "reply": reply,
+                        "debug_context": debug_context,
+                        "chat_call": fake_model.chat_calls[-1] if fake_model.chat_calls else {},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                return passed, detail, log
+            finally:
+                await bot.close()
 
     async def case_user_understanding_v3_deep_projection(self) -> tuple[bool, str, str]:
         from ai_companion.memory.engine import MemoryEngine
@@ -2941,7 +3110,7 @@ class SystemTestSuite:
     async def case_memory_prompt_limit_large_understanding(self) -> tuple[bool, str, str]:
         from ai_companion.memory.engine import MemoryEngine
 
-        tail_marker = "TAIL_MARKER_用户理解末尾仍应进入提示"
+        tail_marker = "TAIL_MARKER_普通聊天不应为了长档案撑满提示"
         with tempfile.TemporaryDirectory(prefix="sys-test-understanding-large-") as td:
             root = Path(td)
             engine = MemoryEngine("large_bot", root, config={"embedding": "none"})
@@ -2950,17 +3119,302 @@ class SystemTestSuite:
             data["manual"]["summary"] = "用户手动写入了很长的背景。"
             data["manual"]["notes"] = [f"背景片段{i}: " + ("重要上下文" * 18) for i in range(75)]
             data["manual"]["notes"].append(tail_marker)
+            data["auto"]["stressors"] = ["最近准备作品集压力很大，晚上容易焦虑"]
+            data["auto"]["comfort_strategies"] = ["情绪低落时先陪一会儿，不要立刻讲道理"]
             engine.user_understanding._write(data)
+            casual_context = await engine.load_context("继续")
+            emotional_context = await engine.load_context("我今天又有点焦虑")
+            await engine.close()
+
+        casual_suffix = casual_context.get("system_suffix", "")
+        emotional_suffix = emotional_context.get("system_suffix", "")
+        passed = (
+            len(casual_suffix) < 5200
+            and len(casual_suffix) <= 12000
+            and tail_marker not in casual_suffix
+            and "有效的安慰/陪伴方式" in emotional_suffix
+            and "先陪一会儿" in emotional_suffix
+            and len(emotional_suffix) <= 12000
+        )
+        return passed, (
+            f"casual_len={len(casual_suffix)} emotional_len={len(emotional_suffix)} "
+            f"deep={'先陪一会儿' in emotional_suffix}"
+        ), json.dumps(
+            {
+                "casual_system_suffix_len": len(casual_suffix),
+                "emotional_system_suffix_len": len(emotional_suffix),
+                "tail_present": tail_marker in casual_suffix,
+                "emotional_deep_present": "先陪一会儿" in emotional_suffix,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def case_layered_user_understanding_gating(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-understanding-layered-") as td:
+            root = Path(td)
+            engine = MemoryEngine("layered_bot", root, config={"embedding": "none"})
+            await engine.init()
+            data = engine.user_understanding.load()
+            data["manual"]["summary"] = "用户喜欢直接但温柔的交流。"
+            data["manual"]["identity"]["称呼"] = "小王"
+            data["manual"]["communication_style"] = ["先给结论，再给必要依据"]
+            data["auto"]["stressors"] = ["最近因为作品集压力大，晚上容易焦虑"]
+            data["auto"]["comfort_strategies"] = ["情绪低落时先陪一会儿，不要立刻讲道理"]
+            data["auto"]["emotional_patterns"] = ["压力大时会担心自己做得不够好"]
+            data["auto"]["life_context"] = ["曾提到一段和身体隐私相关的创伤经历"]
+            engine.user_understanding._write(data)
+
+            loaded = engine.user_understanding.load()
+            casual = await engine.load_context("今天天气不错，随便聊聊")
+            emotional = await engine.load_context("我今天有点焦虑")
+            await engine.close()
+
+        layered = loaded.get("layered") or {}
+        casual_suffix = casual.get("system_suffix", "")
+        emotional_suffix = emotional.get("system_suffix", "")
+        casual_conscious = casual.get("conscious_context") or {}
+        passed = (
+            bool(layered.get("core"))
+            and bool(layered.get("current"))
+            and bool(layered.get("deep"))
+            and "身体" in (layered.get("sensitive", {}).get("topics") or [])
+            and "称呼: 小王" in casual_suffix
+            and "先给结论" in casual_suffix
+            and "身体隐私相关的创伤经历" not in casual_suffix
+            and "相关敏感线索" not in casual_suffix
+            and "只在用户主动提起" in casual_suffix
+            and "有效陪伴方式" in emotional_suffix
+            and "先陪一会儿" in emotional_suffix
+            and "相关敏感线索" in emotional_suffix
+            and any("只在用户主动提起" in item for item in (casual_conscious.get("avoid") or []))
+        )
+        return passed, (
+            f"casual_len={len(casual_suffix)} emotional_len={len(emotional_suffix)}"
+        ), json.dumps(
+            {
+                "layered": layered,
+                "casual_suffix": casual_suffix,
+                "emotional_suffix": emotional_suffix,
+                "casual_conscious": casual_conscious,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def case_working_memory_summary_prompt_limit(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-summary-limit-") as td:
+            root = Path(td)
+            engine = MemoryEngine(
+                "summary_bot",
+                root,
+                config={"embedding": "none", "max_summaries": 2, "max_working_turns": 1},
+            )
+            await engine.init()
+            sid = "summary-session"
+            engine.start_session(sid)
+            conn = sqlite3.connect(engine.working.db_path)
+            for idx in range(5):
+                conn.execute(
+                    "INSERT INTO summaries (session_id, summary, message_count) VALUES (?, ?, ?)",
+                    (sid, f"摘要{idx}", 2),
+                )
+            for idx in range(3):
+                conn.execute(
+                    "INSERT INTO messages (session_id, role, content, compressed) VALUES (?, ?, ?, 0)",
+                    (sid, "user", f"最近消息{idx}"),
+                )
+            conn.commit()
+            conn.close()
             context = await engine.load_context("继续")
             await engine.close()
 
-        suffix = context.get("system_suffix", "")
+        history = context.get("working_history", [])
+        summary_contents = [item.get("content", "") for item in history if item.get("role") == "system"]
         passed = (
-            len(suffix) > 4400
-            and len(suffix) <= 12000
-            and tail_marker in suffix
+            len(summary_contents) == 2
+            and "摘要3" in summary_contents[0]
+            and "摘要4" in summary_contents[1]
+            and all("摘要0" not in item and "摘要1" not in item and "摘要2" not in item for item in summary_contents)
         )
-        return passed, f"suffix_len={len(suffix)} tail={tail_marker in suffix}", json.dumps({"system_suffix_len": len(suffix), "tail_present": tail_marker in suffix}, ensure_ascii=False, indent=2)
+        return passed, f"summaries={summary_contents}", json.dumps({"working_history": history}, ensure_ascii=False, indent=2)
+
+    async def case_conscious_memory_context_diagnostics(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-conscious-memory-") as td:
+            root = Path(td)
+            engine = MemoryEngine(
+                "conscious_bot",
+                root,
+                config={"embedding": "none", "max_summaries": 2, "max_working_turns": 2},
+            )
+            await engine.init()
+            await engine.semantic.set_fact(
+                "希望被怎样回应",
+                "情绪低落时先陪一会儿，不要立刻讲道理",
+                bot_id="conscious_bot",
+                user_id="default_user",
+                category="communication_style",
+                confidence=0.95,
+            )
+            await engine.episodic.store_episode(
+                summary="用户曾在海边想象牵手唱歌，助手害羞但被触动。",
+                content="用户说想在海边牵着手唱歌。",
+                bot_id="conscious_bot",
+                user_id="default_user",
+                session_id=engine._session_id,
+                importance=0.9,
+                confidence=0.9,
+            )
+            await engine.working.append(
+                user_input="昨晚我有点焦虑",
+                bot_output="那先别急着讲道理，我陪你待一会儿。",
+                session_id=engine._session_id,
+            )
+            context = await engine.load_context("我今天又有点焦虑")
+            await engine.close()
+
+        conscious = context.get("conscious_context") or {}
+        diagnostics = context.get("memory_prompt_diagnostics") or {}
+        suffix = context.get("system_suffix", "")
+        active = conscious.get("active_memories") or []
+        passed = (
+            context.get("memory_intent") == "emotional_support"
+            and "本轮意识工作区" in suffix
+            and conscious.get("current_focus", "").startswith("情绪陪伴")
+            and any("先陪一会儿" in item or "海边" in item for item in active)
+            and diagnostics.get("system_suffix_chars") == len(suffix)
+            and diagnostics.get("working_recent_message_count", 0) >= 2
+            and diagnostics.get("semantic_item_count", 0) >= 1
+            and diagnostics.get("prompt_budget", {}).get("blocks", {}).get("conscious")
+            and diagnostics.get("prompt_block_count", 0) >= 2
+        )
+        return passed, (
+            f"intent={context.get('memory_intent')} conscious={len(active)} "
+            f"suffix_chars={diagnostics.get('system_suffix_chars')}"
+        ), json.dumps(
+            {
+                "conscious_context": conscious,
+                "diagnostics": diagnostics,
+                "system_suffix": suffix,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def case_prompt_budget_diagnostics(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-prompt-budget-") as td:
+            root = Path(td)
+            engine = MemoryEngine(
+                "budget_bot",
+                root,
+                config={"embedding": "none", "prompt_char_limit": 1800},
+            )
+            await engine.init()
+            data = engine.user_understanding.load()
+            data["manual"]["summary"] = "用户希望回复有温度但别拖沓。"
+            data["manual"]["notes"] = [f"长备注{i}: " + ("大量背景" * 30) for i in range(20)]
+            data["auto"]["comfort_strategies"] = ["情绪低落时先陪一会儿，不要立刻讲道理"]
+            data["auto"]["emotional_patterns"] = ["压力大时会担心自己不够好"]
+            data["auto"]["stressors"] = [f"压力源{i}: " + ("作品集" * 20) for i in range(12)]
+            engine.user_understanding._write(data)
+            await engine.episodic.store_episode(
+                summary="用户曾在海边想象牵手唱歌，助手害羞但被触动。",
+                content="用户说想在海边牵着手唱歌。",
+                bot_id="budget_bot",
+                user_id="default_user",
+                session_id=engine._session_id,
+                importance=0.9,
+                confidence=0.9,
+                relationship_effect="拉近",
+            )
+            context = await engine.load_context("我今天有点焦虑，还记得海边那次吗")
+            await engine.close()
+
+        suffix = context.get("system_suffix", "")
+        diagnostics = context.get("memory_prompt_diagnostics") or {}
+        budget = diagnostics.get("prompt_budget") or {}
+        blocks = budget.get("blocks") or {}
+        truncated_blocks = [
+            name for name, item in blocks.items()
+            if isinstance(item, dict) and item.get("truncated")
+        ]
+        passed = (
+            len(suffix) <= 1800
+            and diagnostics.get("system_suffix_chars") == len(suffix)
+            and budget.get("final_chars") == len(suffix)
+            and not budget.get("truncated")
+            and blocks.get("understanding", {}).get("budget_chars", 0) > 0
+            and truncated_blocks
+            and "可能相关的共同经历" in suffix
+        )
+        return passed, (
+            f"suffix={len(suffix)} blocks={len(blocks)} truncated_blocks={truncated_blocks}"
+        ), json.dumps(
+            {
+                "suffix": suffix,
+                "diagnostics": diagnostics,
+                "truncated_blocks": truncated_blocks,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def case_sensitive_scene_capsule_gating(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-sensitive-capsule-") as td:
+            root = Path(td)
+            engine = MemoryEngine("sensitive_bot", root, config={"embedding": "none"})
+            await engine.init()
+            await engine.episodic.store_episode(
+                summary="用户曾提到一段和身体隐私相关的创伤经历，需要非常克制地对待。",
+                content="用户：我之前因为身体隐私被人嘲笑过，很受伤。\n助手：我会很小心地陪你。",
+                bot_id="sensitive_bot",
+                user_id="default_user",
+                session_id=engine._session_id,
+                importance=0.95,
+                confidence=0.9,
+                topics=["身体隐私"],
+                emotion_tags=["受伤"],
+                sensitivity="sensitive",
+                cue_tags=["身体隐私", "创伤"],
+            )
+            casual = await engine.load_context("我们随便聊聊身体状态")
+            emotional = await engine.load_context("我因为那段身体隐私经历又有点难过")
+            await engine.close()
+
+        casual_conscious = casual.get("conscious_context") or {}
+        emotional_conscious = emotional.get("conscious_context") or {}
+        casual_active = casual_conscious.get("active_memories") or []
+        casual_avoid = casual_conscious.get("avoid") or []
+        emotional_active = emotional_conscious.get("active_memories") or []
+        passed = (
+            casual.get("memory_intent") == "casual_chat"
+            and not any("身体隐私" in item or "创伤" in item for item in casual_active)
+            and any("敏感经历" in item for item in casual_avoid)
+            and emotional.get("memory_intent") == "emotional_support"
+            and any("敏感共同经历" in item and "身体隐私" in item for item in emotional_active)
+        )
+        return passed, (
+            f"casual_active={len(casual_active)} emotional_active={len(emotional_active)}"
+        ), json.dumps(
+            {
+                "casual": casual_conscious,
+                "emotional": emotional_conscious,
+                "casual_suffix": casual.get("system_suffix"),
+                "emotional_suffix": emotional.get("system_suffix"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     async def case_persona_importer_plan_apply_resume(self) -> tuple[bool, str, str]:
         from ai_companion.persona_importer.apply import apply_draft

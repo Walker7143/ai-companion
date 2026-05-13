@@ -1,15 +1,211 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
+from ai_companion.memory.conscious import ConsciousContextBuilder
 from ai_companion.memory.engine import MemoryEngine
+from ai_companion.memory.retriever import MemoryRetriever, RetrievedMemory
 from ai_companion.proactive.config import ProactiveConfig
 from ai_companion.proactive.engine import ProactiveEngine
 from ai_companion.proactive.state import ProactiveState
 
 
 class DailyMemoryTest(unittest.TestCase):
+    def test_intent_classifier_prefers_task_request_for_code_repair(self):
+        retriever = MemoryRetriever(
+            working_store=None,
+            daily_store=None,
+            episodic_store=None,
+            semantic_store=None,
+            relationship_store=None,
+            user_understanding=None,
+        )
+
+        self.assertEqual(retriever.classify_intent("帮我修复这段代码的 bug"), "task_request")
+        self.assertEqual(retriever.classify_intent("你刚才那样说我有点生气，我们和好吧"), "relationship_repair")
+
+    def test_conscious_context_scores_active_memories_and_expression_modes(self):
+        retrieved = RetrievedMemory(
+            intent="recall_past",
+            episodic_recall=[
+                {
+                    "summary": "用户曾在海边想象牵手唱歌，助手害羞但被触动。",
+                    "relationship_effect": "拉近",
+                    "sensitivity": "normal",
+                    "recall_style": "可轻轻提起，不要炫耀记忆。",
+                    "cue_tags": ["海边", "牵手", "唱歌"],
+                }
+            ],
+            relationship_state={"relationship_label": "暧昧中", "intimacy_score": 60},
+            user_understanding={},
+        )
+
+        conscious = ConsciousContextBuilder().build(retrieved, "你还记得海边牵手唱歌吗")
+
+        self.assertIn("共同经历", conscious.active_memories[0])
+        self.assertGreater(conscious.active_memory_details[0]["score"], 0.5)
+        self.assertEqual(conscious.active_memory_details[0]["expression_mode"], "explicit_recall")
+        self.assertIn("使用：可以明确承接回忆", conscious.render())
+
+    def test_user_understanding_relevant_current_context_is_not_dropped(self):
+        from ai_companion.memory.prompt_builder import MemoryPromptBuilder
+
+        cat_fact = "用户养了两只猫：布丁和奥利奥。"
+        retrieved = RetrievedMemory(
+            intent="casual_chat",
+            user_understanding={
+                "layered": {
+                    "core": {"summary": "用户喜欢真实自然的陪伴。"},
+                    "current": {
+                        "current_context": [
+                            "用户目前一个人在北京生活。",
+                            "用户不太喜欢当前工作，但因收入高仍继续做。",
+                            "用户有游戏账号运营副业。",
+                            "用户 2025 年买了小米 SU7 Max。",
+                            cat_fact,
+                        ],
+                    },
+                },
+            },
+        )
+
+        conscious = ConsciousContextBuilder().build(retrieved, "我的猫！")
+        suffix = MemoryPromptBuilder(max_chars=2400).build(retrieved, conscious=conscious)
+
+        self.assertIn(cat_fact, suffix)
+        self.assertIn("当前输入命中用户理解", conscious.active_memory_details[0]["reason"])
+        self.assertIn(cat_fact, conscious.active_memory_details[0]["text"])
+
+    def test_user_understanding_manual_layer_overrides_auto_fact(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="understanding-manual-layer-") as tmp:
+                engine = MemoryEngine("manual_layer_bot", Path(tmp), config={"embedding": "none"})
+                await engine.init()
+                data = engine.user_understanding.load()
+                data["manual"]["facts"]["猫"] = "布丁"
+                data["auto"]["facts"]["猫"] = "奥利奥"
+                engine.user_understanding._write(data)
+                loaded = engine.user_understanding.load()
+                ctx = await engine.load_context("我的猫叫什么？")
+                await engine.close()
+                return loaded, ctx
+
+        loaded, ctx = asyncio.run(run())
+
+        self.assertEqual(loaded["layered"]["core"]["facts"]["猫"], "布丁")
+        self.assertIn("猫: 布丁", ctx["system_suffix"])
+        self.assertNotIn("猫: 奥利奥", ctx["system_suffix"])
+
+    def test_dislikes_memory_category_survives_projection_and_prompt(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="understanding-dislikes-") as tmp:
+                engine = MemoryEngine("dislikes_bot", Path(tmp), config={"embedding": "none"})
+                await engine.init()
+                await engine.semantic.set_fact(
+                    "用户不喜欢的称呼",
+                    "用户不喜欢被叫老板",
+                    session_id="s1",
+                    bot_id="dislikes_bot",
+                    user_id="default_user",
+                    category="dislikes",
+                    confidence=0.9,
+                )
+                ctx = await engine.load_context("随便聊聊")
+                loaded = engine.user_understanding.load()
+                await engine.close()
+                return loaded, ctx
+
+        loaded, ctx = asyncio.run(run())
+
+        self.assertIn("用户不喜欢被叫老板", loaded["layered"]["core"]["dislikes"])
+        self.assertIn("不喜欢/避开的事", ctx["system_suffix"])
+        self.assertIn("用户不喜欢被叫老板", ctx["system_suffix"])
+        self.assertNotIn("[dislikes] 用户不喜欢的称呼", ctx["system_suffix"])
+
+    def test_semantic_retrieval_searches_all_facts_before_prompt_limit(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="semantic-hybrid-") as tmp:
+                engine = MemoryEngine("semantic_hybrid_bot", Path(tmp), config={"embedding": "none"})
+                await engine.init()
+                for index in range(35):
+                    await engine.semantic.set_fact(
+                        f"recent_noise_{index}",
+                        f"最近但无关的事实 {index}",
+                        bot_id="semantic_hybrid_bot",
+                        user_id="default_user",
+                        category="preferences",
+                        confidence=1.0,
+                    )
+                await engine.semantic.set_fact(
+                    "宠物布丁的品种",
+                    "布丁是白色布偶猫",
+                    bot_id="semantic_hybrid_bot",
+                    user_id="default_user",
+                    category="life_context",
+                    confidence=0.92,
+                )
+                ctx = await engine.load_context("那布偶的名字你应该也记得吧")
+                await engine.close()
+                return ctx
+
+        ctx = asyncio.run(run())
+
+        self.assertIn("布丁是白色布偶猫", ctx["system_suffix"])
+        self.assertIn("宠物布丁的品种", ctx["semantic_facts"])
+
+    def test_user_understanding_refresh_preserves_existing_auto_profile_items(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="understanding-refresh-preserve-") as tmp:
+                engine = MemoryEngine("refresh_preserve_bot", Path(tmp), config={"embedding": "none"})
+                await engine.init()
+                data = engine.user_understanding.load()
+                data["auto"]["current_context"].append("用户养了两只猫：布丁和奥利奥。")
+                data["auto"]["important_people"].append("布丁：白色布偶猫。")
+                engine.user_understanding._write(data)
+                await engine.user_understanding.refresh_auto_from_sources(
+                    facts=[
+                        {
+                            "key": "咖啡口味偏好",
+                            "value": "用户喜欢微甜拿铁",
+                            "category": "preferences",
+                            "confidence": 0.9,
+                        }
+                    ]
+                )
+                loaded = engine.user_understanding.load()
+                await engine.close()
+                return loaded
+
+        loaded = asyncio.run(run())
+
+        self.assertIn("用户养了两只猫：布丁和奥利奥。", loaded["layered"]["current"]["current_context"])
+        self.assertIn("布丁：白色布偶猫。", loaded["auto"]["important_people"])
+        self.assertIn("用户喜欢微甜拿铁", loaded["layered"]["core"]["preferences"])
+
+    def test_prompt_builder_renders_self_memory_without_other_daily_context(self):
+        from ai_companion.memory.prompt_builder import MemoryPromptBuilder
+
+        retrieved = RetrievedMemory(
+            intent="casual_chat",
+            daily_context={
+                "self_memory": [
+                    {
+                        "local_date": "2026-05-12",
+                        "kind": "topic_continuation",
+                        "content": "刚才那个话题我还在想，想接着跟你聊聊。",
+                    }
+                ]
+            },
+        )
+
+        suffix = MemoryPromptBuilder(max_chars=1600).build(retrieved)
+
+        self.assertIn("Bot 自己最近主动做过的事", suffix)
+        self.assertIn("topic_continuation", suffix)
+        self.assertIn("刚才那个话题我还在想", suffix)
+
     def test_daily_memory_cross_session_context_without_working_merge(self):
         async def run():
             with tempfile.TemporaryDirectory(prefix="daily-memory-") as tmp:
@@ -41,15 +237,18 @@ class DailyMemoryTest(unittest.TestCase):
                 ctx = await engine.load_context("刚才我们聊了什么？")
                 working_text = "\n".join(item.get("content", "") for item in ctx["working_history"])
                 suffix = ctx["system_suffix"]
+                diagnostics = ctx["memory_prompt_diagnostics"]
 
                 await engine.close()
-                return working_text, suffix, ctx
+                return working_text, suffix, ctx, diagnostics
 
-        working_text, suffix, ctx = asyncio.run(run())
+        working_text, suffix, ctx, diagnostics = asyncio.run(run())
         self.assertNotIn("项目发布压力很大", working_text)
         self.assertIn("项目发布压力很大", suffix)
         self.assertIn("feishu", suffix)
         self.assertEqual(ctx["daily_context"]["recent_messages"][0]["platform"], "feishu")
+        self.assertGreater(diagnostics["system_suffix_tokens_est"], 0)
+        self.assertIn("final_tokens_est", diagnostics["prompt_budget"])
 
     def test_daily_memory_can_be_disabled(self):
         async def run():
@@ -140,6 +339,108 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertEqual(working[0]["content"], "我刚刚主动分享了家里的小事")
         self.assertEqual(len(daily_ctx["recent_messages"]), 1)
         self.assertEqual(daily_ctx["recent_messages"][0]["role"], "assistant")
+
+    def test_proactive_assistant_message_keeps_origin_metadata_in_working_context(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="daily-memory-proactive-origin-") as tmp:
+                root = Path(tmp)
+                persona_dir = root / "persona"
+                persona_dir.mkdir(parents=True, exist_ok=True)
+                (persona_dir / "proactive.json").write_text(
+                    '{"enabled": true, "mode": "active"}',
+                    encoding="utf-8",
+                )
+                memory = MemoryEngine("proactive_origin_bot", root, config={"embedding": "none"})
+                await memory.init()
+                memory.start_session("gw-home")
+                engine = ProactiveEngine(
+                    bot_id="proactive_origin_bot",
+                    config=ProactiveConfig(persona_dir),
+                    state=ProactiveState("proactive_origin_bot", root),
+                    memory=memory,
+                )
+
+                async def sender(message: str):
+                    return True
+
+                engine._platform_sender = sender
+                engine.set_next_record_context(
+                    {
+                        "platform": "weixin",
+                        "session_id": "gw-home",
+                        "user_id": "default_user",
+                        "channel_type": "dm",
+                        "chat_id": "wx-user",
+                    }
+                )
+                sent = await engine._send_proactive_message("主动消息来源标记测试")
+                working_context = memory.working.load_context("gw-home")
+                daily_ctx = memory.daily.get_recent_context(
+                    bot_id="proactive_origin_bot",
+                    user_id="default_user",
+                )
+                loaded_ctx = await memory.load_context("在")
+                await memory.close()
+                return sent, working_context, daily_ctx, loaded_ctx
+
+        sent, working_context, daily_ctx, loaded_ctx = asyncio.run(run())
+        self.assertTrue(sent)
+        self.assertEqual(working_context[-1]["content"], "主动消息来源标记测试")
+        self.assertTrue(working_context[-1]["metadata"]["proactive"])
+        self.assertTrue(working_context[-1]["metadata"]["assistant_initiated"])
+        self.assertEqual(daily_ctx["self_memory"][0]["kind"], "idle_reminder")
+        self.assertIn("主动消息来源标记测试", daily_ctx["self_memory"][0]["content"])
+        self.assertGreaterEqual(loaded_ctx["memory_prompt_diagnostics"]["self_memory_count"], 1)
+        detail_sources = [
+            item.get("source")
+            for item in loaded_ctx["conscious_context"].get("active_memory_details", [])
+        ]
+        self.assertIn("self_memory", detail_sources)
+        self.assertIn("自传体线索", loaded_ctx["system_suffix"])
+
+    def test_contextual_proactive_message_records_motive_kind(self):
+        async def run():
+            from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
+
+            with tempfile.TemporaryDirectory(prefix="daily-memory-proactive-kind-") as tmp:
+                root = Path(tmp)
+                persona_dir = root / "persona"
+                persona_dir.mkdir(parents=True, exist_ok=True)
+                (persona_dir / "proactive.json").write_text(
+                    '{"enabled": true, "mode": "active"}',
+                    encoding="utf-8",
+                )
+                memory = MemoryEngine("proactive_kind_bot", root, config={"embedding": "none"})
+                await memory.init()
+                memory.start_session("gw-kind")
+                engine = ProactiveEngine(
+                    bot_id="proactive_kind_bot",
+                    config=ProactiveConfig(persona_dir),
+                    state=ProactiveState("proactive_kind_bot", root),
+                    memory=memory,
+                )
+
+                async def sender(message: str, target=None):
+                    return True
+
+                engine._platform_sender = sender
+                motive = ProactiveMotive(
+                    type=ProactiveMotiveType.DEFERRED_REPLY,
+                    priority=100,
+                    reason="继续刚才承诺的稍后回复",
+                    prompt_context="用户刚才问过一个问题，Bot 说晚点回来。",
+                )
+                sent = await engine.send_contextual_proactive_message(motive)
+                daily_ctx = memory.daily.get_recent_context(
+                    bot_id="proactive_kind_bot",
+                    user_id="default_user",
+                )
+                await memory.close()
+                return sent, daily_ctx
+
+        sent, daily_ctx = asyncio.run(run())
+        self.assertTrue(sent)
+        self.assertEqual(daily_ctx["self_memory"][0]["kind"], "deferred_reply")
 
     def test_proactive_engine_records_successful_sends(self):
         async def run():

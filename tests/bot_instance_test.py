@@ -40,6 +40,34 @@ class EchoModel:
         return "ok"
 
 
+class CaptureChatModel:
+    provider = "test"
+    model = "capture-chat-model"
+
+    def __init__(self, reply: str = "收到"):
+        self.reply = reply
+        self.calls: list[dict] = []
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        self.calls.append({"messages": messages, "system_prompt": system_prompt, "kwargs": kwargs})
+        return self.reply
+
+
+class SequencedChatModel:
+    provider = "test"
+    model = "sequenced-chat-model"
+
+    def __init__(self, replies: list[str]):
+        self.replies = list(replies)
+        self.calls: list[dict] = []
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        self.calls.append({"messages": messages, "system_prompt": system_prompt, "kwargs": kwargs})
+        if self.replies:
+            return self.replies.pop(0)
+        return "收到"
+
+
 class PromiseModel:
     provider = "test"
     model = "promise-model"
@@ -154,6 +182,108 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("模型请求失败", result)
         self.assertIn("broken / broken-model", result)
         self.assertIn("'NoneType' object is not subscriptable", result)
+
+    async def test_user_reply_after_proactive_message_gets_continuity_hint(self):
+        with TemporaryDirectory(prefix="bot-proactive-continuity-") as td:
+            root = Path(td)
+            bot_id = "proactive_continuity_bot"
+            _write_test_persona(root, bot_id)
+            model = CaptureChatModel("我刚才喊你呢。")
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=model,
+                data_dir=root,
+                memory_config={"embedding": "none"},
+                refusal_enabled=False,
+            )
+
+            try:
+                await bot.init(start_schedulers=False)
+                bot._schedulers_started = True
+                await bot.memory.record_assistant_message(
+                    "...在吗？",
+                    turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_proactive",
+                        "user_id": "default_user",
+                        "channel_type": "dm",
+                        "metadata": {
+                            "proactive": True,
+                            "assistant_initiated": True,
+                            "proactive_kind": "idle_reminder",
+                        },
+                    },
+                )
+                bot.memory.start_session("gw_proactive")
+                response = await bot.handle_message(
+                    "在",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_proactive",
+                        "user_id": "default_user",
+                        "channel_type": "dm",
+                    },
+                )
+            finally:
+                await bot.close()
+
+            main_call = next(
+                call for call in reversed(model.calls)
+                if call["messages"] and call["messages"][-1] == {"role": "user", "content": "在"}
+            )
+            messages = main_call["messages"]
+            self.assertEqual(response, "我刚才喊你呢。")
+            self.assertTrue(any(item.get("role") == "assistant" and item.get("content") == "...在吗？" for item in messages))
+            self.assertTrue(any("上一条是你主动发给用户的消息：...在吗？" in item.get("content", "") for item in messages))
+            self.assertEqual(messages[-1], {"role": "user", "content": "在"})
+
+    async def test_handle_message_records_turn_before_background_extraction_finishes(self):
+        with TemporaryDirectory(prefix="bot-immediate-memory-") as td:
+            root = Path(td)
+            bot_id = "immediate_memory_bot"
+            _write_test_persona(root, bot_id)
+            model = SequencedChatModel(["第一轮回复", "第二轮回复"])
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=model,
+                data_dir=root,
+                memory_config={"embedding": "none"},
+                refusal_enabled=False,
+            )
+
+            try:
+                await bot.init(start_schedulers=False)
+                bot._schedulers_started = True
+                await bot.handle_message(
+                    "第一轮内容",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_fast",
+                        "user_id": "default_user",
+                        "channel_type": "dm",
+                    },
+                )
+                history_after_first = list(reversed(bot.memory.working.get_recent("gw_fast", turns=2)))
+                await bot.handle_message(
+                    "第二轮内容",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_fast",
+                        "user_id": "default_user",
+                        "channel_type": "dm",
+                    },
+                )
+            finally:
+                await bot.close()
+
+            second_call = next(
+                call for call in model.calls
+                if call["messages"] and call["messages"][-1] == {"role": "user", "content": "第二轮内容"}
+            )
+            second_messages_text = "\n".join(item.get("content", "") for item in second_call["messages"])
+            self.assertEqual([item["content"] for item in history_after_first[-2:]], ["第一轮内容", "第一轮回复"])
+            self.assertIn("第一轮内容", second_messages_text)
+            self.assertIn("第一轮回复", second_messages_text)
 
     async def test_scheduler_runtime_lock_prevents_duplicate_bot_schedulers(self):
         with TemporaryDirectory(prefix="bot-scheduler-lock-") as td:

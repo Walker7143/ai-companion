@@ -5,6 +5,9 @@ from tempfile import TemporaryDirectory
 
 from ai_companion.proactive.config import ProactiveConfig
 from ai_companion.proactive.engine import ProactiveEngine
+from ai_companion.proactive.life_config import LifeConfig
+from ai_companion.proactive.life_engine import LifeEngine
+from ai_companion.proactive.life_state import LifeState
 from ai_companion.proactive.state import ProactiveState
 
 
@@ -81,10 +84,12 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
         with TemporaryDirectory(prefix="proactive-placeholder-") as td:
             engine = _build_engine(Path(td), "《开场白/称呼，话题内容或空字符串，结尾语》")
             message = await engine.generate_message("测试占位文本回退")
-            self.assertEqual(message, "最近怎么样？")
+            self.assertEqual(message, "刚刚想起你，来问一声。")
             self.assertNotIn("开场白/称呼", message)
             self.assertNotIn("话题内容或空字符串", message)
             self.assertNotIn("结尾语", message)
+            self.assertNotIn("在吗", message)
+            self.assertNotIn("最近怎么样", message)
 
     async def test_generate_contextual_message_falls_back_when_model_returns_schema_text(self):
         from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
@@ -208,6 +213,44 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("那你怎么看", prompt)
             self.assertIn("不要像重新开一个话题", prompt)
             self.assertIn("刚才你问的那个问题", message)
+
+    async def test_generate_message_prompt_includes_current_life_anchor(self):
+        with TemporaryDirectory(prefix="proactive-life-anchor-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = CaptureModel('{"opening":"喂","topic":"刚在客栈门口看洱海风把招牌吹得直晃。","ending":"你忙完没"}')
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=model,
+            )
+            life_state = LifeState("yangsisi", root / "life")
+            life_engine = LifeEngine(
+                "yangsisi",
+                LifeConfig(
+                    daily_life_profile={
+                        "location": "在大理经营一间叫'我在风花雪月里等你'的客栈。",
+                        "daily_routine": "打理客栈日常，接待住客，在洱海边散步。",
+                        "living_situation": "住在大理客栈里。",
+                    },
+                    sync_with_local_time_when_realtime=False,
+                ),
+                life_state,
+                model=None,
+            )
+            engine.set_life_engine(life_engine)
+
+            message = await engine.generate_message("想随手发一句")
+
+            prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("【当前生活锚点】", prompt)
+            self.assertIn("大理", prompt)
+            self.assertIn("客栈", prompt)
+            self.assertIn("洱海", prompt)
+            self.assertIn("不要把背景经历或通用职场场景写成正在发生", prompt)
+            self.assertIn("客栈门口", message)
 
 
 if __name__ == "__main__":

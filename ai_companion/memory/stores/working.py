@@ -3,6 +3,7 @@
 支持多会话隔离、自动上下文压缩、会话健康度评估
 """
 
+import json
 import aiosqlite
 import sqlite3
 from datetime import datetime
@@ -151,13 +152,13 @@ class WorkingMemoryStore:
             return []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT role, content FROM messages
+            SELECT role, content, metadata_json FROM messages
             WHERE session_id = ? AND compressed = 0
             ORDER BY id ASC
         """, (sid,))
         rows = cursor.fetchall()
         conn.close()
-        return [{"role": r[0], "content": r[1]} for r in rows]
+        return [_message_row(r[0], r[1], r[2]) for r in rows]
 
     def get_recent(self, session_id: Optional[str] = None, turns: int = 20) -> list[dict]:
         """获取最近 N 轮原始消息"""
@@ -166,29 +167,30 @@ class WorkingMemoryStore:
             return []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT role, content FROM messages
+            SELECT role, content, metadata_json FROM messages
             WHERE session_id = ? AND compressed = 0
             ORDER BY id DESC
             LIMIT ?
         """, (sid, turns * 2))
         rows = cursor.fetchall()
         conn.close()
-        return [{"role": r[0], "content": r[1]} for r in rows]
+        return [_message_row(r[0], r[1], r[2]) for r in rows]
 
     def load_context(self, session_id: Optional[str] = None,
-                     max_working_turns: int = 20) -> list[dict]:
+                     max_working_turns: int = 20,
+                     max_summaries: Optional[int] = None) -> list[dict]:
         """
         返回完整消息列表：
-        1. 所有压缩摘要（正序，最早→最近）
+        1. 最近若干条压缩摘要（正序，最早→最近）
         2. 未压缩的原始消息（正序，最早→最近）
 
-        保证 LLM 每次看到完整时间线。
+        保证 LLM 看到压缩后的连续性和最近对话，同时避免摘要无限累积。
         """
         sid = session_id or self.current_session
         if not sid:
             return []
 
-        summaries = self.get_summaries(sid)  # ["早期摘要1", "早期摘要2"]
+        summaries = self.get_summaries(sid, limit=max_summaries)  # ["早期摘要1", "早期摘要2"]
         recent = self.get_recent(sid, turns=max_working_turns)  # [{role, content}, ...]
 
         messages = []
@@ -201,17 +203,32 @@ class WorkingMemoryStore:
         messages.extend(recent)
         return messages
 
-    def get_summaries(self, session_id: Optional[str] = None) -> list[str]:
+    def get_summaries(self, session_id: Optional[str] = None, limit: Optional[int] = None) -> list[str]:
         """获取会话的所有压缩摘要"""
         sid = session_id or self.current_session
         if not sid:
             return []
         conn = sqlite3.connect(self.db_path)
-        cursor = conn.execute("""
-            SELECT summary FROM summaries
-            WHERE session_id = ?
-            ORDER BY id ASC
-        """, (sid,))
+        try:
+            normalized_limit = int(limit) if limit is not None else None
+        except (TypeError, ValueError):
+            normalized_limit = None
+        if normalized_limit is not None and normalized_limit > 0:
+            cursor = conn.execute("""
+                SELECT summary FROM (
+                    SELECT id, summary FROM summaries
+                    WHERE session_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                ORDER BY id ASC
+            """, (sid, normalized_limit))
+        else:
+            cursor = conn.execute("""
+                SELECT summary FROM summaries
+                WHERE session_id = ?
+                ORDER BY id ASC
+            """, (sid,))
         rows = cursor.fetchall()
         conn.close()
         return [r[0] for r in rows]
@@ -363,13 +380,13 @@ class WorkingMemoryStore:
             return []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT role, content, compressed FROM messages
+            SELECT role, content, compressed, metadata_json FROM messages
             WHERE session_id = ?
             ORDER BY id ASC
         """, (sid,))
         rows = cursor.fetchall()
         conn.close()
-        return [{"role": r[0], "content": r[1], "compressed": r[2]} for r in rows]
+        return [_message_row(r[0], r[1], r[3], compressed=r[2]) for r in rows]
 
     async def apply_summary(self, summary: str, session_id: Optional[str] = None) -> bool:
         """应用结构化摘要到工作记忆
@@ -419,3 +436,23 @@ class WorkingMemoryStore:
 
     async def close(self):
         pass
+
+
+def _message_row(role: str, content: str, metadata_json: Optional[str] = None, *, compressed: int | None = None) -> dict:
+    item = {"role": role, "content": content}
+    if compressed is not None:
+        item["compressed"] = compressed
+    metadata = _decode_metadata(metadata_json)
+    if metadata:
+        item["metadata"] = metadata
+    return item
+
+
+def _decode_metadata(metadata_json: Optional[str]) -> dict:
+    if not metadata_json:
+        return {}
+    try:
+        value = json.loads(metadata_json)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}

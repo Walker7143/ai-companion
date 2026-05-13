@@ -700,6 +700,12 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "importance",
                 "created_at",
                 "confidence" if "confidence" in cols else "0.7 AS confidence",
+                "relationship_effect" if "relationship_effect" in cols else "'' AS relationship_effect",
+                "sensitivity" if "sensitivity" in cols else "'normal' AS sensitivity",
+                "recall_style" if "recall_style" in cols else "'' AS recall_style",
+                "cue_tags_json" if "cue_tags_json" in cols else "'[]' AS cue_tags_json",
+                "topics_json" if "topics_json" in cols else "'[]' AS topics_json",
+                "emotion_tags_json" if "emotion_tags_json" in cols else "'[]' AS emotion_tags_json",
             ]
             rows = conn.execute("""
                 SELECT {cols}
@@ -711,7 +717,10 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             conn.close()
             result = [{"id": str(r[0]), "session_id": r[1], "summary": r[2],
                        "content": r[3], "importance": r[4], "created_at": r[5],
-                       "confidence": r[6], "related_session": r[1]} for r in rows]
+                       "confidence": r[6], "relationship_effect": r[7],
+                       "sensitivity": r[8], "recall_style": r[9],
+                       "cue_tags_json": r[10], "topics_json": r[11],
+                       "emotion_tags_json": r[12], "related_session": r[1]} for r in rows]
             return web.json_response(result)
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
@@ -780,6 +789,9 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                         "positive_streak" if "positive_streak" in rel_cols else "0 AS positive_streak",
                         "negative_streak" if "negative_streak" in rel_cols else "0 AS negative_streak",
                         "score_scale" if "score_scale" in rel_cols else "10 AS score_scale",
+                        "relationship_narrative" if "relationship_narrative" in rel_cols else "'' AS relationship_narrative",
+                        "current_posture" if "current_posture" in rel_cols else "'' AS current_posture",
+                        "interaction_guidance" if "interaction_guidance" in rel_cols else "'' AS interaction_guidance",
                     ]
                     rel_row = rel_conn.execute(
                         f"""
@@ -808,6 +820,9 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                             "positive_streak": int(rel_row[9] or 0),
                             "negative_streak": int(rel_row[10] or 0),
                             "score_scale": int(rel_row[11] or 100),
+                            "relationship_narrative": rel_row[12] or "",
+                            "current_posture": rel_row[13] or "",
+                            "interaction_guidance": rel_row[14] or "",
                         }
                 except Exception:
                     pass
@@ -889,6 +904,14 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     async def handle_debug_last_context(request):
         """GET /api/v1/admin/debug/:bot_id/last-context"""
         bot_id = request.match_info["bot_id"]
+        bot = bot_manager.get_bot(bot_id)
+        last_context = bot.get_last_debug_context() if bot and hasattr(bot, "get_last_debug_context") else None
+        if last_context:
+            return web.json_response({
+                "bot_id": bot_id,
+                "last_context": last_context,
+            })
+
         understanding, understanding_path = _load_user_understanding(bot_id)
         semantic_path = _get_memory_db_path(bot_id, "semantic.db")
         episodic_path = _get_memory_db_path(bot_id, "episodic.db")
@@ -904,10 +927,12 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                     "episodic_db": str(episodic_path) if episodic_path else None,
                     "working_db": str(working_path) if working_path else None,
                     "user_understanding_path": understanding_path,
+                    "memory_prompt_diagnostics": {},
                 },
                 "response_style_trace": {
                     "mode": "rule",
                     "source": "ResponseStylePolisher",
+                    "fallback": True,
                 },
             },
         })

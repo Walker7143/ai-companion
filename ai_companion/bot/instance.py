@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import uuid
@@ -85,6 +86,7 @@ class BotInstance:
         self.model: "ModelAdapter" = model
         self._initialized = False
         self._last_model_error: str | None = None
+        self._last_debug_context: dict | None = None
 
         # 如果模型已注入，立即设置到拒绝引擎
         if model is not None:
@@ -623,6 +625,69 @@ class BotInstance:
             system_prompt = system_prompt + adjustment_note
         return system_prompt
 
+    def get_last_debug_context(self) -> dict | None:
+        """Return the latest generation-time debug snapshot."""
+        if self._last_debug_context is None:
+            return None
+        return copy.deepcopy(self._last_debug_context)
+
+    def _build_debug_context_snapshot(
+        self,
+        *,
+        system_prompt: str,
+        system_suffix: str,
+        memory_suffix: str | None,
+        memory_context: dict | None,
+        relationship_state: dict | None,
+        image_context_suffix: str | None,
+        adjustment_note: str,
+    ) -> dict:
+        ctx = memory_context if isinstance(memory_context, dict) else {}
+        working_history = copy.deepcopy(ctx.get("working_history", [])) if isinstance(ctx.get("working_history"), list) else []
+        episodic_recall = copy.deepcopy(ctx.get("episodic_recall", [])) if isinstance(ctx.get("episodic_recall"), list) else []
+        semantic_facts = copy.deepcopy(ctx.get("semantic_facts", {})) if isinstance(ctx.get("semantic_facts"), dict) else {}
+        retrieved_relationship = copy.deepcopy(ctx.get("relationship_state", {})) if isinstance(ctx.get("relationship_state"), dict) else {}
+        daily_context = copy.deepcopy(ctx.get("daily_context", {})) if isinstance(ctx.get("daily_context"), dict) else {}
+        user_understanding = copy.deepcopy(ctx.get("user_understanding", {})) if isinstance(ctx.get("user_understanding"), dict) else {}
+        conscious_context = copy.deepcopy(ctx.get("conscious_context", {})) if isinstance(ctx.get("conscious_context"), dict) else {}
+        prompt_diagnostics = copy.deepcopy(ctx.get("memory_prompt_diagnostics", {})) if isinstance(ctx.get("memory_prompt_diagnostics"), dict) else {}
+
+        retrieved_memory = {
+            "working_history": working_history,
+            "episodic_recall": episodic_recall,
+            "semantic_facts": semantic_facts,
+            "relationship_state": retrieved_relationship,
+            "daily_context": daily_context,
+            "memory_intent": ctx.get("memory_intent", ""),
+            "user_understanding": user_understanding,
+            "conscious_context": conscious_context,
+            "memory_prompt_diagnostics": prompt_diagnostics,
+            "system_suffix": ctx.get("system_suffix", ""),
+        }
+        response_style_trace = {
+            "mode": "rule",
+            "source": "ResponseStylePolisher",
+            "memory_intent": ctx.get("memory_intent", ""),
+        }
+        if image_context_suffix:
+            response_style_trace["image_context_suffix"] = image_context_suffix
+        if adjustment_note:
+            response_style_trace["adjustment_note"] = adjustment_note
+        return {
+            "system_prompt": system_prompt,
+            "system_suffix": system_suffix,
+            "memory_suffix": memory_suffix or "",
+            "working_history": working_history,
+            "retrieved_memory": retrieved_memory,
+            "response_style_trace": response_style_trace,
+            "memory_prompt_diagnostics": prompt_diagnostics,
+            "conscious_context": conscious_context,
+            "memory_intent": ctx.get("memory_intent", ""),
+            "relationship_state": relationship_state or retrieved_relationship,
+            "daily_context": daily_context,
+            "user_understanding": user_understanding,
+        }
+
     def _build_embodied_expression_prompt(
         self,
         *,
@@ -686,6 +751,8 @@ class BotInstance:
             effective_user_input = "[\u7528\u6237\u53d1\u9001\u4e86\u4e00\u5f20\u56fe\u7247]"
             runtime_input["text"] = effective_user_input
 
+        self._bind_memory_turn_context(memory_turn_context)
+
         # 1. 拒绝检查（如果启用）
         relationship_state = None
         if self.memory:
@@ -704,7 +771,7 @@ class BotInstance:
             # 硬拒绝直接返回，但仍然记录为一轮真实对话，避免 Bot 丢失自己说过的边界。
             logger.info(f"[Refusal] 拒绝请求: {refusal_response.reason} | {refusal_response.category.value}")
             response = refusal_response.reply or "这件事我不能答应你。我们换个别的办法吧。"
-            self._record_refusal_turn(
+            await self._record_refusal_turn(
                 effective_user_input,
                 response,
                 refusal_response,
@@ -769,6 +836,15 @@ class BotInstance:
                 memory_context=ctx,
                 relationship_state=relationship_state,
             )
+            self._last_debug_context = self._build_debug_context_snapshot(
+                system_prompt=system_prompt,
+                system_suffix=str(ctx.get("system_suffix") or ""),
+                memory_suffix=memory_suffix,
+                memory_context=ctx,
+                relationship_state=relationship_state,
+                image_context_suffix=image_context_suffix,
+                adjustment_note=adjustment_note,
+            )
 
             # 4. 构建 messages
             history = [] if realtime_status_query else ctx.get("working_history", [])
@@ -786,10 +862,15 @@ class BotInstance:
                 name="closeout_analysis",
             )
 
-            # 6. 异步写入记忆
+            # 6. 先同步写入原始轮次，长记忆抽取放后台，避免用户连发时上一轮还不可见。
+            recorded_context = await self.memory.record_turn(
+                effective_user_input,
+                response,
+                turn_context=memory_turn_context,
+            )
             self._track_background_task(
-                self.memory.on_message(effective_user_input, response, turn_context=memory_turn_context),
-                name="memory.on_message",
+                self.memory.extract_turn_memory(effective_user_input, response, turn_context=recorded_context),
+                name="memory.extract_turn_memory",
             )
         else:
             memory_suffix = image_context_suffix if image_context_suffix else None
@@ -799,6 +880,15 @@ class BotInstance:
                 user_input=effective_user_input,
                 memory_context={},
                 relationship_state=relationship_state,
+            )
+            self._last_debug_context = self._build_debug_context_snapshot(
+                system_prompt=system_prompt,
+                system_suffix="",
+                memory_suffix=memory_suffix,
+                memory_context={},
+                relationship_state=relationship_state,
+                image_context_suffix=image_context_suffix,
+                adjustment_note=adjustment_note,
             )
             messages = [{"role": "user", "content": effective_user_input}]
             response = await self._chat_with_fallback(messages, system_prompt)
@@ -822,15 +912,37 @@ class BotInstance:
 
     def _prepare_generation_messages(self, messages: list[dict]) -> list[dict]:
         cleaned: list[dict] = []
-        for item in messages if isinstance(messages, list) else []:
+        source_messages = messages if isinstance(messages, list) else []
+        last_message_index = self._last_generation_context_message_index(source_messages)
+        for idx, item in enumerate(source_messages):
             if not isinstance(item, dict):
                 continue
             copied = dict(item)
             role = copied.get("role")
             if role in {"assistant", "system"}:
                 copied["content"] = self.response_polisher.clean_generation_context(str(copied.get("content", "") or ""))
-            cleaned.append(copied)
+            cleaned.append({"role": role, "content": copied.get("content", "")})
+            if idx == last_message_index and role == "assistant" and self._is_assistant_initiated_memory(copied):
+                content = str(copied.get("content", "") or "").strip()
+                if content:
+                    cleaned.append({
+                        "role": "system",
+                        "content": f"[连续性提示] 上一条是你主动发给用户的消息：{content}",
+                    })
         return cleaned
+
+    def _is_assistant_initiated_memory(self, item: dict) -> bool:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        return bool(metadata.get("assistant_initiated") or metadata.get("proactive"))
+
+    def _last_generation_context_message_index(self, messages: list[dict]) -> int | None:
+        for idx in range(len(messages) - 1, -1, -1):
+            item = messages[idx]
+            if not isinstance(item, dict):
+                continue
+            if item.get("role") in {"user", "assistant"}:
+                return idx
+        return None
 
     def _prepare_generation_suffix(self, suffix: str | None) -> str | None:
         if not suffix:
@@ -898,6 +1010,17 @@ class BotInstance:
             "media_urls": [str(item) for item in media_urls if str(item).strip()],
             "media_types": [str(item) for item in media_types if str(item).strip()],
         }
+
+    def _bind_memory_turn_context(self, memory_turn_context: dict | None) -> None:
+        """Apply explicit per-turn memory routing before loading context."""
+        if not self.memory or not isinstance(memory_turn_context, dict):
+            return
+        user_id = str(memory_turn_context.get("user_id") or "").strip()
+        if user_id:
+            self.memory.user_id = user_id
+        session_id = str(memory_turn_context.get("session_id") or "").strip()
+        if session_id:
+            self.memory.start_session(session_id)
 
     def _build_skill_context(self) -> SkillContext:
         return SkillContext(
@@ -1164,7 +1287,7 @@ class BotInstance:
         self.conversation_history.append({"role": "user", "content": history_input})
         self.conversation_history.append({"role": "assistant", "content": response})
 
-    def _record_refusal_turn(
+    async def _record_refusal_turn(
         self,
         user_input: str,
         response: str,
@@ -1178,9 +1301,10 @@ class BotInstance:
             return
 
         context = self._with_refusal_metadata(turn_context, refusal_response)
+        recorded_context = await self.memory.record_turn(user_input, response, turn_context=context)
         self._track_background_task(
-            self.memory.on_message(user_input, response, turn_context=context),
-            name="memory.on_message.refusal",
+            self.memory.extract_turn_memory(user_input, response, turn_context=recorded_context),
+            name="memory.extract_turn_memory.refusal",
         )
 
     def _with_refusal_metadata(self, turn_context: dict | None, refusal_response) -> dict:

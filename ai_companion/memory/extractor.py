@@ -81,6 +81,10 @@ class MemoryExtractor:
       "confidence": 0.0到1.0,
       "topics": ["主题"],
       "emotion_tags": ["情绪"],
+      "relationship_effect": "普通|拉近|修复|紧张",
+      "sensitivity": "normal|sensitive",
+      "recall_style": "以后如何自然使用这段记忆，敏感内容要写明只在用户主动提起或高度相关时使用",
+      "cue_tags": ["以后可能唤起这段记忆的短线索"],
       "reason": "为什么是长期共同经历"
     }}
   ],
@@ -105,6 +109,7 @@ class MemoryExtractor:
 
 规则：
 - 普通寒暄、一次性闲聊不要放入 episodes。
+- episodes 要像“共同经历胶囊”，保留情绪和关系含义；隐私、身体、疾病、创伤、前任、家庭冲突等标为 sensitive。
 - 不要从助手回复反推用户事实。
 - 短暂情绪只有在用户明确表示持续或重要时才记录为 life_context。
 - 不确定就降低 confidence，不要编造。
@@ -206,6 +211,7 @@ class MemoryExtractor:
                 continue
             topics = item.get("topics") if isinstance(item.get("topics"), list) else []
             emotion_tags = item.get("emotion_tags") if isinstance(item.get("emotion_tags"), list) else []
+            cue_tags = item.get("cue_tags") if isinstance(item.get("cue_tags"), list) else []
             candidates.append(
                 MemoryCandidate(
                     type="episode",
@@ -217,7 +223,14 @@ class MemoryExtractor:
                     source="auto",
                     evidence=[session_id],
                     reason=str(item.get("reason") or "").strip(),
-                    metadata={"topics": topics, "emotion_tags": emotion_tags},
+                    metadata={
+                        "topics": topics,
+                        "emotion_tags": emotion_tags,
+                        "relationship_effect": str(item.get("relationship_effect") or "").strip(),
+                        "sensitivity": str(item.get("sensitivity") or "").strip(),
+                        "recall_style": str(item.get("recall_style") or "").strip(),
+                        "cue_tags": cue_tags,
+                    },
                 )
             )
 
