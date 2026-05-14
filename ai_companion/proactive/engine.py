@@ -905,6 +905,12 @@ class ProactiveEngine:
         normalized = self._normalize_message_text(message)
         return any(token in normalized for token in _PLACEHOLDER_STRUCTURED_PARTS)
 
+    def _looks_like_structured_message_payload(self, message: str) -> bool:
+        lowered = str(message or "").lower()
+        return "{" in lowered and any(
+            key in lowered for key in ('"message"', '"opening"', '"topic"', '"ending"')
+        )
+
     def _parse_structured_message(self, content: str) -> Optional[str]:
         """解析结构化消息输出，组合成最终消息"""
         content = content.strip()
@@ -912,33 +918,69 @@ class ProactiveEngine:
         # 提取 JSON
         json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content, re.DOTALL)
         if not json_match:
-            return None
+            return self._parse_partial_structured_message(content)
 
         try:
-            data = json.loads(json_match.group())
-            direct_message = str(data.get("message", "") or "").strip()
-            if direct_message and not self._is_placeholder_message(direct_message):
-                return direct_message
-            opening = str(data.get("opening", "") or "").strip()
-            topic = str(data.get("topic", "") or "").strip()
-            ending = str(data.get("ending", "") or "").strip()
-
-            # 组合消息
-            parts = []
-            if opening and not self._is_placeholder_part(opening):
-                parts.append(opening)
-            if topic and not self._is_placeholder_part(topic):
-                parts.append(topic)
-            if ending and not self._is_placeholder_part(ending):
-                parts.append(ending)
-
-            message = "，".join(parts) if parts else None
-            if message and self._is_placeholder_message(message):
-                return None
-            return message
+            return self._compose_structured_message(json.loads(json_match.group()))
         except (json.JSONDecodeError, Exception) as e:
             logger.debug(f"[ProactiveEngine] 解析结构化消息失败: {e}")
+            return self._parse_partial_structured_message(content)
+
+    def _parse_partial_structured_message(self, content: str) -> Optional[str]:
+        """Best-effort extraction for truncated JSON so field names are never sent."""
+        lowered = content.lower()
+        if not any(key in lowered for key in ('"message"', '"opening"', '"topic"', '"ending"')):
             return None
+
+        data = {}
+        for key in ("message", "opening", "topic", "ending"):
+            match = re.search(
+                rf'"{key}"\s*:\s*"(?P<value>.*?)(?=",\s*"[a-zA-Z_][^"]*"\s*:|"\s*[,}}]|\s*[,}}]|$)',
+                content,
+                re.DOTALL,
+            )
+            if match:
+                value = match.group("value").strip()
+                value = value.strip('"\',} \t\r\n')
+                if value:
+                    data[key] = value
+        return self._compose_structured_message(data)
+
+    def _compose_structured_message(self, data: dict) -> Optional[str]:
+        direct_message = str(data.get("message", "") or "").strip()
+        if direct_message and not self._is_placeholder_message(direct_message):
+            return direct_message
+        opening = str(data.get("opening", "") or "").strip()
+        topic = str(data.get("topic", "") or "").strip()
+        ending = str(data.get("ending", "") or "").strip()
+
+        # 组合消息
+        parts = []
+        if opening and not self._is_placeholder_part(opening):
+            parts.append(opening)
+        if topic and not self._is_placeholder_part(topic):
+            parts.append(topic)
+        if ending and not self._is_placeholder_part(ending):
+            parts.append(ending)
+
+        message = self._join_structured_message_parts(parts) if parts else None
+        if message and self._is_placeholder_message(message):
+            return None
+        return message
+
+    def _join_structured_message_parts(self, parts: list[str]) -> str:
+        message = ""
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            if not message:
+                message = part
+            elif message[-1] in "。！？!?…~～":
+                message += part
+            else:
+                message += f"，{part}"
+        return message
 
     def _parse_decision(self, content: str) -> ProactiveDecision:
         """解析 LLM 的判断结果"""
@@ -1138,6 +1180,16 @@ class ProactiveEngine:
 
     async def _send_proactive_message(self, message: str, target: dict | None = None) -> bool:
         """发送主动消息并更新状态"""
+        message = str(message or "").strip()
+        parsed_message = self._parse_structured_message(message)
+        if parsed_message:
+            message = parsed_message
+        elif self._looks_like_structured_message_payload(message):
+            logger.warning("[ProactiveEngine] 主动消息疑似结构化内容未解析，使用 fallback")
+            message = self._get_fallback_message("with_topic")
+        elif not message:
+            message = self._get_fallback_message("with_topic")
+
         if not self._platform_sender:
             logger.warning(f"[ProactiveEngine] 未配置 platform_sender，消息未发送: {message[:50]}...")
             return False

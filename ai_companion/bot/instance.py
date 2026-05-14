@@ -7,6 +7,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from ..context.document_reader import (
+    DEFAULT_CHUNK_CHARS as DEFAULT_DOCUMENT_CHUNK_CHARS,
+    combine_document_texts,
+    extract_documents_from_media,
+    is_document_media,
+    split_text_chunks,
+)
 from ..memory.engine import MemoryEngine
 from ..persona.loader import PersonaLoader
 from ..persona.engine import PersonaEngine
@@ -40,6 +47,9 @@ if TYPE_CHECKING:
     from ..model.adapters.base import ModelAdapter
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_DOCUMENT_MEMORY_CHARS = 12_000
+DEFAULT_DOCUMENT_TASK_CHARS = 30_000
 
 
 class BotInstance:
@@ -87,6 +97,7 @@ class BotInstance:
         self._initialized = False
         self._last_model_error: str | None = None
         self._last_debug_context: dict | None = None
+        self._document_sessions: dict[str, dict] = {}
 
         # 如果模型已注入，立即设置到拒绝引擎
         if model is not None:
@@ -641,6 +652,7 @@ class BotInstance:
         relationship_state: dict | None,
         image_context_suffix: str | None,
         adjustment_note: str,
+        document_context_suffix: str | None = None,
     ) -> dict:
         ctx = memory_context if isinstance(memory_context, dict) else {}
         working_history = copy.deepcopy(ctx.get("working_history", [])) if isinstance(ctx.get("working_history"), list) else []
@@ -671,6 +683,8 @@ class BotInstance:
         }
         if image_context_suffix:
             response_style_trace["image_context_suffix"] = image_context_suffix
+        if document_context_suffix:
+            response_style_trace["document_context_suffix"] = document_context_suffix
         if adjustment_note:
             response_style_trace["adjustment_note"] = adjustment_note
         return {
@@ -745,10 +759,34 @@ class BotInstance:
             self._record_skill_command_history(user_input, response)
             return response
 
+        document_context_suffix, document_user_hint, document_memory_text = self._prepare_document_context(
+            user_input,
+            memory_turn_context,
+        )
+        if document_user_hint and not document_context_suffix and not str(user_input or "").strip():
+            if self.memory:
+                recorded_context = await self.memory.record_turn(
+                    "[用户发送了一份文档，等待处理指令]",
+                    document_user_hint,
+                    turn_context=memory_turn_context,
+                )
+                self._track_background_task(
+                    self.memory.extract_turn_memory("[用户发送了一份文档，等待处理指令]", document_user_hint, turn_context=recorded_context),
+                    name="memory.extract_turn_memory.document_received",
+                )
+            self.conversation_history.append({"role": "user", "content": "[用户发送了一份文档]"})
+            self.conversation_history.append({"role": "assistant", "content": document_user_hint})
+            return document_user_hint
+
         runtime_input = self._build_runtime_input(user_input, memory_turn_context)
         effective_user_input = user_input
         if not effective_user_input.strip() and runtime_input.get("media_urls"):
-            effective_user_input = "[\u7528\u6237\u53d1\u9001\u4e86\u4e00\u5f20\u56fe\u7247]"
+            if self._has_document_media(runtime_input):
+                effective_user_input = "[用户发送了一份文档]"
+            elif self._has_image_media(runtime_input):
+                effective_user_input = "[用户发送了一张图片]"
+            else:
+                effective_user_input = "[用户发送了一个媒体附件]"
             runtime_input["text"] = effective_user_input
 
         self._bind_memory_turn_context(memory_turn_context)
@@ -828,6 +866,8 @@ class BotInstance:
             memory_suffix = None if realtime_status_query else self._prepare_generation_suffix(ctx.get("system_suffix"))
             if image_context_suffix:
                 memory_suffix = self._merge_memory_suffix(memory_suffix, image_context_suffix)
+            if document_context_suffix:
+                memory_suffix = self._merge_memory_suffix(memory_suffix, document_context_suffix)
 
             system_prompt = self._build_system_prompt(
                 adjustment_note=adjustment_note,
@@ -843,6 +883,7 @@ class BotInstance:
                 memory_context=ctx,
                 relationship_state=relationship_state,
                 image_context_suffix=image_context_suffix,
+                document_context_suffix=document_context_suffix,
                 adjustment_note=adjustment_note,
             )
 
@@ -863,17 +904,20 @@ class BotInstance:
             )
 
             # 6. 先同步写入原始轮次，长记忆抽取放后台，避免用户连发时上一轮还不可见。
+            memory_user_input = self._document_memory_user_input(effective_user_input, document_memory_text)
             recorded_context = await self.memory.record_turn(
-                effective_user_input,
+                memory_user_input,
                 response,
                 turn_context=memory_turn_context,
             )
             self._track_background_task(
-                self.memory.extract_turn_memory(effective_user_input, response, turn_context=recorded_context),
+                self.memory.extract_turn_memory(memory_user_input, response, turn_context=recorded_context),
                 name="memory.extract_turn_memory",
             )
         else:
             memory_suffix = image_context_suffix if image_context_suffix else None
+            if document_context_suffix:
+                memory_suffix = self._merge_memory_suffix(memory_suffix, document_context_suffix)
             system_prompt = self._build_system_prompt(
                 adjustment_note=adjustment_note,
                 memory_suffix=memory_suffix,
@@ -888,6 +932,7 @@ class BotInstance:
                 memory_context={},
                 relationship_state=relationship_state,
                 image_context_suffix=image_context_suffix,
+                document_context_suffix=document_context_suffix,
                 adjustment_note=adjustment_note,
             )
             messages = [{"role": "user", "content": effective_user_input}]
@@ -903,6 +948,8 @@ class BotInstance:
 
         if image_user_hint and image_user_hint not in response:
             response = f"{image_user_hint}\n{response}"
+        if document_user_hint and document_user_hint not in response:
+            response = f"{document_user_hint}\n{response}"
 
         # 记录历史
         self.conversation_history.append({"role": "user", "content": effective_user_input})
@@ -943,6 +990,231 @@ class BotInstance:
             if item.get("role") in {"user", "assistant"}:
                 return idx
         return None
+
+    def _prepare_document_context(
+        self,
+        user_input: str,
+        memory_turn_context: dict | None,
+    ) -> tuple[str, str, str]:
+        context = memory_turn_context if isinstance(memory_turn_context, dict) else {}
+        session_key = self._document_session_key(context)
+        media_urls = context.get("media_urls") if isinstance(context.get("media_urls"), list) else []
+        media_types = context.get("media_types") if isinstance(context.get("media_types"), list) else []
+        instruction = str(user_input or "").strip()
+
+        if self._has_document_media({"media_urls": media_urls, "media_types": media_types}):
+            results = extract_documents_from_media(media_urls, media_types)
+            combined, errors, truncated = combine_document_texts(results)
+            if not combined:
+                self._document_sessions.pop(session_key, None)
+                if errors:
+                    return "", f"我收到了文档，但这次没能读出正文（{'; '.join(errors[:2])}）。", ""
+                return "", "我收到了文档，但这类文件现在还读不出正文。", ""
+
+            chunks = split_text_chunks(combined, max_chars=DEFAULT_DOCUMENT_CHUNK_CHARS)
+            if not chunks:
+                self._document_sessions.pop(session_key, None)
+                return "", "我收到了文档，但里面没有可读取的文字内容。", ""
+
+            session = {
+                "chunks": chunks,
+                "full_text": combined,
+                "names": [item.name for item in results if item.text],
+                "errors": errors,
+                "truncated": truncated,
+            }
+            self._document_sessions[session_key] = session
+            if not instruction:
+                return "", self._document_received_prompt(session), ""
+            return self._document_context_for_instruction(session, instruction)
+
+        pending = self._document_sessions.get(session_key)
+        if pending and instruction:
+            return self._document_context_for_instruction(pending, instruction)
+
+        return "", "", ""
+
+    def _document_received_prompt(self, session: dict) -> str:
+        chunks = session.get("chunks") if isinstance(session.get("chunks"), list) else []
+        names = session.get("names") if isinstance(session.get("names"), list) else []
+        name_text = "、".join(str(item) for item in names[:3] if str(item).strip()) or "这份文档"
+        note = f"我收到 {name_text} 了。"
+        if chunks:
+            note += f"内容比较长，我会等你说要怎么处理，再按你的要求去读。"
+        else:
+            note += "你想让我怎么处理？"
+        return note + "你可以直接说：总结、出分析报告、帮你改稿、补充数据，或者指定从哪一章/哪一段开始看。"
+
+    def _document_context_for_instruction(self, session: dict, instruction: str) -> tuple[str, str, str]:
+        text = str(session.get("full_text") or "").strip()
+        chunks = session.get("chunks") if isinstance(session.get("chunks"), list) else []
+        names = session.get("names") if isinstance(session.get("names"), list) else []
+        name_text = "、".join(str(item) for item in names[:3] if str(item).strip()) or "用户发送的文档"
+        excerpt = text[:DEFAULT_DOCUMENT_TASK_CHARS].strip()
+        truncated = len(text) > len(excerpt) or bool(session.get("truncated"))
+        lines = [
+            "[用户已发送文档，以下内容供本轮任务使用]",
+            f"文档: {name_text}",
+            f"解析片段数: {len(chunks)}",
+            f"用户本轮指令: {instruction}",
+            "行为要求: 根据用户本轮指令决定阅读策略；不要默认从头朗读；如果任务需要全文但当前摘录不足，要说明需要继续读取/分批处理。",
+        ]
+        if truncated:
+            lines.append("提示: 文档很长，本轮只注入前部摘录；需要更完整处理时应分批继续。")
+        errors = session.get("errors") if isinstance(session.get("errors"), list) else []
+        if errors:
+            lines.append(f"未能读取的附件: {'; '.join(str(item) for item in errors[:2])}")
+        lines.extend(["", excerpt])
+        memory_text = self._document_memory_text(name_text, excerpt, index=0, total=max(1, len(chunks)), truncated=truncated)
+        return "\n".join(lines).strip(), "", memory_text
+
+    def _document_context_for_session(self, session: dict, *, first: bool) -> tuple[str, str, str]:
+        chunks = session.get("chunks") if isinstance(session.get("chunks"), list) else []
+        if not chunks:
+            return "", "", ""
+        index = max(0, min(int(session.get("index", 0) or 0), len(chunks) - 1))
+        total = len(chunks)
+        names = session.get("names") if isinstance(session.get("names"), list) else []
+        name_text = "、".join(str(item) for item in names[:3] if str(item).strip()) or "用户发送的文档"
+        current = str(chunks[index] or "").strip()
+        has_more = index < total - 1
+        note_lines = [
+            "[文档解析上下文]",
+            f"文档: {name_text}",
+            f"当前片段: {index + 1}/{total}",
+        ]
+        if session.get("truncated"):
+            note_lines.append("提示: 文档较大，已按最大读取长度截取可解析正文。")
+        errors = session.get("errors") if isinstance(session.get("errors"), list) else []
+        if errors:
+            note_lines.append(f"未能读取的附件: {'; '.join(str(item) for item in errors[:2])}")
+        if has_more:
+            note_lines.append("行为要求: 只基于当前片段回答或小结；结尾自然地询问用户要不要继续看下一部分。")
+        else:
+            note_lines.append("行为要求: 这是最后一部分；可以整合目前已看到的信息回答用户。")
+        note_lines.append("")
+        note_lines.append(current)
+        context_suffix = "\n".join(note_lines).strip()
+
+        if total == 1:
+            user_hint = ""
+        elif first:
+            user_hint = f"我先读第 1/{total} 部分。"
+        elif has_more:
+            user_hint = f"我继续读第 {index + 1}/{total} 部分。"
+        else:
+            user_hint = f"这是第 {index + 1}/{total} 部分，也是最后一部分。"
+        memory_text = self._document_memory_text(name_text, current, index=index, total=total, truncated=bool(session.get("truncated")))
+        return context_suffix, user_hint, memory_text
+
+    def _document_memory_text(
+        self,
+        name: str,
+        text: str,
+        *,
+        index: int,
+        total: int,
+        truncated: bool,
+    ) -> str:
+        content = str(text or "").strip()
+        if not content:
+            return ""
+        excerpt = content[:DEFAULT_DOCUMENT_MEMORY_CHARS].strip()
+        if len(content) > len(excerpt):
+            excerpt += "\n...[文档片段已截断]"
+        if truncated:
+            excerpt += "\n...[原始文档较大，解析阶段已截取可读正文]"
+        return "\n".join(
+            [
+                f"[用户发送了一份文档: {name}]",
+                f"[文档片段 {index + 1}/{total}]",
+                excerpt,
+            ]
+        ).strip()
+
+    def _document_memory_user_input(self, user_input: str, document_memory_text: str) -> str:
+        user_text = str(user_input or "").strip()
+        document_text = str(document_memory_text or "").strip()
+        if not document_text:
+            return user_text
+        if user_text in {"", "[用户发送了一份文档]"}:
+            return document_text
+        return f"{user_text}\n\n[关联文档摘录]\n{document_text}"
+
+    def _document_session_key(self, context: dict) -> str:
+        return str(
+            context.get("session_id")
+            or context.get("chat_id")
+            or getattr(getattr(self.memory, "working", None), "current_session", "")
+            or "default"
+        )
+
+    def _has_document_media(self, runtime_input: dict) -> bool:
+        media_urls = runtime_input.get("media_urls") if isinstance(runtime_input.get("media_urls"), list) else []
+        media_types = runtime_input.get("media_types") if isinstance(runtime_input.get("media_types"), list) else []
+        for idx, path in enumerate(media_urls):
+            media_type = str(media_types[idx] if idx < len(media_types) else "" or "")
+            if is_document_media(str(path), media_type):
+                return True
+        return False
+
+    def _has_image_media(self, runtime_input: dict) -> bool:
+        media_urls = runtime_input.get("media_urls") if isinstance(runtime_input.get("media_urls"), list) else []
+        media_types = runtime_input.get("media_types") if isinstance(runtime_input.get("media_types"), list) else []
+        if not media_urls:
+            return False
+        return any(str(item).startswith("image/") for item in media_types) if media_types else True
+
+    def _is_document_continue_request(self, text: str) -> bool:
+        compact = "".join(str(text or "").strip().lower().split())
+        if not compact:
+            return False
+        if any(marker in compact for marker in {"不继续", "不用继续", "别继续", "先不", "stop", "停止"}):
+            return False
+        continue_markers = {
+            "继续看",
+            "下一部分",
+            "下一段",
+            "下一页",
+            "接着看",
+            "往下看",
+            "看下去",
+            "继续解析",
+            "继续读",
+        }
+        if any(marker in compact for marker in continue_markers):
+            return True
+        return compact in {
+            "继续",
+            "goon",
+            "continue",
+            "next",
+        }
+
+    def _is_document_followup_request(self, text: str) -> bool:
+        compact = "".join(str(text or "").strip().lower().split())
+        if not compact:
+            return False
+        if self._is_document_continue_request(compact):
+            return False
+        followup_markers = {
+            "这份文档",
+            "这个文档",
+            "这篇文档",
+            "这份文件",
+            "这个文件",
+            "这篇文件",
+            "读后感",
+            "文档里",
+            "文件里",
+            "里面写",
+            "里面说",
+            "那几段",
+            "那几个人",
+            "名字",
+            "感情关系",
+        }
+        return any(marker in compact for marker in followup_markers)
 
     def _prepare_generation_suffix(self, suffix: str | None) -> str | None:
         if not suffix:

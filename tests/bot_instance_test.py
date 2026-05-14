@@ -824,6 +824,224 @@ class BotInstanceGenerationContextTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response, "（低头看了你一眼）我在。")
 
 
+class BotInstanceDocumentContextTest(unittest.IsolatedAsyncioTestCase):
+    async def test_document_without_instruction_asks_how_to_handle_it(self):
+        class DocumentCaptureModel:
+            provider = "test"
+            model = "document-capture"
+
+            def __init__(self):
+                self.system_prompts = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                if isinstance(system_prompt, str):
+                    self.system_prompts.append(system_prompt)
+                return "不应该调用模型"
+
+        with TemporaryDirectory(prefix="bot-doc-context-") as td:
+            root = Path(td)
+            doc_path = root / "report.txt"
+            first = "FIRST_CHUNK_MARKER " + ("一" * 6500)
+            second = "SECOND_CHUNK_MARKER " + ("二" * 6500)
+            doc_path.write_text(first + "\n\n" + second, encoding="utf-8")
+
+            model = DocumentCaptureModel()
+            bot = BotInstance(
+                {"id": "shen_nian", "name": "测试 Bot"},
+                model=model,
+                memory_config=None,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+
+            try:
+                first_response = await bot.handle_message(
+                    "",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_doc",
+                        "user_id": "default_user",
+                        "media_urls": [str(doc_path)],
+                        "media_types": ["text/plain"],
+                    },
+                )
+            finally:
+                await bot.close()
+
+        self.assertIn("我收到 report.txt 了", first_response)
+        self.assertIn("等你说要怎么处理", first_response)
+        self.assertEqual(model.system_prompts, [])
+        self.assertEqual(bot.conversation_history[0]["content"], "[用户发送了一份文档]")
+
+    async def test_document_waiting_state_is_persisted_to_memory(self):
+        class DocumentCaptureModel:
+            provider = "test"
+            model = "document-memory-capture"
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                text = messages[-1].get("content", "") if messages else ""
+                if "输出一个 JSON 对象" in text:
+                    return '{"facts": [], "episodes": [], "relationship": {}, "open_threads": []}'
+                return "我看到了许知行和林若棠。"
+
+        with TemporaryDirectory(prefix="bot-doc-memory-") as td:
+            root = Path(td)
+            bot_id = "doc_memory_bot"
+            _write_test_persona(root, bot_id)
+            doc_path = root / "review.txt"
+            doc_path.write_text(
+                "《把海吹向从前》读后感\n许知行在文中遇见了林若棠，这段关系很重要。",
+                encoding="utf-8",
+            )
+
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=DocumentCaptureModel(),
+                memory_config={"embedding": "none"},
+                data_dir=root,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+            await bot.memory.init()
+
+            try:
+                await bot.handle_message(
+                    "",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_doc_memory",
+                        "user_id": "default_user",
+                        "media_urls": [str(doc_path)],
+                        "media_types": ["text/plain"],
+                    },
+                )
+                history = bot.memory.working.get_recent("gw_doc_memory", turns=1)
+            finally:
+                await bot.close()
+
+        user_messages = [item["content"] for item in history if item["role"] == "user"]
+        self.assertEqual(len(user_messages), 1)
+        self.assertIn("[用户发送了一份文档，等待处理指令]", user_messages[0])
+
+    async def test_document_followup_persists_user_question_with_excerpt(self):
+        class DocumentCaptureModel:
+            provider = "test"
+            model = "document-followup-memory-capture"
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                return "我看到了。"
+
+        with TemporaryDirectory(prefix="bot-doc-followup-memory-") as td:
+            root = Path(td)
+            bot_id = "doc_followup_memory_bot"
+            _write_test_persona(root, bot_id)
+            doc_path = root / "review.txt"
+            doc_path.write_text(
+                "FIRST_CHUNK_MARKER 许知行\n\n" + "A" * 6500,
+                encoding="utf-8",
+            )
+
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=DocumentCaptureModel(),
+                memory_config={"embedding": "none"},
+                data_dir=root,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+            await bot.memory.init()
+
+            try:
+                await bot.handle_message(
+                    "",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_doc_followup_memory",
+                        "user_id": "default_user",
+                        "media_urls": [str(doc_path)],
+                        "media_types": ["text/plain"],
+                    },
+                )
+                await bot.handle_message(
+                    "你说说文档里的人名",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_doc_followup_memory",
+                        "user_id": "default_user",
+                    },
+                )
+                history = bot.memory.working.get_recent("gw_doc_followup_memory", turns=2)
+            finally:
+                await bot.close()
+
+        user_messages = [item["content"] for item in history if item["role"] == "user"]
+        self.assertTrue(any("你说说文档里的人名" in item and "[关联文档摘录]" in item for item in user_messages))
+        self.assertTrue(any("FIRST_CHUNK_MARKER" in item and "许知行" in item for item in user_messages))
+
+    async def test_document_followup_injects_pending_document_for_instruction(self):
+        class DocumentCaptureModel:
+            provider = "test"
+            model = "document-followup-capture"
+
+            def __init__(self):
+                self.system_prompts = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                if isinstance(system_prompt, str):
+                    self.system_prompts.append(system_prompt)
+                return "我再看一眼。"
+
+        with TemporaryDirectory(prefix="bot-doc-followup-") as td:
+            root = Path(td)
+            doc_path = root / "review.txt"
+            doc_path.write_text(
+                "FIRST_CHUNK_MARKER 许知行\n\n" + "A" * 6500,
+                encoding="utf-8",
+            )
+
+            model = DocumentCaptureModel()
+            bot = BotInstance(
+                {"id": "shen_nian", "name": "测试 Bot"},
+                model=model,
+                memory_config=None,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+
+            try:
+                await bot.handle_message(
+                    "",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_doc_followup",
+                        "user_id": "default_user",
+                        "media_urls": [str(doc_path)],
+                        "media_types": ["text/plain"],
+                    },
+                )
+                await bot.handle_message(
+                    "你说说文档里的人名",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_doc_followup",
+                        "user_id": "default_user",
+                    },
+                )
+            finally:
+                await bot.close()
+
+        document_prompts = [
+            prompt for prompt in model.system_prompts if "[用户已发送文档，以下内容供本轮任务使用]" in prompt
+        ]
+        self.assertEqual(len(document_prompts), 1)
+        self.assertIn("FIRST_CHUNK_MARKER", document_prompts[0])
+        self.assertIn("许知行", document_prompts[0])
+
+
 class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
     async def test_unconfigured_builtin_skills_are_disabled_with_reason(self):
         bot = BotInstance({"id": "shen_nian", "name": "沈念", "skills": {}}, model=None, memory_config=None)

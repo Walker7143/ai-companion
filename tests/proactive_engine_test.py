@@ -80,6 +80,33 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(parsed, "今天路上看到很美的晚霞")
 
+    def test_parse_structured_message_recovers_truncated_json(self):
+        with TemporaryDirectory(prefix="proactive-truncated-") as td:
+            engine = _build_engine(Path(td), "")
+            parsed = engine._parse_structured_message(
+                '{"opening": "喂", "topic": "这天气真够呛，害我连客栈门都懒得出。", "ending": "你倒是快点来'
+            )
+            self.assertEqual(parsed, "喂，这天气真够呛，害我连客栈门都懒得出。你倒是快点来")
+
+    async def test_send_proactive_message_normalizes_structured_payload(self):
+        with TemporaryDirectory(prefix="proactive-send-normalize-") as td:
+            engine = _build_engine(Path(td), "")
+            sent_messages = []
+
+            async def sender(message: str):
+                sent_messages.append(message)
+                return True
+
+            engine._platform_sender = sender
+            sent = await engine._send_proactive_message(
+                '{"opening": "喂", "topic": "这天气真够呛，害我连客栈门都懒得出。", "ending": "你倒是快点来'
+            )
+
+            self.assertTrue(sent)
+            self.assertEqual(sent_messages, ["喂，这天气真够呛，害我连客栈门都懒得出。你倒是快点来"])
+            self.assertNotIn('"opening"', sent_messages[0])
+            self.assertNotIn('"topic"', sent_messages[0])
+
     async def test_generate_message_falls_back_when_model_returns_placeholder_text(self):
         with TemporaryDirectory(prefix="proactive-placeholder-") as td:
             engine = _build_engine(Path(td), "《开场白/称呼，话题内容或空字符串，结尾语》")
