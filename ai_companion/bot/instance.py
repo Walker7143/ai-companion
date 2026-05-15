@@ -973,10 +973,7 @@ class BotInstance:
             role = copied.get("role")
             if role in {"assistant", "system"}:
                 copied["content"] = self.response_polisher.clean_generation_context(str(copied.get("content", "") or ""))
-            content = str(copied.get("content", "") or "")
-            if role in {"user", "assistant"}:
-                content = self._annotate_generation_history_message(content, copied, life_context)
-            cleaned.append({"role": role, "content": content})
+            cleaned.append({"role": role, "content": copied.get("content", "")})
             if idx == last_message_index and role == "assistant" and self._is_assistant_initiated_memory(copied):
                 content = str(copied.get("content", "") or "").strip()
                 if content:
@@ -1007,16 +1004,12 @@ class BotInstance:
             )
         parts.append("- 历史消息里的场景、活动和状态只代表当时，不要默认它们在当前时刻仍然持续。")
         parts.append("- 如果发现已经从中午到下午、从今天到明天，或中间隔了较长时间，请按当前时间重新判断场景，不要沿用旧时刻的临时状态。")
+        history_timeline = self._build_history_timeline(messages, life_context)
+        if history_timeline:
+            parts.append("- 历史时间线：")
+            parts.extend(history_timeline)
+        parts.append("- 回复时不要自己带 [HH:MM] 或 [日期 时间] 这类时间前缀，除非用户明确要求。")
         return "\n".join(parts)
-
-    def _annotate_generation_history_message(self, content: str, item: dict, life_context: dict | None) -> str:
-        text = str(content or "").strip()
-        if not text:
-            return text
-        created_at = self._parse_message_created_at(item.get("created_at"))
-        if created_at is None:
-            return text
-        return f"[{self._format_history_timestamp(created_at, life_context)}] {text}"
 
     def _last_history_timestamp(self, messages: list[dict], role: str) -> datetime | None:
         source_messages = messages if isinstance(messages, list) else []
@@ -1035,16 +1028,41 @@ class BotInstance:
         if not text:
             return None
         try:
-            return datetime.fromisoformat(text)
+            parsed = datetime.fromisoformat(text)
         except ValueError:
             return None
+        if parsed.tzinfo is not None:
+            return parsed.astimezone()
+        return parsed
 
     def _format_history_timestamp(self, created_at: datetime, life_context: dict | None) -> str:
         context = life_context if isinstance(life_context, dict) else {}
+        if created_at.tzinfo is not None:
+            created_at = created_at.astimezone()
         current_date = str(context.get("current_date") or "").strip()
         if current_date and created_at.strftime("%Y-%m-%d") == current_date:
             return created_at.strftime("%H:%M")
         return created_at.strftime("%Y-%m-%d %H:%M")
+
+    def _build_history_timeline(self, messages: list[dict], life_context: dict | None) -> list[str]:
+        lines: list[str] = []
+        source_messages = messages if isinstance(messages, list) else []
+        for item in source_messages[-6:]:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            if role not in {"user", "assistant"}:
+                continue
+            created_at = self._parse_message_created_at(item.get("created_at"))
+            if created_at is None:
+                continue
+            text = str(item.get("content", "") or "").strip()
+            if not text:
+                continue
+            label = "用户" if role == "user" else "Bot"
+            snippet = text if len(text) <= 48 else text[:48].rstrip() + "..."
+            lines.append(f"  - [{self._format_history_timestamp(created_at, life_context)}] {label}: {snippet}")
+        return lines
 
     def _format_elapsed_delta_from_anchor(self, earlier: datetime, anchor_text: str) -> str:
         anchor = self._parse_anchor_datetime(anchor_text)

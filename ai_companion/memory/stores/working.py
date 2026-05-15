@@ -110,14 +110,15 @@ class WorkingMemoryStore:
         metadata_json: Optional[str] = None,
     ):
         sid = session_id or self.get_or_create_session()
+        created_at = datetime.now().astimezone().isoformat(timespec="seconds")
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT INTO messages (session_id, user_id, platform, role, content, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
-                (sid, user_id, platform, "user", user_input, metadata_json)
+                "INSERT INTO messages (session_id, user_id, platform, role, content, created_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (sid, user_id, platform, "user", user_input, created_at, metadata_json)
             )
             await db.execute(
-                "INSERT INTO messages (session_id, user_id, platform, role, content, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
-                (sid, user_id, platform, "assistant", bot_output, metadata_json)
+                "INSERT INTO messages (session_id, user_id, platform, role, content, created_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (sid, user_id, platform, "assistant", bot_output, created_at, metadata_json)
             )
             await db.commit()
 
@@ -138,10 +139,11 @@ class WorkingMemoryStore:
         if role not in {"user", "assistant", "system"}:
             raise ValueError(f"unsupported memory role: {role}")
         sid = session_id or self.get_or_create_session()
+        created_at = datetime.now().astimezone().isoformat(timespec="seconds")
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT INTO messages (session_id, user_id, platform, role, content, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
-                (sid, user_id, platform, role, content, metadata_json)
+                "INSERT INTO messages (session_id, user_id, platform, role, content, created_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (sid, user_id, platform, role, content, created_at, metadata_json)
             )
             await db.commit()
 

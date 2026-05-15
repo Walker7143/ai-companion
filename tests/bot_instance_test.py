@@ -841,8 +841,78 @@ class BotInstanceRealtimeContextTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("[时间流动提示]", sent_history)
             self.assertIn("当前回复时刻：2026-05-09 16:58", sent_history)
             self.assertIn("已经过去：4小时50分钟", sent_history)
-            self.assertIn("[12:08] 中午吃什么", sent_history)
-            self.assertIn("[12:09] 我刚在吃午饭。", sent_history)
+            self.assertIn("[12:08] 用户: 中午吃什么", sent_history)
+            self.assertIn("[12:09] Bot: 我刚在吃午饭。", sent_history)
+
+    async def test_generation_history_timestamps_stay_in_notice_not_message_body(self):
+        class HistoryCaptureModel:
+            provider = "test"
+            model = "history-format-capture"
+
+            def __init__(self):
+                self.messages = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                self.messages.append(messages)
+                return "好的"
+
+        with TemporaryDirectory(prefix="bot-history-format-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            model = HistoryCaptureModel()
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=model,
+                memory_config={"embedding": "none"},
+                data_dir=root,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+            bot.life_engine.get_status = lambda: {
+                "current_date": "2026-05-09",
+                "day_of_week": "周六",
+                "local_time": "16:58",
+                "time_of_day": "下午",
+                "current_datetime_text": "2026-05-09 16:58（周六，下午）",
+            }
+            await bot.memory.init()
+            bot.memory.start_session("history-format-session")
+            session_id = bot.memory.working.current_session or "history-format-session"
+            await bot.memory.working.append(
+                user_input="中午吃什么",
+                bot_output="我刚在吃午饭。",
+                session_id=session_id,
+            )
+
+            import sqlite3
+            conn = sqlite3.connect(bot.memory.working.db_path)
+            conn.execute(
+                "UPDATE messages SET created_at = ? WHERE session_id = ? AND role = 'user'",
+                ("2026-05-09 12:08:00", session_id),
+            )
+            conn.execute(
+                "UPDATE messages SET created_at = ? WHERE session_id = ? AND role = 'assistant'",
+                ("2026-05-09 12:09:00", session_id),
+            )
+            conn.commit()
+            conn.close()
+
+            try:
+                await bot.handle_message("下午你在干嘛")
+            finally:
+                await bot.close()
+
+            sent_messages = model.messages[0]
+            system_notice = str(sent_messages[0].get("content", ""))
+            assistant_history = next(
+                str(msg.get("content", ""))
+                for msg in sent_messages
+                if msg.get("role") == "assistant"
+            )
+            self.assertIn("[12:09] Bot: 我刚在吃午饭。", system_notice)
+            self.assertNotIn("[12:09]", assistant_history)
 
 
 class BotInstanceGenerationContextTest(unittest.IsolatedAsyncioTestCase):
