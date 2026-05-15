@@ -118,6 +118,38 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("在吗", message)
             self.assertNotIn("最近怎么样", message)
 
+    def test_fallback_rotation_persists_across_state_reload(self):
+        with TemporaryDirectory(prefix="proactive-fallback-rotation-") as td:
+            root = Path(td)
+            persona_dir = root / "persona"
+            persona_dir.mkdir(parents=True, exist_ok=True)
+
+            state = ProactiveState("test_bot", root / "runtime")
+            engine = ProactiveEngine(
+                bot_id="test_bot",
+                config=ProactiveConfig(persona_dir),
+                state=state,
+                model=None,
+                memory=None,
+                personality_type="温柔",
+            )
+
+            first = engine._get_fallback_message("default")
+            reloaded_state = ProactiveState("test_bot", root / "runtime")
+            reloaded_engine = ProactiveEngine(
+                bot_id="test_bot",
+                config=ProactiveConfig(persona_dir),
+                state=reloaded_state,
+                model=None,
+                memory=None,
+                personality_type="温柔",
+            )
+            second = reloaded_engine._get_fallback_message("default")
+
+            self.assertEqual(first, "刚刚想起你，来问一声。")
+            self.assertEqual(second, "在忙什么呀？")
+            self.assertEqual(reloaded_state.last_opening_style, second)
+
     async def test_generate_contextual_message_falls_back_when_model_returns_schema_text(self):
         from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
 

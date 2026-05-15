@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ai_companion.memory.conscious import ConsciousContextBuilder
 from ai_companion.memory.engine import MemoryEngine
+from ai_companion.memory.extractor import MemoryExtractor
 from ai_companion.memory.retriever import MemoryRetriever, RetrievedMemory
 from ai_companion.proactive.config import ProactiveConfig
 from ai_companion.proactive.engine import ProactiveEngine
@@ -13,6 +14,26 @@ from ai_companion.proactive.state import ProactiveState
 
 
 class DailyMemoryTest(unittest.TestCase):
+    def test_rule_extractor_does_not_store_name_correction_as_identity(self):
+        extractor = MemoryExtractor()
+        candidates = asyncio.run(
+            extractor.extract("我说，你为什么叫我米老头", "", session_id="s1")
+        )
+
+        self.assertFalse(
+            [item for item in candidates if item.type == "user_fact" and item.category == "identity"]
+        )
+
+    def test_rule_extractor_stores_explicit_name_statement_as_identity(self):
+        extractor = MemoryExtractor()
+        candidates = asyncio.run(
+            extractor.extract("我叫王啸威", "", session_id="s1")
+        )
+
+        self.assertTrue(
+            [item for item in candidates if item.type == "user_fact" and item.category == "identity"]
+        )
+
     def test_intent_classifier_prefers_task_request_for_code_repair(self):
         retriever = MemoryRetriever(
             working_store=None,
@@ -441,6 +462,49 @@ class DailyMemoryTest(unittest.TestCase):
         sent, daily_ctx = asyncio.run(run())
         self.assertTrue(sent)
         self.assertEqual(daily_ctx["self_memory"][0]["kind"], "deferred_reply")
+
+    def test_proactive_generation_prompt_includes_recent_name_correction_guard(self):
+        class CaptureModel:
+            def __init__(self):
+                self.prompt = ""
+
+            async def chat(self, messages, system_prompt=None):
+                self.prompt = messages[0]["content"]
+                return '{"opening":"","topic":"我知道了。","ending":""}'
+
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="daily-memory-proactive-name-") as tmp:
+                root = Path(tmp)
+                persona_dir = root / "persona"
+                persona_dir.mkdir(parents=True, exist_ok=True)
+                (persona_dir / "proactive.json").write_text(
+                    '{"enabled": true, "mode": "active"}',
+                    encoding="utf-8",
+                )
+                memory = MemoryEngine("proactive_name_bot", root, config={"embedding": "none"})
+                await memory.init()
+                memory.start_session("gw-name")
+                await memory.record_turn(
+                    "我不是米高",
+                    "对不起，那我不这么叫了。",
+                    turn_context={"session_id": "gw-name", "user_id": "default_user", "platform": "weixin"},
+                )
+                model = CaptureModel()
+                engine = ProactiveEngine(
+                    bot_id="proactive_name_bot",
+                    config=ProactiveConfig(persona_dir),
+                    state=ProactiveState("proactive_name_bot", root),
+                    memory=memory,
+                )
+                engine.set_model(model)
+                await engine.generate_message("想和用户聊天")
+                await memory.close()
+                return model.prompt
+
+        prompt = asyncio.run(run())
+        self.assertIn("我不是米高", prompt)
+        self.assertIn("不要继续使用那个被否定的称呼", prompt)
+        self.assertIn("条件式旧称呼", prompt)
 
     def test_proactive_engine_records_successful_sends(self):
         async def run():

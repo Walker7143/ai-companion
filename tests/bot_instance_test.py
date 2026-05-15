@@ -1041,6 +1041,68 @@ class BotInstanceDocumentContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FIRST_CHUNK_MARKER", document_prompts[0])
         self.assertIn("许知行", document_prompts[0])
 
+    async def test_document_followup_can_jump_to_requested_chapter(self):
+        class DocumentCaptureModel:
+            provider = "test"
+            model = "document-chapter-capture"
+
+            def __init__(self):
+                self.system_prompts = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                if isinstance(system_prompt, str):
+                    self.system_prompts.append(system_prompt)
+                return "我看第十五章。"
+
+        with TemporaryDirectory(prefix="bot-doc-chapter-") as td:
+            root = Path(td)
+            doc_path = root / "book.txt"
+            chapters = []
+            for idx in range(1, 18):
+                marker = "TARGET_CHAPTER_15" if idx == 15 else f"CHAPTER_{idx}"
+                chapters.append(f"第{idx}章\n{marker}\n" + (f"正文{idx}" * 80))
+            doc_path.write_text("\n\n".join(chapters), encoding="utf-8")
+
+            model = DocumentCaptureModel()
+            bot = BotInstance(
+                {"id": "shen_nian", "name": "测试 Bot"},
+                model=model,
+                memory_config=None,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+
+            try:
+                await bot.handle_message(
+                    "",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_doc_chapter",
+                        "user_id": "default_user",
+                        "media_urls": [str(doc_path)],
+                        "media_types": ["text/plain"],
+                    },
+                )
+                await bot.handle_message(
+                    "从15章开始看",
+                    memory_turn_context={
+                        "platform": "weixin",
+                        "session_id": "gw_doc_chapter",
+                        "user_id": "default_user",
+                    },
+                )
+            finally:
+                await bot.close()
+
+        document_prompts = [
+            prompt for prompt in model.system_prompts if "[用户已发送文档，以下内容供本轮任务使用]" in prompt
+        ]
+        self.assertEqual(len(document_prompts), 1)
+        self.assertIn("已定位到 第15章", document_prompts[0])
+        self.assertIn("TARGET_CHAPTER_15", document_prompts[0])
+        self.assertNotIn("CHAPTER_1\n", document_prompts[0])
+
 
 class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
     async def test_unconfigured_builtin_skills_are_disabled_with_reason(self):

@@ -322,7 +322,9 @@ class MemoryExtractor:
         text = user_input.strip()
         candidates: list[MemoryCandidate] = []
         category = self._infer_category(text, text)
-        if category != "general" and len(text) >= 6:
+        if category == "identity" and not self._is_explicit_identity_statement(text):
+            category = "general"
+        if category != "general" and (len(text) >= 6 or category == "identity"):
             key = self._infer_key(category, text)
             candidates.append(
                 MemoryCandidate(
@@ -360,6 +362,23 @@ class MemoryExtractor:
             if any(word in haystack for word in keywords):
                 return category
         return "general"
+
+    def _is_explicit_identity_statement(self, text: str) -> bool:
+        normalized = re.sub(r"\s+", "", str(text or ""))
+        if not normalized:
+            return False
+        if any(token in normalized for token in ("为什么叫我", "怎么叫我", "别叫我", "不要叫我", "我不是", "叫错")):
+            return False
+        patterns = [
+            r"^(?:我叫|我是|本人叫)[^？?。！!，,、]{1,24}$",
+            r"^(?:以后)?(?:可以)?叫我[^？?。！!，,、]{1,24}$",
+            r"^(?:我的)?(?:名字|姓名)(?:是|叫)[^？?。！!，,、]{1,24}$",
+            r"^(?:我)?(?:住在|在)[^？?。！!，,、]{1,32}$",
+            r"^(?:我的)?职业(?:是|为)[^？?。！!，,、]{1,32}$",
+            r"^我是[^？?。！!，,、]{1,32}(?:开发|程序员|工程师|老师|学生|设计师|产品|运营)$",
+        ]
+        spaced = re.sub(r"\s+", " ", str(text or "").strip())
+        return any(re.search(pattern, normalized) or re.search(pattern, spaced) for pattern in patterns)
 
     def _infer_key(self, category: str, value: str) -> str:
         defaults = {

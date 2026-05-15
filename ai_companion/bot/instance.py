@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1050,15 +1051,19 @@ class BotInstance:
         chunks = session.get("chunks") if isinstance(session.get("chunks"), list) else []
         names = session.get("names") if isinstance(session.get("names"), list) else []
         name_text = "、".join(str(item) for item in names[:3] if str(item).strip()) or "用户发送的文档"
-        excerpt = text[:DEFAULT_DOCUMENT_TASK_CHARS].strip()
-        truncated = len(text) > len(excerpt) or bool(session.get("truncated"))
+        selected_text, selection_note, selection_found = self._select_document_text_for_instruction(text, instruction)
+        excerpt = selected_text[:DEFAULT_DOCUMENT_TASK_CHARS].strip()
+        truncated = len(selected_text) > len(excerpt) or bool(session.get("truncated"))
         lines = [
             "[用户已发送文档，以下内容供本轮任务使用]",
             f"文档: {name_text}",
             f"解析片段数: {len(chunks)}",
             f"用户本轮指令: {instruction}",
-            "行为要求: 根据用户本轮指令决定阅读策略；不要默认从头朗读；如果任务需要全文但当前摘录不足，要说明需要继续读取/分批处理。",
+            f"文档定位: {selection_note}",
+            "行为要求: 根据用户本轮指令决定阅读策略；不要默认从头朗读；只能引用下方摘录里实际出现的内容，不得编造文档情节。",
         ]
+        if not selection_found:
+            lines.append("重要: 未在文档中找到用户指定的章节/位置，必须先说明没找到，不要假装已经翻到该位置。")
         if truncated:
             lines.append("提示: 文档很长，本轮只注入前部摘录；需要更完整处理时应分批继续。")
         errors = session.get("errors") if isinstance(session.get("errors"), list) else []
@@ -1067,6 +1072,88 @@ class BotInstance:
         lines.extend(["", excerpt])
         memory_text = self._document_memory_text(name_text, excerpt, index=0, total=max(1, len(chunks)), truncated=truncated)
         return "\n".join(lines).strip(), "", memory_text
+
+    def _select_document_text_for_instruction(self, text: str, instruction: str) -> tuple[str, str, bool]:
+        chapter = self._extract_requested_chapter_number(instruction)
+        if chapter is None:
+            return text, "未指定章节，使用文档开头作为任务摘录。", True
+
+        start = self._find_chapter_start(text, chapter)
+        chapter_label = self._chapter_label(chapter)
+        if start is None:
+            return text, f"未找到 {chapter_label}，暂时只能提供文档开头摘录。", False
+
+        next_start = self._find_next_chapter_start(text, chapter, start)
+        end = next_start if next_start is not None else len(text)
+        selected = text[start:end].strip()
+        if not selected:
+            return text, f"找到 {chapter_label} 标题，但正文为空；暂时提供文档开头摘录。", False
+        return selected, f"已定位到 {chapter_label}，本轮摘录从该章节标题开始。", True
+
+    def _extract_requested_chapter_number(self, instruction: str) -> int | None:
+        text = str(instruction or "")
+        match = re.search(r"(?:第\s*)?(\d{1,3}|[一二三四五六七八九十百零〇两]{1,8})\s*章", text)
+        if not match:
+            return None
+        raw = match.group(1)
+        if raw.isdigit():
+            return int(raw)
+        return self._chinese_numeral_to_int(raw)
+
+    def _find_chapter_start(self, text: str, chapter: int) -> int | None:
+        for label in (str(chapter), self._int_to_chinese_numeral(chapter)):
+            match = re.search(rf"(?m)^\s*第\s*{re.escape(label)}\s*章(?:\s|$)", text)
+            if match:
+                return match.start()
+        return None
+
+    def _find_next_chapter_start(self, text: str, chapter: int, start: int) -> int | None:
+        tail = text[start + 1 :]
+        for next_chapter in range(chapter + 1, chapter + 8):
+            found = self._find_chapter_start(tail, next_chapter)
+            if found is not None:
+                return start + 1 + found
+        match = re.search(r"(?m)^\s*第\s*(?:\d{1,3}|[一二三四五六七八九十百零〇两]{1,8})\s*章(?:\s|$)", tail)
+        if match:
+            return start + 1 + match.start()
+        return None
+
+    def _chapter_label(self, chapter: int) -> str:
+        return f"第{chapter}章"
+
+    def _chinese_numeral_to_int(self, value: str) -> int | None:
+        digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if "百" in text:
+            left, _, right = text.partition("百")
+            base = digits.get(left, 1 if not left else 0) * 100
+            tail = self._chinese_numeral_to_int(right) if right else 0
+            return base + int(tail or 0)
+        if "十" in text:
+            left, _, right = text.partition("十")
+            tens = digits.get(left, 1 if not left else 0) * 10
+            ones = digits.get(right, 0) if right else 0
+            return tens + ones
+        total = 0
+        for ch in text:
+            if ch not in digits:
+                return None
+            total = total * 10 + digits[ch]
+        return total
+
+    def _int_to_chinese_numeral(self, value: int) -> str:
+        digits = "零一二三四五六七八九"
+        if value <= 0:
+            return str(value)
+        if value < 10:
+            return digits[value]
+        if value < 20:
+            return "十" + (digits[value % 10] if value % 10 else "")
+        if value < 100:
+            return digits[value // 10] + "十" + (digits[value % 10] if value % 10 else "")
+        return str(value)
 
     def _document_context_for_session(self, session: dict, *, first: bool) -> tuple[str, str, str]:
         chunks = session.get("chunks") if isinstance(session.get("chunks"), list) else []

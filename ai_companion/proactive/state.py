@@ -133,6 +133,15 @@ class ProactiveState:
         self.save()
 
     @property
+    def last_opening_style(self) -> str:
+        return str(self._state.get("last_opening_style", "") or "")
+
+    @last_opening_style.setter
+    def last_opening_style(self, value: str):
+        self._state["last_opening_style"] = str(value or "")
+        self.save()
+
+    @property
     def last_emotion_trigger_time(self) -> Optional[datetime]:
         ts = self._state.get("last_emotion_trigger_time")
         return datetime.fromisoformat(ts) if ts else None

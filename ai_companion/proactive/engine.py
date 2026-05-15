@@ -108,6 +108,9 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 【Bot 最近发生的事（可选择是否分享）】
 {bot_life_context}
 
+【用户记忆与最近上下文】
+{user_memory_context}
+
 【消息要求】
 根据你的性格和当前感受，写出你想对用户说的一句话。
 要求：
@@ -116,6 +119,8 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 - 如果有话题，可以自然地带入
 - 结尾可以表达期待
 - 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生
+- 称呼必须服从“用户记忆与最近上下文”；如果用户最近否认或纠正过某个名字/称呼，不要继续使用那个被否定的称呼
+- 人格档案里的条件式旧称呼只有在用户本轮或近期明确确认代入对应角色时才可使用，不要当作默认昵称
 
 【输出格式】
 输出一个 JSON 对象：
@@ -144,6 +149,9 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 【当前关系】
 {relationship_desc}
 
+【用户记忆与最近上下文】
+{user_memory_context}
+
 【要求】
 - 自然接上之前的话题，不要像重新开一个话题。
 - 如果这是稍后回复，要表现为你回来履行承诺。
@@ -151,6 +159,8 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 - 不要使用“在吗”“最近怎么样”这类无上下文开场。
 - 不要说“Bot”“用户”“这件事让我意识到”“希望这能...”这类旁白或 AI 腔。
 - 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生。
+- 称呼必须服从“用户记忆与最近上下文”；如果用户最近否认或纠正过某个名字/称呼，不要继续使用那个被否定的称呼。
+- 人格档案里的条件式旧称呼只有在用户本轮或近期明确确认代入对应角色时才可使用，不要当作默认昵称。
 - 只写一条适合直接发送的短消息，允许短句、停顿、吐槽、反问，保持你的个人脾气。
 
 【输出格式】
@@ -762,6 +772,7 @@ class ProactiveEngine:
         rel_desc = await self._get_relationship_desc()
         persona_style_context = self._build_persona_style_context()
         current_life_context = self._build_current_life_anchor_context()
+        user_memory_context = await self._build_context()
 
         # 获取 Bot 可分享的生活事件
         bot_life_context = ""
@@ -787,6 +798,7 @@ class ProactiveEngine:
             feeling_description=feeling,
             contact_reason=reason or "想和用户聊天",
             bot_life_context=bot_life_context,
+            user_memory_context=user_memory_context,
         )
 
         try:
@@ -816,6 +828,7 @@ class ProactiveEngine:
         rel_desc = await self._get_relationship_desc()
         persona_style_context = self._build_persona_style_context()
         current_life_context = self._build_current_life_anchor_context()
+        user_memory_context = await self._build_context()
         prompt = GENERATE_CONTEXTUAL_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
@@ -825,6 +838,7 @@ class ProactiveEngine:
             motive_reason=motive.reason,
             motive_context=motive.prompt_context,
             relationship_desc=rel_desc,
+            user_memory_context=user_memory_context,
         )
 
         try:
