@@ -785,7 +785,7 @@ class LifeEngine:
             personality_tags=personality_val,
             daily_life_profile=self._daily_life_profile_summary(),
             bot_mood=self.state.bot_mood,
-            bot_current_activity=self.state.bot_current_activity,
+            bot_current_activity=self._current_activity_for_prompt(),
             bot_age_days=self.state.bot_age_days,
             recent_events=recent_str,
             forbidden_scenarios=", ".join(sorted(forbidden)) if forbidden else "无",
@@ -1178,7 +1178,7 @@ class LifeEngine:
             occupation=occupation_val,
             personality_tags=personality_val,
             bot_mood=self.state.bot_mood,
-            bot_current_activity=self.state.bot_current_activity,
+            bot_current_activity=self._current_activity_for_prompt(),
             bot_age_days=self.state.bot_age_days,
             recent_events=recent_str,
             relationship_desc="普通朋友",
@@ -2308,6 +2308,27 @@ class LifeEngine:
         }
         return summary_map.get(key, "经历了一件具体的小事")
 
+    def _current_activity_for_prompt(self) -> str:
+        activity = str(self.state.bot_current_activity or "").strip()
+        if not activity:
+            return ""
+
+        expire_hours = max(0, int(getattr(self.config, "current_activity_expire_hours", 2) or 0))
+        if expire_hours == 0:
+            return ""
+
+        updated_at = self.state.bot_current_activity_updated_at
+        if updated_at is None:
+            return ""
+
+        local_now = self._get_local_now()
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=local_now.tzinfo)
+        elapsed = local_now - updated_at
+        if elapsed >= timedelta(hours=expire_hours):
+            return ""
+        return activity
+
     def _is_recent_duplicate_event(self, description: str, limit: int = 20) -> bool:
         normalized = self._normalize_event_text(description)
         if not normalized:
@@ -2690,7 +2711,7 @@ class LifeEngine:
         time_of_day = self._time_of_day_label(local_now.hour)
         return {
             "bot_mood": self.state.bot_mood,
-            "bot_current_activity": self.state.bot_current_activity,
+            "bot_current_activity": self._current_activity_for_prompt(),
             "bot_age_days": self.state.bot_age_days,
             "bot_real_age": real_age,
             "initial_age": self.state.initial_age,

@@ -72,6 +72,33 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNone(parsed)
 
+    def test_classify_generated_message_issue(self):
+        with TemporaryDirectory(prefix="proactive-placeholder-") as td:
+            engine = _build_engine(Path(td), "")
+            self.assertEqual(engine._classify_generated_message_issue(""), "empty")
+            self.assertEqual(engine._classify_generated_message_issue("开头，主体，结尾"), "placeholder")
+            self.assertEqual(
+                engine._classify_generated_message_issue('{"opening":"喂","topic":"test","ending":"来"}'),
+                "raw_json",
+            )
+            self.assertIsNone(engine._classify_generated_message_issue("今天风有点大，突然想起你了。"))
+
+    def test_classify_partial_structured_parse_failure(self):
+        with TemporaryDirectory(prefix="proactive-placeholder-") as td:
+            engine = _build_engine(Path(td), "")
+            self.assertEqual(
+                engine._classify_partial_structured_parse_failure(
+                    '{"opening":"喂","topic":"这天气真够呛""ending":"你倒是快点来"}'
+                ),
+                "broken_partial_json",
+            )
+            self.assertEqual(
+                engine._classify_partial_structured_parse_failure(
+                    '{"opening": "喂", "topic": "这天气真够呛", "ending": "你倒是快点来'
+                ),
+                "partial_json",
+            )
+
     def test_parse_structured_message_keeps_valid_parts(self):
         with TemporaryDirectory(prefix="proactive-placeholder-") as td:
             engine = _build_engine(Path(td), "")
@@ -107,6 +134,25 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('"opening"', sent_messages[0])
             self.assertNotIn('"topic"', sent_messages[0])
 
+    async def test_send_proactive_message_falls_back_on_plain_placeholder_message(self):
+        with TemporaryDirectory(prefix="proactive-send-placeholder-") as td:
+            engine = _build_engine(Path(td), "")
+            sent_messages = []
+
+            async def sender(message: str):
+                sent_messages.append(message)
+                return True
+
+            engine._platform_sender = sender
+            sent = await engine._send_proactive_message("开头，主体，结尾")
+
+            self.assertTrue(sent)
+            self.assertEqual(len(sent_messages), 1)
+            self.assertIn(sent_messages[0], ["对了，昨天...", "有件事想跟你分享～", "你知道吗，今天..."])
+            self.assertNotIn("开头", sent_messages[0])
+            self.assertNotIn("主体", sent_messages[0])
+            self.assertNotIn("结尾", sent_messages[0])
+
     async def test_generate_message_falls_back_when_model_returns_placeholder_text(self):
         with TemporaryDirectory(prefix="proactive-placeholder-") as td:
             engine = _build_engine(Path(td), "《开场白/称呼，话题内容或空字符串，结尾语》")
@@ -117,6 +163,18 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("结尾语", message)
             self.assertNotIn("在吗", message)
             self.assertNotIn("最近怎么样", message)
+
+    async def test_generate_message_falls_back_when_model_returns_unparsed_structured_payload(self):
+        with TemporaryDirectory(prefix="proactive-structured-fallback-") as td:
+            engine = _build_engine(
+                Path(td),
+                '{"opening":"喂","topic":"这天气真够呛""ending":"你倒是快点来"}',
+            )
+            message = await engine.generate_message("测试未解析结构回退")
+            self.assertEqual(message, "刚刚想起你，来问一声。")
+            self.assertNotIn('"opening"', message)
+            self.assertNotIn('"topic"', message)
+            self.assertNotIn('"ending"', message)
 
     def test_fallback_rotation_persists_across_state_reload(self):
         with TemporaryDirectory(prefix="proactive-fallback-rotation-") as td:

@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
     "major_interval_seconds": REALTIME_MAJOR_INTERVAL_SECONDS,  # 默认每 7 个 Bot 日检查人生大事
     "time_ratio": 1,                    # 默认 1:1
     "sync_with_local_time_when_realtime": True,  # time_ratio=1 时对齐部署机器本地时间
+    "current_activity_expire_hours": 2,
     "time_ratio_warning_threshold": 500,
     "daily_event_min_gap_days": 2,      # 至少每 N 天产出 1 个日常事件
     "major_event_fixed_probability": 0.05,  # 每个 Bot 日的大事固定概率（0-1）
@@ -66,6 +67,7 @@ class LifeConfig:
     major_interval_seconds: int = REALTIME_MAJOR_INTERVAL_SECONDS
     time_ratio: int = 1
     sync_with_local_time_when_realtime: bool = True
+    current_activity_expire_hours: int = 2
     time_ratio_warning_threshold: int = 500
     daily_event_min_gap_days: int = 2
     major_event_fixed_probability: float = 0.05
@@ -122,6 +124,10 @@ class LifeConfig:
                 self.sync_with_local_time_when_realtime = self._as_bool(
                     self._config.get("sync_with_local_time_when_realtime", True),
                     default=True,
+                )
+                self.current_activity_expire_hours = max(
+                    0,
+                    int(self._config.get("current_activity_expire_hours", 2)),
                 )
                 self.time_ratio_warning_threshold = self._config.get("time_ratio_warning_threshold", 500)
                 self.daily_event_min_gap_days = max(1, int(self._config.get("daily_event_min_gap_days", 2)))

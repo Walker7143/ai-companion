@@ -962,6 +962,10 @@ class BotInstance:
         cleaned: list[dict] = []
         source_messages = messages if isinstance(messages, list) else []
         last_message_index = self._last_generation_context_message_index(source_messages)
+        life_context = self.life_engine.get_status() if self.life_engine else {}
+        time_notice = self._build_generation_time_notice(source_messages, life_context)
+        if time_notice:
+            cleaned.append({"role": "system", "content": time_notice})
         for idx, item in enumerate(source_messages):
             if not isinstance(item, dict):
                 continue
@@ -969,7 +973,10 @@ class BotInstance:
             role = copied.get("role")
             if role in {"assistant", "system"}:
                 copied["content"] = self.response_polisher.clean_generation_context(str(copied.get("content", "") or ""))
-            cleaned.append({"role": role, "content": copied.get("content", "")})
+            content = str(copied.get("content", "") or "")
+            if role in {"user", "assistant"}:
+                content = self._annotate_generation_history_message(content, copied, life_context)
+            cleaned.append({"role": role, "content": content})
             if idx == last_message_index and role == "assistant" and self._is_assistant_initiated_memory(copied):
                 content = str(copied.get("content", "") or "").strip()
                 if content:
@@ -978,6 +985,98 @@ class BotInstance:
                         "content": f"[连续性提示] 上一条是你主动发给用户的消息：{content}",
                     })
         return cleaned
+
+    def _build_generation_time_notice(self, messages: list[dict], life_context: dict | None) -> str:
+        context = life_context if isinstance(life_context, dict) else {}
+        current_text = str(
+            context.get("current_datetime_text")
+            or context.get("current_date")
+            or ""
+        ).strip()
+        if not current_text:
+            return ""
+
+        parts = [
+            "[时间流动提示]",
+            f"- 当前回复时刻：{current_text}",
+        ]
+        last_user_time = self._last_history_timestamp(messages, role="user")
+        if last_user_time is not None:
+            parts.append(
+                f"- 这次回复距离上一条用户消息已经过去：{self._format_elapsed_delta_from_anchor(last_user_time, current_text)}"
+            )
+        parts.append("- 历史消息里的场景、活动和状态只代表当时，不要默认它们在当前时刻仍然持续。")
+        parts.append("- 如果发现已经从中午到下午、从今天到明天，或中间隔了较长时间，请按当前时间重新判断场景，不要沿用旧时刻的临时状态。")
+        return "\n".join(parts)
+
+    def _annotate_generation_history_message(self, content: str, item: dict, life_context: dict | None) -> str:
+        text = str(content or "").strip()
+        if not text:
+            return text
+        created_at = self._parse_message_created_at(item.get("created_at"))
+        if created_at is None:
+            return text
+        return f"[{self._format_history_timestamp(created_at, life_context)}] {text}"
+
+    def _last_history_timestamp(self, messages: list[dict], role: str) -> datetime | None:
+        source_messages = messages if isinstance(messages, list) else []
+        for item in reversed(source_messages):
+            if not isinstance(item, dict):
+                continue
+            if item.get("role") != role:
+                continue
+            created_at = self._parse_message_created_at(item.get("created_at"))
+            if created_at is not None:
+                return created_at
+        return None
+
+    def _parse_message_created_at(self, value: object) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            return None
+
+    def _format_history_timestamp(self, created_at: datetime, life_context: dict | None) -> str:
+        context = life_context if isinstance(life_context, dict) else {}
+        current_date = str(context.get("current_date") or "").strip()
+        if current_date and created_at.strftime("%Y-%m-%d") == current_date:
+            return created_at.strftime("%H:%M")
+        return created_at.strftime("%Y-%m-%d %H:%M")
+
+    def _format_elapsed_delta_from_anchor(self, earlier: datetime, anchor_text: str) -> str:
+        anchor = self._parse_anchor_datetime(anchor_text)
+        if anchor is None:
+            anchor = datetime.now()
+        if earlier.tzinfo is not None:
+            earlier = earlier.astimezone().replace(tzinfo=None)
+        delta = anchor - earlier
+        if delta.total_seconds() <= 0:
+            return "不足1分钟"
+
+        total_minutes = int(delta.total_seconds() // 60)
+        days, rem_minutes = divmod(total_minutes, 24 * 60)
+        hours, minutes = divmod(rem_minutes, 60)
+        parts: list[str] = []
+        if days:
+            parts.append(f"{days}天")
+        if hours:
+            parts.append(f"{hours}小时")
+        if minutes and not days:
+            parts.append(f"{minutes}分钟")
+        return "".join(parts) if parts else "不足1分钟"
+
+    def _parse_anchor_datetime(self, value: str) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        normalized = re.sub(r"[（(].*?[）)]", "", text).strip()
+        try:
+            return datetime.strptime(normalized, "%Y-%m-%d %H:%M")
+        except ValueError:
+            return None
 
     def _is_assistant_initiated_memory(self, item: dict) -> bool:
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}

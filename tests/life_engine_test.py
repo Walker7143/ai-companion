@@ -154,6 +154,60 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status["current_date"], local_now.strftime("%Y-%m-%d"))
             self.assertIn(status["time_of_day"], {"凌晨", "上午", "中午", "下午", "晚上", "白天"})
 
+    def test_stale_current_activity_is_hidden_from_prompt_status(self):
+        with TemporaryDirectory(prefix="life-stale-activity-") as td:
+            state = LifeState("stale_activity_bot", Path(td))
+            local_now = datetime.now().astimezone()
+            state.current_date = local_now.strftime("%Y-%m-%d")
+            state.day_of_week = ["鍛ㄤ竴", "鍛ㄤ簩", "鍛ㄤ笁", "鍛ㄥ洓", "鍛ㄤ簲", "鍛ㄥ叚", "鍛ㄦ棩"][local_now.weekday()]
+            state.current_month = local_now.month
+            state.current_season = "鏄?"
+            state.bot_current_activity = "鍦ㄥ悆鍗堥キ"
+            state.bot_current_activity_updated_at = local_now - timedelta(hours=3)
+
+            cfg = LifeConfig(sync_with_local_time_when_realtime=True)
+            engine = LifeEngine("stale_activity_bot", cfg, state, model=EmptyLifeModel())
+
+            status = engine.get_status()
+
+            self.assertEqual(status["bot_current_activity"], "")
+
+    def test_current_activity_respects_configured_expire_hours(self):
+        with TemporaryDirectory(prefix="life-activity-expire-config-") as td:
+            state = LifeState("activity_expire_config_bot", Path(td))
+            local_now = datetime.now().astimezone()
+            state.current_date = local_now.strftime("%Y-%m-%d")
+            state.day_of_week = ["鍛ㄤ竴", "鍛ㄤ簩", "鍛ㄤ笁", "鍛ㄥ洓", "鍛ㄤ簲", "鍛ㄥ叚", "鍛ㄦ棩"][local_now.weekday()]
+            state.current_month = local_now.month
+            state.current_season = "鏄?"
+            state.bot_current_activity = "鍦ㄥ悆鍗堥キ"
+            state.bot_current_activity_updated_at = local_now - timedelta(hours=3)
+
+            cfg = LifeConfig(sync_with_local_time_when_realtime=True, current_activity_expire_hours=4)
+            engine = LifeEngine("activity_expire_config_bot", cfg, state, model=EmptyLifeModel())
+
+            status = engine.get_status()
+
+            self.assertEqual(status["bot_current_activity"], "鍦ㄥ悆鍗堥キ")
+
+    def test_legacy_activity_without_timestamp_is_hidden(self):
+        with TemporaryDirectory(prefix="life-legacy-activity-") as td:
+            state = LifeState("legacy_activity_bot", Path(td))
+            local_now = datetime.now().astimezone()
+            state.current_date = local_now.strftime("%Y-%m-%d")
+            state.day_of_week = ["鍛ㄤ竴", "鍛ㄤ簩", "鍛ㄤ笁", "鍛ㄥ洓", "鍛ㄤ簲", "鍛ㄥ叚", "鍛ㄦ棩"][local_now.weekday()]
+            state.current_month = local_now.month
+            state.current_season = "鏄?"
+            state._state["bot_current_activity"] = "鍦ㄥ悆鍗堥キ"
+            state._state["bot_current_activity_updated_at"] = None
+
+            cfg = LifeConfig(sync_with_local_time_when_realtime=True)
+            engine = LifeEngine("legacy_activity_bot", cfg, state, model=EmptyLifeModel())
+
+            status = engine.get_status()
+
+            self.assertEqual(status["bot_current_activity"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

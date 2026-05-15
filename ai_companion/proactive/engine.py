@@ -811,8 +811,9 @@ class ProactiveEngine:
             if message:
                 return message
             cleaned = self._clean_message(response)
-            if (not cleaned) or self._is_placeholder_message(cleaned):
-                logger.warning("[ProactiveEngine] LLM 返回占位或空消息，使用 fallback")
+            issue = self._classify_generated_message_issue(cleaned)
+            if issue:
+                logger.warning(f"[ProactiveEngine] LLM 生成消息不可用(issue={issue})，使用 fallback")
                 return self._get_fallback_message(scenario)
             return cleaned
         except Exception as e:
@@ -850,8 +851,11 @@ class ProactiveEngine:
             if message:
                 return message
             cleaned = self._clean_message(response)
-            if cleaned and not self._is_placeholder_message(cleaned):
+            if cleaned and not self._should_reject_generated_message(cleaned):
                 return cleaned
+            issue = self._classify_generated_message_issue(cleaned)
+            if issue:
+                logger.warning(f"[ProactiveEngine] 上下文主动消息不可用(issue={issue})，使用 fallback")
         except Exception as e:
             logger.error(f"[ProactiveEngine] 上下文主动消息生成失败: {e}")
         return self._fallback_contextual_message(motive)
@@ -912,6 +916,19 @@ class ProactiveEngine:
         hit_count = sum(1 for token in _PLACEHOLDER_STRUCTURED_PARTS if token in normalized)
         return hit_count >= 2
 
+    def _classify_generated_message_issue(self, message: str) -> Optional[str]:
+        cleaned = self._clean_message(str(message or ""))
+        if not cleaned:
+            return "empty"
+        if self._is_placeholder_message(cleaned):
+            return "placeholder"
+        if self._looks_like_structured_message_payload(cleaned):
+            return "raw_json"
+        return None
+
+    def _should_reject_generated_message(self, message: str) -> bool:
+        return self._classify_generated_message_issue(message) is not None
+
     def _looks_like_structured_message_schema(self, message: str) -> bool:
         lowered = str(message or "").lower()
         if not all(key in lowered for key in ('"opening"', '"topic"', '"ending"')):
@@ -932,18 +949,27 @@ class ProactiveEngine:
         # 提取 JSON
         json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content, re.DOTALL)
         if not json_match:
+            parse_issue = self._classify_partial_structured_parse_failure(content)
+            if parse_issue:
+                logger.debug(f"[ProactiveEngine] 结构化消息未命中完整 JSON(issue={parse_issue})")
             return self._parse_partial_structured_message(content)
 
         try:
             return self._compose_structured_message(json.loads(json_match.group()))
         except (json.JSONDecodeError, Exception) as e:
             logger.debug(f"[ProactiveEngine] 解析结构化消息失败: {e}")
+            parse_issue = self._classify_partial_structured_parse_failure(content)
+            if parse_issue:
+                logger.debug(f"[ProactiveEngine] 结构化消息降级为 partial 解析(issue={parse_issue})")
             return self._parse_partial_structured_message(content)
 
     def _parse_partial_structured_message(self, content: str) -> Optional[str]:
         """Best-effort extraction for truncated JSON so field names are never sent."""
         lowered = content.lower()
         if not any(key in lowered for key in ('"message"', '"opening"', '"topic"', '"ending"')):
+            return None
+
+        if re.search(r'"\s*[a-zA-Z_][^"]*"\s*:\s*".*"\s*"\s*[a-zA-Z_][^"]*"\s*:', content, re.DOTALL):
             return None
 
         data = {}
@@ -959,6 +985,14 @@ class ProactiveEngine:
                 if value:
                     data[key] = value
         return self._compose_structured_message(data)
+
+    def _classify_partial_structured_parse_failure(self, content: str) -> Optional[str]:
+        lowered = str(content or "").lower()
+        if not any(key in lowered for key in ('"message"', '"opening"', '"topic"', '"ending"')):
+            return None
+        if re.search(r'"\s*[a-zA-Z_][^"]*"\s*:\s*".*"\s*"\s*[a-zA-Z_][^"]*"\s*:', str(content), re.DOTALL):
+            return "broken_partial_json"
+        return "partial_json"
 
     def _compose_structured_message(self, data: dict) -> Optional[str]:
         direct_message = str(data.get("message", "") or "").strip()
@@ -1198,10 +1232,15 @@ class ProactiveEngine:
         parsed_message = self._parse_structured_message(message)
         if parsed_message:
             message = parsed_message
+        elif self._is_placeholder_message(message):
+            logger.warning("[ProactiveEngine] 主动消息不可发送(issue=placeholder)，使用 fallback")
+            message = self._get_fallback_message("with_topic")
         elif self._looks_like_structured_message_payload(message):
-            logger.warning("[ProactiveEngine] 主动消息疑似结构化内容未解析，使用 fallback")
+            issue = self._classify_partial_structured_parse_failure(message) or "raw_json"
+            logger.warning(f"[ProactiveEngine] 主动消息不可发送(issue={issue})，使用 fallback")
             message = self._get_fallback_message("with_topic")
         elif not message:
+            logger.warning("[ProactiveEngine] 主动消息不可发送(issue=empty)，使用 fallback")
             message = self._get_fallback_message("with_topic")
 
         if not self._platform_sender:

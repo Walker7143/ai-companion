@@ -774,6 +774,76 @@ class BotInstanceRealtimeContextTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("16:58", model.system_prompts[0])
             self.assertEqual(response, "\u73b0\u5728\u662f 16:58\uff08\u4e0b\u5348\uff09\u3002")
 
+    async def test_generation_context_includes_time_flow_notice_and_timestamped_history(self):
+        class HistoryCaptureModel:
+            provider = "test"
+            model = "history-time-capture"
+
+            def __init__(self):
+                self.messages = []
+                self.system_prompts = []
+
+            async def chat(self, messages, system_prompt="", **kwargs):
+                self.messages.append(messages)
+                self.system_prompts.append(system_prompt)
+                return "\u73b0\u5728\u5df2\u7ecf\u662f\u4e0b\u5348\u4e86\u3002"
+
+        with TemporaryDirectory(prefix="bot-time-flow-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            model = HistoryCaptureModel()
+            bot = BotInstance(
+                {"id": bot_id, "name": "\u6d4b\u8bd5 Bot", "data_dir": str(root)},
+                model=model,
+                memory_config={"embedding": "none"},
+                data_dir=root,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+            bot.life_engine.get_status = lambda: {
+                "current_date": "2026-05-09",
+                "day_of_week": "\u5468\u516d",
+                "local_time": "16:58",
+                "time_of_day": "\u4e0b\u5348",
+                "current_datetime_text": "2026-05-09 16:58\uff08\u5468\u516d\uff0c\u4e0b\u5348\uff09",
+            }
+            await bot.memory.init()
+            bot.memory.start_session("time-flow-session")
+            session_id = bot.memory.working.current_session or "time-flow-session"
+            await bot.memory.working.append(
+                user_input="\u4e2d\u5348\u5403\u4ec0\u4e48",
+                bot_output="\u6211\u521a\u5728\u5403\u5348\u996d\u3002",
+                session_id=session_id,
+            )
+
+            import sqlite3
+            conn = sqlite3.connect(bot.memory.working.db_path)
+            conn.execute(
+                "UPDATE messages SET created_at = ? WHERE session_id = ? AND role = 'user'",
+                ("2026-05-09 12:08:00", session_id),
+            )
+            conn.execute(
+                "UPDATE messages SET created_at = ? WHERE session_id = ? AND role = 'assistant'",
+                ("2026-05-09 12:09:00", session_id),
+            )
+            conn.commit()
+            conn.close()
+
+            try:
+                response = await bot.handle_message("\u4e0b\u5348\u4f60\u5728\u5e72\u561b")
+            finally:
+                await bot.close()
+
+            self.assertEqual(response, "\u73b0\u5728\u5df2\u7ecf\u662f\u4e0b\u5348\u4e86\u3002")
+            sent_history = "\n".join(str(msg.get("content", "")) for msg in model.messages[0])
+            self.assertIn("[时间流动提示]", sent_history)
+            self.assertIn("当前回复时刻：2026-05-09 16:58", sent_history)
+            self.assertIn("已经过去：4小时50分钟", sent_history)
+            self.assertIn("[12:08] 中午吃什么", sent_history)
+            self.assertIn("[12:09] 我刚在吃午饭。", sent_history)
+
 
 class BotInstanceGenerationContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_old_generic_action_labels_are_removed_from_llm_history_only(self):

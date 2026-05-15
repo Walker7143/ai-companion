@@ -152,13 +152,13 @@ class WorkingMemoryStore:
             return []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT role, content, metadata_json FROM messages
+            SELECT role, content, metadata_json, created_at FROM messages
             WHERE session_id = ? AND compressed = 0
             ORDER BY id ASC
         """, (sid,))
         rows = cursor.fetchall()
         conn.close()
-        return [_message_row(r[0], r[1], r[2]) for r in rows]
+        return [_message_row(r[0], r[1], r[2], created_at=r[3]) for r in rows]
 
     def get_recent(self, session_id: Optional[str] = None, turns: int = 20) -> list[dict]:
         """获取最近 N 轮原始消息"""
@@ -167,14 +167,14 @@ class WorkingMemoryStore:
             return []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT role, content, metadata_json FROM messages
+            SELECT role, content, metadata_json, created_at FROM messages
             WHERE session_id = ? AND compressed = 0
             ORDER BY id DESC
             LIMIT ?
         """, (sid, turns * 2))
         rows = cursor.fetchall()
         conn.close()
-        return [_message_row(r[0], r[1], r[2]) for r in rows]
+        return [_message_row(r[0], r[1], r[2], created_at=r[3]) for r in rows]
 
     def load_context(self, session_id: Optional[str] = None,
                      max_working_turns: int = 20,
@@ -380,13 +380,13 @@ class WorkingMemoryStore:
             return []
         conn = sqlite3.connect(self.db_path)
         cursor = conn.execute("""
-            SELECT role, content, compressed, metadata_json FROM messages
+            SELECT role, content, compressed, metadata_json, created_at FROM messages
             WHERE session_id = ?
             ORDER BY id ASC
         """, (sid,))
         rows = cursor.fetchall()
         conn.close()
-        return [_message_row(r[0], r[1], r[3], compressed=r[2]) for r in rows]
+        return [_message_row(r[0], r[1], r[3], compressed=r[2], created_at=r[4]) for r in rows]
 
     async def apply_summary(self, summary: str, session_id: Optional[str] = None) -> bool:
         """应用结构化摘要到工作记忆
@@ -438,10 +438,19 @@ class WorkingMemoryStore:
         pass
 
 
-def _message_row(role: str, content: str, metadata_json: Optional[str] = None, *, compressed: int | None = None) -> dict:
+def _message_row(
+    role: str,
+    content: str,
+    metadata_json: Optional[str] = None,
+    *,
+    compressed: int | None = None,
+    created_at: Optional[str] = None,
+) -> dict:
     item = {"role": role, "content": content}
     if compressed is not None:
         item["compressed"] = compressed
+    if created_at:
+        item["created_at"] = created_at
     metadata = _decode_metadata(metadata_json)
     if metadata:
         item["metadata"] = metadata

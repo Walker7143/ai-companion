@@ -88,6 +88,7 @@ class LifeState:
             "major_scenario_history": {},
             "bot_mood": "平静",
             "bot_current_activity": "在家休息",
+            "bot_current_activity_updated_at": None,
             "bot_age_days": 0,
             "last_daily_tick": None,
             "last_major_tick": None,
@@ -170,6 +171,17 @@ class LifeState:
     @bot_current_activity.setter
     def bot_current_activity(self, value: str):
         self._state["bot_current_activity"] = value
+        self._state["bot_current_activity_updated_at"] = datetime.now().isoformat()
+        self.save()
+
+    @property
+    def bot_current_activity_updated_at(self) -> Optional[datetime]:
+        ts = self._state.get("bot_current_activity_updated_at")
+        return datetime.fromisoformat(ts) if ts else None
+
+    @bot_current_activity_updated_at.setter
+    def bot_current_activity_updated_at(self, value: Optional[datetime]):
+        self._state["bot_current_activity_updated_at"] = value.isoformat() if value else None
         self.save()
 
     @property
