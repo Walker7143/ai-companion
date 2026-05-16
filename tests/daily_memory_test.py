@@ -34,6 +34,26 @@ class DailyMemoryTest(unittest.TestCase):
             [item for item in candidates if item.type == "user_fact" and item.category == "identity"]
         )
 
+    def test_rule_extractor_stores_explicit_corrections_and_body_limits(self):
+        extractor = MemoryExtractor()
+        alcohol = asyncio.run(extractor.extract("我不喝酒的", "", session_id="s1"))
+        body = asyncio.run(extractor.extract("本来我的腿脚就不好，怎么跑啊", "", session_id="s1"))
+
+        self.assertTrue(
+            [
+                item
+                for item in alcohol
+                if item.type == "user_fact" and item.key == "用户不喝酒" and item.category == "dislikes"
+            ]
+        )
+        self.assertTrue(
+            [
+                item
+                for item in body
+                if item.type == "user_fact" and item.key == "用户的身体状况" and item.category == "life_context"
+            ]
+        )
+
     def test_intent_classifier_prefers_task_request_for_code_repair(self):
         retriever = MemoryRetriever(
             working_store=None,
@@ -138,6 +158,84 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertIn("用户当前在北京", suffix)
         self.assertIn("腿脚不好", suffix)
         self.assertIn("不要反问已知事实", suffix)
+
+    def test_prompt_builder_filters_sensitive_core_facts_in_casual_chat(self):
+        from ai_companion.memory.prompt_builder import MemoryPromptBuilder
+
+        understanding = {
+            "layered": {
+                "core": {
+                    "summary": "用户喜欢真实陪伴，但身体有长期不适。",
+                    "identity": {"current_city": "北京"},
+                    "facts": {
+                        "身体情况": "用户腿脚不好。",
+                        "猫": "用户养了猫。",
+                    },
+                    "communication_style": ["少说教"],
+                },
+                "sensitive": {
+                    "topics": ["身体", "腿"],
+                    "guidance": ["涉及身体隐私只在用户主动提起或高度相关时使用。"],
+                    "source_keys": ["core.facts.身体情况"],
+                },
+            }
+        }
+        casual = RetrievedMemory(intent="casual_chat", user_understanding=understanding)
+        emotional = RetrievedMemory(intent="emotional_support", user_understanding=understanding)
+
+        casual_suffix = MemoryPromptBuilder(max_chars=2400).build(casual)
+        emotional_suffix = MemoryPromptBuilder(max_chars=2400).build(emotional)
+
+        self.assertNotIn("长期不适", casual_suffix)
+        self.assertNotIn("用户腿脚不好", casual_suffix)
+        self.assertIn("用户养了猫", casual_suffix)
+        self.assertIn("只在用户主动提起", casual_suffix)
+        self.assertIn("用户腿脚不好", emotional_suffix)
+
+    def test_prompt_builder_manual_facts_override_anchored_semantic_items(self):
+        from ai_companion.memory.prompt_builder import MemoryPromptBuilder
+
+        retrieved = RetrievedMemory(
+            intent="casual_chat",
+            user_understanding={
+                "manual": {"facts": {"城市": "杭州"}},
+                "layered": {"core": {"facts": {"城市": "杭州"}}},
+            },
+            semantic_items=[
+                {
+                    "key": "城市",
+                    "value": "上海",
+                    "category": "identity",
+                    "confidence": 0.95,
+                    "retrieval_reasons": {"query_cue_overlap": 1, "salient_overlap": 0},
+                }
+            ],
+        )
+
+        suffix = MemoryPromptBuilder(max_chars=2400).build(retrieved)
+
+        self.assertIn("城市: 杭州", suffix)
+        self.assertNotIn("城市: 上海", suffix)
+
+    def test_memory_engine_promotes_explicit_correction_for_next_turn(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="explicit-correction-") as tmp:
+                engine = MemoryEngine("explicit_correction_bot", Path(tmp), config={"embedding": "none"})
+                await engine.init()
+                engine.start_session("s1")
+                await engine.on_message("我不喝酒的", "记住啦", turn_context={"session_id": "s1"})
+                ctx = await engine.load_context("你还让我喝酒吗")
+                loaded = engine.user_understanding.load()
+                await engine.close()
+                return ctx, loaded
+
+        ctx, loaded = asyncio.run(run())
+
+        self.assertIn("用户明确说自己不喝酒", ctx["system_suffix"])
+        self.assertIn("用户不喝酒", ctx["semantic_facts"])
+        self.assertTrue(
+            any("用户明确说自己不喝酒" in item for item in loaded["layered"]["core"]["dislikes"])
+        )
 
     def test_user_understanding_manual_layer_overrides_auto_fact(self):
         async def run():

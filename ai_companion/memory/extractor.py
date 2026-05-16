@@ -172,7 +172,8 @@ class MemoryExtractor:
             raw = _response_text(response)
             candidates = self._parse_structured(raw, user_input, bot_output, session_id)
             if candidates:
-                return candidates
+                rule_candidates = self._explicit_self_fact_candidates(user_input.strip(), session_id=session_id)
+                return self._merge_candidates([*candidates, *rule_candidates])
         except Exception:
             pass
         return self._rule_extract(user_input, bot_output, session_id=session_id)
@@ -321,24 +322,27 @@ class MemoryExtractor:
     def _rule_extract(self, user_input: str, bot_output: str, *, session_id: str) -> list[MemoryCandidate]:
         text = user_input.strip()
         candidates: list[MemoryCandidate] = []
+        candidates.extend(self._explicit_self_fact_candidates(text, session_id=session_id))
+
         category = self._infer_category(text, text)
         if category == "identity" and not self._is_explicit_identity_statement(text):
             category = "general"
         if category != "general" and (len(text) >= 6 or category == "identity"):
             key = self._infer_key(category, text)
-            candidates.append(
-                MemoryCandidate(
-                    type="user_fact",
-                    key=key,
-                    value=text[:160],
-                    category=category,
-                    confidence=0.68 if category in {"life_context", "goals"} else 0.76,
-                    importance=self._default_importance(category),
-                    source="rule",
-                    ttl_days=self._default_ttl(category),
-                    evidence=[session_id],
+            if not any(item.type == "user_fact" and item.key == key for item in candidates):
+                candidates.append(
+                    MemoryCandidate(
+                        type="user_fact",
+                        key=key,
+                        value=text[:160],
+                        category=category,
+                        confidence=0.68 if category in {"life_context", "goals"} else 0.76,
+                        importance=self._default_importance(category),
+                        source="rule",
+                        ttl_days=self._default_ttl(category),
+                        evidence=[session_id],
+                    )
                 )
-            )
 
         if self._looks_like_episode(text):
             candidates.append(
@@ -354,7 +358,21 @@ class MemoryExtractor:
                     metadata={"topics": [], "emotion_tags": []},
                 )
             )
-        return [c.normalized() for c in candidates if self._valid_candidate(c)]
+        return self._merge_candidates(candidates)
+
+    def _merge_candidates(self, candidates: list[MemoryCandidate]) -> list[MemoryCandidate]:
+        result: list[MemoryCandidate] = []
+        seen: set[tuple[str, str, str]] = set()
+        for candidate in candidates:
+            candidate = candidate.normalized()
+            if not self._valid_candidate(candidate):
+                continue
+            marker = (candidate.type, candidate.key, candidate.value)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            result.append(candidate)
+        return result
 
     def _infer_category(self, key: str, value: str) -> str:
         haystack = f"{key} {value}"
@@ -379,6 +397,78 @@ class MemoryExtractor:
         ]
         spaced = re.sub(r"\s+", " ", str(text or "").strip())
         return any(re.search(pattern, normalized) or re.search(pattern, spaced) for pattern in patterns)
+
+    def _explicit_self_fact_candidates(self, text: str, *, session_id: str) -> list[MemoryCandidate]:
+        normalized = re.sub(r"\s+", "", str(text or ""))
+        if not normalized:
+            return []
+
+        candidates: list[MemoryCandidate] = []
+        if _mentions_self(normalized) and any(marker in normalized for marker in _ALCOHOL_NEGATION_MARKERS):
+            candidates.append(
+                MemoryCandidate(
+                    type="user_fact",
+                    key="用户不喝酒",
+                    value="用户明确说自己不喝酒。",
+                    category="dislikes",
+                    confidence=0.9,
+                    importance=0.74,
+                    source="rule_explicit_correction",
+                    ttl_days=None,
+                    evidence=[session_id],
+                    reason="用户直接纠正了喝酒相关假设。",
+                )
+            )
+
+        if _mentions_self(normalized) and any(marker in normalized for marker in _SMOKING_NEGATION_MARKERS):
+            candidates.append(
+                MemoryCandidate(
+                    type="user_fact",
+                    key="用户不抽烟",
+                    value="用户明确说自己不抽烟。",
+                    category="dislikes",
+                    confidence=0.9,
+                    importance=0.72,
+                    source="rule_explicit_correction",
+                    ttl_days=None,
+                    evidence=[session_id],
+                    reason="用户直接说明了生活习惯边界。",
+                )
+            )
+
+        body_text = self._extract_body_status_text(normalized)
+        if body_text:
+            candidates.append(
+                MemoryCandidate(
+                    type="user_fact",
+                    key="用户的身体状况",
+                    value=body_text,
+                    category="life_context",
+                    confidence=0.86,
+                    importance=0.82,
+                    source="rule_explicit_correction",
+                    ttl_days=None,
+                    evidence=[session_id],
+                    reason="用户主动提到身体限制，后续建议需要避开不合适的运动或活动。",
+                )
+            )
+        return candidates
+
+    def _extract_body_status_text(self, normalized: str) -> str:
+        if not _mentions_self(normalized):
+            return ""
+        if "腿脚" in normalized and any(marker in normalized for marker in ("不好", "不方便", "不舒服", "有问题", "老毛病")):
+            return "用户明确说自己腿脚不好。"
+        if (
+            any(part in normalized for part in ("腿", "脚", "膝盖", "腰", "身体"))
+            and any(marker in normalized for marker in ("跑不了", "不能跑", "没法跑", "不适合跑", "跑不动"))
+        ):
+            return "用户明确说自己不能跑或不适合跑。"
+        if any(part in normalized for part in ("腿", "脚", "膝盖", "腰")) and any(
+            marker in normalized for marker in ("疼", "痛", "不舒服", "不方便", "不好", "有问题")
+        ):
+            return "用户提到腿、脚、膝盖或腰部不适，可能存在行动限制。"
+        return ""
 
     def _infer_key(self, category: str, value: str) -> str:
         defaults = {
@@ -454,3 +544,29 @@ def _safe_float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _mentions_self(text: str) -> bool:
+    return any(marker in text for marker in ("我", "俺", "本人", "自己"))
+
+
+_ALCOHOL_NEGATION_MARKERS = (
+    "不喝酒",
+    "不喝酒的",
+    "不能喝酒",
+    "不怎么喝酒",
+    "基本不喝酒",
+    "从不喝酒",
+    "戒酒",
+)
+
+
+_SMOKING_NEGATION_MARKERS = (
+    "不抽烟",
+    "不吸烟",
+    "不能抽烟",
+    "不怎么抽烟",
+    "基本不抽烟",
+    "从不抽烟",
+    "戒烟",
+)

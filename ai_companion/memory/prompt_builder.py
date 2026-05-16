@@ -442,17 +442,29 @@ class MemoryPromptBuilder:
         sensitive = layered.get("sensitive") if isinstance(layered.get("sensitive"), dict) else {}
 
         summary = str(core.get("summary") or "").strip()
-        if summary:
+        if summary and _allows_layered_core_text(summary, intent):
             lines.append(f"核心理解：{_compact_prompt_text(summary, 420)}")
         sensitive_source_keys = _clean_list(sensitive.get("source_keys"))
         identity = _clean_dict(core.get("identity"))
         if identity:
-            lines.append("用户手动设定的身份信息：")
-            lines.extend([f"  - {k}: {v}" for k, v in list(identity.items())[:6]])
+            item_lines = [
+                f"  - {k}: {v}"
+                for k, v in list(identity.items())[:6]
+                if _allows_layered_core_text(f"{k}: {v}", intent)
+            ]
+            if item_lines:
+                lines.append("用户手动设定的身份信息：")
+                lines.extend(item_lines)
         facts = _clean_dict(core.get("facts"))
         if facts and intent != "task_request":
-            lines.append("用户手动设定的事实：")
-            lines.extend([f"  - {k}: {v}" for k, v in list(facts.items())[:4]])
+            item_lines = [
+                f"  - {k}: {v}"
+                for k, v in list(facts.items())[:4]
+                if _allows_layered_core_text(f"{k}: {v}", intent)
+            ]
+            if item_lines:
+                lines.append("用户手动设定的事实：")
+                lines.extend(item_lines)
         for key, title in [
             ("preferences", "稳定偏好"),
             ("dislikes", "不喜欢/避开的事"),
@@ -462,8 +474,14 @@ class MemoryPromptBuilder:
         ]:
             items = _clean_list(core.get(key))
             if items:
-                lines.append(f"{title}：")
-                lines.extend([f"  - {item}" for item in items[: _layer_item_limit("core", key, intent)]])
+                item_lines = [
+                    f"  - {item}"
+                    for item in items[: _layer_item_limit("core", key, intent)]
+                    if _allows_layered_core_text(item, intent)
+                ]
+                if item_lines:
+                    lines.append(f"{title}：")
+                    lines.extend(item_lines)
 
         for key, title in [
             ("current_context", "当前状态"),
@@ -829,7 +847,11 @@ def _anchored_semantic_items(retrieved: RetrievedMemory) -> list[dict]:
     selected.extend(_stable_continuity_items(retrieved.user_understanding))
 
     for item in retrieved.semantic_items:
-        if not isinstance(item, dict) or not _should_anchor_semantic_item(item):
+        if not isinstance(item, dict):
+            continue
+        if _manual_understanding_blocks_fact(retrieved.user_understanding, item):
+            continue
+        if not _should_anchor_semantic_item(item):
             continue
         selected.append(dict(item))
 
@@ -896,6 +918,28 @@ def _should_anchor_semantic_item(item: dict) -> bool:
         return category in _ANCHORABLE_FACT_CATEGORIES or _is_sensitive_fact(item)
     if confidence >= 0.92 and any(cue in text for cue in _HIGH_IMPACT_FACT_CUES):
         return category in {"identity", "life_context", "goals", "routines"}
+    return False
+
+
+def _manual_understanding_blocks_fact(understanding: object, item: dict) -> bool:
+    if not isinstance(understanding, dict) or not isinstance(item, dict):
+        return False
+    manual = understanding.get("manual") if isinstance(understanding.get("manual"), dict) else {}
+    key = str(item.get("key") or "").strip()
+    value = str(item.get("value") or "").strip()
+    category = str(item.get("category") or "").strip()
+    if not key and not value:
+        return False
+
+    manual_facts = _clean_dict(manual.get("facts"))
+    manual_identity = _clean_dict(manual.get("identity"))
+    if key and (key in manual_facts or key in manual_identity):
+        return True
+
+    if category:
+        manual_items = set(_clean_list(manual.get(category)))
+        if key in manual_items or value in manual_items:
+            return True
     return False
 
 
@@ -1141,6 +1185,16 @@ def _is_sensitive_layer_item(layer: str, key: str, index: int, source_keys: list
         candidates.add(f"auto.{key}.{index}")
         candidates.add(f"manual.{key}.{index}")
     return any(candidate in source_keys for candidate in candidates)
+
+
+def _allows_layered_core_text(text: str, intent: str) -> bool:
+    if intent in {"emotional_support", "relationship_repair", "recall_past", "proactive_generation"}:
+        return True
+    return not _has_sensitive_text(text)
+
+
+def _has_sensitive_text(text: str) -> bool:
+    return any(cue in str(text or "") for cue in _SENSITIVE_FACT_CUES)
 
 
 def _section_item_limit(key: str, intent: str) -> int:
