@@ -23,6 +23,12 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Any
 
+from ..temporal_guard import (
+    compatible_templates_for_current_time,
+    is_event_visible_at_current_time,
+    scenario_has_compatible_template,
+)
+
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
     from ..memory.engine import MemoryEngine
@@ -87,6 +93,7 @@ Bot 出生天数：{bot_age_days} 天
 8. 不要复用“近期禁止复用的场景 key”；如果只能想到这些场景，输出空数组 []。
 9. scenario_key 必须从“本次可选场景 key”里选择，除非确实需要输出空数组。
 10. 如果生活画像没有公司、办公室、同事、通勤等当前设定，不要生成这些通用职场/城市通勤事件；可以输出空数组。
+11. 事件必须是按当前本地时间已经可能发生的事；如果现在是中午，不要生成今天晚饭、晚饭后、晚上、睡前、夜宵等尚未发生的事件。
 
 【输出格式】
 输出一个 JSON 数组，每个元素如下：
@@ -616,6 +623,10 @@ class LifeEngine:
                 exclude_scenario_keys=self._forbidden_daily_scenario_keys(),
             )
         if event:
+            if not is_event_visible_at_current_time(event, self._build_life_context()):
+                logger.info("[LifeEngine] 生成事件与当前时段冲突，丢弃: %s", event.description)
+                event = None
+        if event:
             self.state.bot_mood = event.mood_after
             self.state.bot_current_activity = self._activity_summary_for_event(event)
             self.state.add_event(event)
@@ -762,6 +773,7 @@ class LifeEngine:
         forbidden = self._forbidden_daily_scenario_keys()
         candidate_scenarios = self._daily_scenario_candidates(
             forbidden,
+            current_hour=self._get_local_now().hour,
             limit=getattr(self.config, "llm_daily_candidate_limit", 12),
         )
         scenario_guidance = self._scenario_guidance(candidate_scenarios)
@@ -814,6 +826,9 @@ class LifeEngine:
                 scenario_key = self._infer_scenario_key(event_data.get("description", ""))
             if self._is_daily_scenario_blocked(scenario_key):
                 logger.info("[LifeEngine] LLM 生成场景仍在冷却中，跳过: %s", scenario_key)
+                return None
+            if not self._is_generated_event_temporally_valid(event_data.get("description", ""), scenario_key):
+                logger.info("[LifeEngine] LLM 生成事件与当前时段冲突，跳过: %s", event_data.get("description", ""))
                 return None
             event = LifeEvent(
                 description=event_data.get("description", ""),
@@ -1983,12 +1998,18 @@ class LifeEngine:
                 })
         return result
 
-    def _daily_scenario_candidates(self, forbidden: set[str], limit: int = 12) -> list[dict[str, Any]]:
+    def _daily_scenario_candidates(
+        self,
+        forbidden: set[str],
+        limit: int = 12,
+        current_hour: int | None = None,
+    ) -> list[dict[str, Any]]:
         """过滤近期/冷却场景后，从剩余大池子中随机抽样少量候选给 LLM。"""
         blocked = set(forbidden or set())
         available = [
             item for item in self._daily_scenario_catalog()
             if item["key"] not in blocked and not self._is_daily_scenario_blocked(item["key"])
+            and scenario_has_compatible_template(item, current_hour=current_hour)
         ]
         if not available:
             return []
@@ -2097,7 +2118,13 @@ class LifeEngine:
     def _render_scenario_description(self, scenario: dict[str, Any]) -> str:
         if self._should_sync_realtime_with_local_time():
             self._sync_state_to_local_now(persist=False)
-        template = random.choice(scenario.get("templates") or ["{date} 发生了一件具体的小事。"])
+        templates = compatible_templates_for_current_time(
+            scenario.get("templates") or ["{date} 发生了一件具体的小事。"],
+            current_hour=self._get_local_now().hour,
+        )
+        if not templates:
+            templates = ["{date} 发生了一件具体的小事。"]
+        template = random.choice(templates)
         values = {
             "date": self.state.current_date or "今天",
             "season": self.state.current_season or "当季",
@@ -2114,6 +2141,16 @@ class LifeEngine:
             "daily_item": random.choice(["杯垫", "帆布袋", "桌面收纳盒", "便签夹"]),
         }
         return template.format_map(_SafeFormatDict(values))
+
+    def _is_generated_event_temporally_valid(self, description: str, scenario_key: str) -> bool:
+        from .life_state import LifeEvent
+
+        event = LifeEvent(
+            description=str(description or ""),
+            scenario_key=str(scenario_key or ""),
+            topic_prompt="",
+        )
+        return is_event_visible_at_current_time(event, self._build_life_context())
 
     def _weighted_choice(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         total = sum(float(item.get("weight", 1.0)) for item in items)
@@ -2709,6 +2746,19 @@ class LifeEngine:
         real_age = self._calc_real_age()
         local_now = self._get_local_now()
         time_of_day = self._time_of_day_label(local_now.hour)
+        life_context = {
+            "current_date": self.state.current_date,
+            "local_time": local_now.strftime("%H:%M"),
+            "time_of_day": time_of_day,
+        }
+        visible_life_events = [
+            event for event in life_events
+            if is_event_visible_at_current_time(event, life_context)
+        ]
+        visible_major_events = [
+            event for event in major_events
+            if is_event_visible_at_current_time(event, life_context)
+        ]
         return {
             "bot_mood": self.state.bot_mood,
             "bot_current_activity": self._current_activity_for_prompt(),
@@ -2731,8 +2781,8 @@ class LifeEngine:
             "life_stage": self._calc_life_stage(real_age),
             "life_events_count": len(life_events),
             "major_events_count": len(major_events),
-            "recent_life_events": [self._event_status_item(e) for e in life_events[-5:]],
-            "recent_major_life_events": [self._event_status_item(e) for e in major_events[-5:]],
+            "recent_life_events": [self._event_status_item(e) for e in visible_life_events[-5:]],
+            "recent_major_life_events": [self._event_status_item(e) for e in visible_major_events[-5:]],
             "last_daily_tick": self.state.last_daily_tick.isoformat() if self.state.last_daily_tick else None,
             "last_major_tick": self.state.last_major_tick.isoformat() if self.state.last_major_tick else None,
         }

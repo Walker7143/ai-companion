@@ -42,6 +42,11 @@ from ..skill.command import (
     is_skill_management_command,
     redact_sensitive_tokens,
 )
+from ..temporal_guard import (
+    build_generation_time_constraints,
+    build_local_time_context,
+    is_event_visible_at_current_time,
+)
 from .response_style import ResponseStylePolisher
 
 if TYPE_CHECKING:
@@ -622,8 +627,11 @@ class BotInstance:
         memory_context: dict | None = None,
         relationship_state: dict | None = None,
     ) -> str:
-        life_context = self.life_engine.get_status() if self.life_engine else None
+        life_context = self._get_generation_life_context()
         system_prompt = self.persona_engine.build_system_prompt(life_context=life_context)
+        time_constraints = build_generation_time_constraints(life_context)
+        if time_constraints:
+            system_prompt = system_prompt + "\n\n" + time_constraints
         embodied_prompt = self._build_embodied_expression_prompt(
             user_input=user_input,
             memory_context=memory_context or {},
@@ -636,6 +644,25 @@ class BotInstance:
         if adjustment_note:
             system_prompt = system_prompt + adjustment_note
         return system_prompt
+
+    def _get_generation_life_context(self) -> dict:
+        if self.life_engine:
+            try:
+                return self._filter_generation_life_context(self.life_engine.get_status())
+            except Exception as exc:
+                logger.debug("[BotInstance] 获取当前时间上下文失败，使用本地时钟兜底: %s", exc)
+        return build_local_time_context()
+
+    def _filter_generation_life_context(self, life_context: dict | None) -> dict:
+        context = dict(life_context or {})
+        for key in ("recent_life_events", "recent_major_life_events"):
+            events = context.get(key)
+            if isinstance(events, list):
+                context[key] = [
+                    event for event in events
+                    if is_event_visible_at_current_time(event, context)
+                ]
+        return context
 
     def get_last_debug_context(self) -> dict | None:
         """Return the latest generation-time debug snapshot."""
@@ -803,7 +830,8 @@ class BotInstance:
         refusal_response = await self.refusal_engine.check(
             user_request=effective_user_input,
             memory_context=None,
-            relationship_state=relationship_state
+            relationship_state=relationship_state,
+            generation_time_context=self._get_generation_life_context(),
         )
 
         if refusal_response.refuse:
@@ -962,7 +990,7 @@ class BotInstance:
         cleaned: list[dict] = []
         source_messages = messages if isinstance(messages, list) else []
         last_message_index = self._last_generation_context_message_index(source_messages)
-        life_context = self.life_engine.get_status() if self.life_engine else {}
+        life_context = self._get_generation_life_context()
         time_notice = self._build_generation_time_notice(source_messages, life_context)
         if time_notice:
             cleaned.append({"role": "system", "content": time_notice})
@@ -1004,6 +1032,7 @@ class BotInstance:
             )
         parts.append("- 历史消息里的场景、活动和状态只代表当时，不要默认它们在当前时刻仍然持续。")
         parts.append("- 如果发现已经从中午到下午、从今天到明天，或中间隔了较长时间，请按当前时间重新判断场景，不要沿用旧时刻的临时状态。")
+        parts.append("- 回复中提到吃饭、下班后、晚饭后、睡前等生活细节时，必须与当前回复时刻一致；没有明确依据时不要主动编造具体时段活动。")
         history_timeline = self._build_history_timeline(messages, life_context)
         if history_timeline:
             parts.append("- 历史时间线：")
@@ -1059,6 +1088,10 @@ class BotInstance:
             text = str(item.get("content", "") or "").strip()
             if not text:
                 continue
+            if role == "assistant":
+                text = self.response_polisher.clean_generation_context(text).strip()
+                if not text:
+                    continue
             label = "用户" if role == "user" else "Bot"
             snippet = text if len(text) <= 48 else text[:48].rstrip() + "..."
             lines.append(f"  - [{self._format_history_timestamp(created_at, life_context)}] {label}: {snippet}")

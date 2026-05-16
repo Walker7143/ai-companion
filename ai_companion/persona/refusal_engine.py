@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from ..temporal_guard import build_generation_time_constraints
 from .refusal_category import RefusalCategory
 
 if TYPE_CHECKING:
@@ -36,6 +37,9 @@ REFUSAL_JUDGE_PROMPT = """【角色】
 
 【用户请求】
 {user_request}
+
+【当前时间一致性】
+{time_constraints}
 
 【判断标准】
 
@@ -328,7 +332,8 @@ class RefusalEngine:
         self,
         user_request: str,
         memory_context: Optional[dict] = None,
-        relationship_state: Optional[dict] = None
+        relationship_state: Optional[dict] = None,
+        generation_time_context: Optional[dict] = None,
     ) -> RefusalResponse:
         """
         检查用户请求是否应被拒绝（基于 LLM 推断）
@@ -380,7 +385,8 @@ class RefusalEngine:
             deal_breakers=deal_breakers_str,
             speaking_style=speaking_style_desc,
             relationship_desc=relation_desc,
-            user_request=user_request
+            user_request=user_request,
+            time_constraints=build_generation_time_constraints(generation_time_context),
         )
 
         try:

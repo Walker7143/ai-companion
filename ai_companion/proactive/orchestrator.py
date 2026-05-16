@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from ..temporal_guard import build_local_time_context, is_event_visible_at_current_time
 from .conversation_task_store import ConversationTaskStore
 from .motives import ConversationTask, ConversationTaskType, ProactiveMotive, ProactiveMotiveType
 
@@ -221,12 +222,16 @@ class ProactiveOrchestrator:
             return None
         try:
             life_engine.state.load()
-            events = life_engine.state.get_recent_shareable_events(limit=1)
+            status = life_engine.get_status() if hasattr(life_engine, "get_status") else build_local_time_context(now)
+            visible_events = [
+                event for event in life_engine.state.get_recent_shareable_events(limit=10)
+                if is_event_visible_at_current_time(event, status)
+            ]
         except Exception:
             return None
-        if not events:
+        if not visible_events:
             return None
-        event = events[0]
+        event = visible_events[-1]
         prompt_context = self._context_for_life_event(event)
         return ProactiveMotive(
             type=ProactiveMotiveType.LIFE_EVENT,

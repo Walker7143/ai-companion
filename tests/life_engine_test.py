@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 
 from ai_companion.proactive.life_config import LifeConfig
 from ai_companion.proactive.life_engine import LifeEngine
-from ai_companion.proactive.life_state import LifeState
+from ai_companion.proactive.life_state import LifeEvent, LifeState
 
 
 class EmptyLifeModel:
@@ -207,6 +207,70 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
             status = engine.get_status()
 
             self.assertEqual(status["bot_current_activity"], "")
+
+    def test_future_evening_events_are_hidden_from_noon_status(self):
+        with TemporaryDirectory(prefix="life-future-evening-event-") as td:
+            state = LifeState("future_evening_bot", Path(td))
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
+            engine = LifeEngine("future_evening_bot", cfg, state, model=EmptyLifeModel())
+            engine._get_local_now = lambda: datetime(2026, 5, 9, 12, 1).astimezone()
+            state.current_date = "2026-05-09"
+            state.day_of_week = "周六"
+            state.current_month = 5
+            state.current_season = "春"
+            state.add_event(
+                LifeEvent(
+                    description="2026-05-09 午饭去楼下新开的牛肉面馆，汤头意外地不错。",
+                    scenario_key="lunch_discovery",
+                    shareable=True,
+                )
+            )
+            state.add_event(
+                LifeEvent(
+                    description="2026-05-09 晚饭后去小区快走了3公里，刚开始不想动，走完反而清醒不少。",
+                    scenario_key="night_walk",
+                    shareable=True,
+                )
+            )
+
+            status = engine.get_status()
+
+            descriptions = [item["description"] for item in status["recent_life_events"]]
+            self.assertTrue(any("午饭去楼下" in item for item in descriptions))
+            self.assertFalse(any("晚饭后去小区快走" in item for item in descriptions))
+
+    def test_daily_candidates_exclude_evening_only_scenarios_at_noon(self):
+        with TemporaryDirectory(prefix="life-noon-candidates-") as td:
+            state = LifeState("candidate_time_bot", Path(td))
+            state.current_date = "2026-05-09"
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
+            engine = LifeEngine("candidate_time_bot", cfg, state, model=EmptyLifeModel())
+
+            candidates = engine._daily_scenario_candidates(set(), current_hour=12, limit=10000)
+            keys = {item["key"] for item in candidates}
+
+            self.assertIn("lunch_discovery", keys)
+            self.assertNotIn("night_walk", keys)
+
+    def test_render_scenario_uses_time_compatible_template(self):
+        with TemporaryDirectory(prefix="life-compatible-template-") as td:
+            state = LifeState("render_time_bot", Path(td))
+            state.current_date = "2026-05-09"
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
+            engine = LifeEngine("render_time_bot", cfg, state, model=EmptyLifeModel())
+            engine._get_local_now = lambda: datetime(2026, 5, 9, 12, 1).astimezone()
+            scenario = {
+                "key": "mixed_food",
+                "templates": [
+                    "{date} 晚上试着自己炒菜，盐放得有点重。",
+                    "{date} 中午随手买的饭团意外好吃。",
+                ],
+            }
+
+            description = engine._render_scenario_description(scenario)
+
+            self.assertIn("中午随手买的饭团", description)
+            self.assertNotIn("晚上试着自己炒菜", description)
 
 
 if __name__ == "__main__":

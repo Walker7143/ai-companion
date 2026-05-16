@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from ..temporal_guard import build_generation_time_constraints, is_event_visible_at_current_time
+
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
     from ..memory.engine import MemoryEngine
@@ -119,6 +121,7 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 - 如果有话题，可以自然地带入
 - 结尾可以表达期待
 - 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生
+- 任何生活细节都必须服从“Bot 时间线”里的当前时间一致性约束；当前还没到晚上时，不要说今天晚饭、晚饭后、夜宵或睡前活动已经发生
 - 称呼必须服从“用户记忆与最近上下文”；如果用户最近否认或纠正过某个名字/称呼，不要继续使用那个被否定的称呼
 - 人格档案里的条件式旧称呼只有在用户本轮或近期明确确认代入对应角色时才可使用，不要当作默认昵称
 
@@ -159,6 +162,7 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 - 不要使用“在吗”“最近怎么样”这类无上下文开场。
 - 不要说“Bot”“用户”“这件事让我意识到”“希望这能...”这类旁白或 AI 腔。
 - 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生。
+- 任何生活细节都必须服从“Bot 时间线”里的当前时间一致性约束；当前还没到晚上时，不要说今天晚饭、晚饭后、夜宵或睡前活动已经发生。
 - 称呼必须服从“用户记忆与最近上下文”；如果用户最近否认或纠正过某个名字/称呼，不要继续使用那个被否定的称呼。
 - 人格档案里的条件式旧称呼只有在用户本轮或近期明确确认代入对应角色时才可使用，不要当作默认昵称。
 - 只写一条适合直接发送的短消息，允许短句、停顿、吐槽、反问，保持你的个人脾气。
@@ -372,6 +376,10 @@ class ProactiveEngine:
             lines.append(f"人生阶段：{status['life_stage']}")
         if status.get("bot_current_activity"):
             lines.append(f"当前状态：{status['bot_current_activity']}")
+        time_constraints = build_generation_time_constraints(status)
+        if time_constraints:
+            lines.append("")
+            lines.append(time_constraints)
 
         return "\n".join(lines) if lines else "人生轨迹状态暂不可用"
 
@@ -755,7 +763,7 @@ class ProactiveEngine:
         # 判断场景
         has_topic = False
         if hasattr(self, 'life_engine') and self.life_engine:
-            shareable_events = self.life_engine.state.get_recent_shareable_events(limit=2)
+            shareable_events = self._recent_visible_shareable_life_events(limit=2)
             has_topic = len(shareable_events) > 0
 
         # 根据是否有话题选择场景
@@ -781,7 +789,7 @@ class ProactiveEngine:
                 self.life_engine.state.load()
             except Exception:
                 pass
-            shareable_events = self.life_engine.state.get_recent_shareable_events(limit=2)
+            shareable_events = self._recent_visible_shareable_life_events(limit=2)
             if shareable_events:
                 event = shareable_events[0]
                 bot_life_context = f"{event.description}"
@@ -859,6 +867,22 @@ class ProactiveEngine:
         except Exception as e:
             logger.error(f"[ProactiveEngine] 上下文主动消息生成失败: {e}")
         return self._fallback_contextual_message(motive)
+
+    def _recent_visible_shareable_life_events(self, limit: int = 2) -> list:
+        life_engine = getattr(self, "life_engine", None)
+        if not life_engine:
+            return []
+        try:
+            life_engine.state.load()
+            status = life_engine.get_status()
+            events = life_engine.state.get_recent_shareable_events(limit=max(10, limit * 4))
+        except Exception:
+            return []
+        visible = [
+            event for event in events
+            if is_event_visible_at_current_time(event, status)
+        ]
+        return visible[-limit:]
 
     async def send_contextual_proactive_message(self, motive: "ProactiveMotive") -> bool:
         message = await self.generate_contextual_message(motive)

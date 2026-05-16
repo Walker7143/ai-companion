@@ -7,7 +7,7 @@ from ai_companion.proactive.config import ProactiveConfig
 from ai_companion.proactive.engine import ProactiveEngine
 from ai_companion.proactive.life_config import LifeConfig
 from ai_companion.proactive.life_engine import LifeEngine
-from ai_companion.proactive.life_state import LifeState
+from ai_companion.proactive.life_state import LifeEvent, LifeState
 from ai_companion.proactive.state import ProactiveState
 
 
@@ -368,6 +368,44 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("洱海", prompt)
             self.assertIn("不要把背景经历或通用职场场景写成正在发生", prompt)
             self.assertIn("客栈门口", message)
+
+    async def test_generate_message_does_not_use_future_evening_shareable_event_at_noon(self):
+        with TemporaryDirectory(prefix="proactive-future-event-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = CaptureModel('{"opening":"喂","topic":"中午这会儿还挺安静。","ending":""}')
+            engine = ProactiveEngine(
+                bot_id="time_bot",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("time_bot", root / "runtime"),
+                model=model,
+            )
+            life_state = LifeState("time_bot", root / "life")
+            life_state.current_date = "2026-05-09"
+            life_engine = LifeEngine(
+                "time_bot",
+                LifeConfig(sync_with_local_time_when_realtime=False),
+                life_state,
+                model=None,
+            )
+            life_engine._get_local_now = lambda: datetime(2026, 5, 9, 12, 1).astimezone()
+            life_state.add_event(
+                LifeEvent(
+                    description="2026-05-09 晚饭后去小区快走了3公里，刚开始不想动，走完反而清醒不少。",
+                    topic_prompt="今天强迫自己动了动，感觉状态回来一点。",
+                    scenario_key="night_walk",
+                    shareable=True,
+                )
+            )
+            engine.set_life_engine(life_engine)
+
+            await engine.generate_message("想随手发一句")
+
+            prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("[当前时间一致性约束]", prompt)
+            self.assertIn("不要说今天晚饭、晚饭后、夜宵或睡前活动已经发生", prompt)
+            self.assertNotIn("晚饭后去小区快走", prompt)
 
 
 if __name__ == "__main__":

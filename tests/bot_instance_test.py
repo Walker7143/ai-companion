@@ -914,6 +914,79 @@ class BotInstanceRealtimeContextTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("[12:09] Bot: 我刚在吃午饭。", system_notice)
             self.assertNotIn("[12:09]", assistant_history)
 
+    async def test_no_memory_generation_injects_time_period_constraints_before_llm(self):
+        model = CaptureChatModel("我在。")
+        with TemporaryDirectory(prefix="bot-time-guard-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=model,
+                memory_config=None,
+                data_dir=root,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+            bot.life_engine.get_status = lambda: {
+                "current_date": "2026-05-09",
+                "day_of_week": "周六",
+                "local_time": "12:01",
+                "time_of_day": "中午",
+                "current_datetime_text": "2026-05-09 12:01（周六，中午）",
+            }
+
+            try:
+                await bot.handle_message("你在干嘛")
+            finally:
+                await bot.close()
+
+        prompt = model.calls[-1]["system_prompt"]
+        self.assertIn("[当前时间一致性约束]", prompt)
+        self.assertIn("当前真实时刻：2026-05-09 12:01（周六，中午）", prompt)
+        self.assertIn("不要说今天晚饭、晚饭后、夜宵、睡前或晚上活动已经发生", prompt)
+
+    async def test_memory_generation_hides_future_evening_life_events_at_noon(self):
+        model = CaptureChatModel("还没到晚上。")
+        with TemporaryDirectory(prefix="bot-future-life-event-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=model,
+                memory_config={"embedding": "none"},
+                data_dir=root,
+                refusal_enabled=False,
+            )
+            bot._initialized = True
+            bot._schedulers_started = True
+            bot.life_engine.get_status = lambda: {
+                "current_date": "2026-05-09",
+                "day_of_week": "周六",
+                "local_time": "12:01",
+                "time_of_day": "中午",
+                "current_datetime_text": "2026-05-09 12:01（周六，中午）",
+                "recent_life_events": [
+                    {
+                        "description": "2026-05-09 晚饭后去小区快走了3公里，刚开始不想动，走完反而清醒不少。",
+                        "scenario_key": "night_walk",
+                    }
+                ],
+            }
+            await bot.memory.init()
+
+            try:
+                await bot.handle_message("你刚吃完晚饭了吗")
+            finally:
+                await bot.close()
+
+        prompt = model.calls[-1]["system_prompt"]
+        self.assertIn("[当前时间一致性约束]", prompt)
+        self.assertIn("不要说今天晚饭、晚饭后、夜宵、睡前或晚上活动已经发生", prompt)
+        self.assertNotIn("晚饭后去小区快走", prompt)
+
 
 class BotInstanceGenerationContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_old_generic_action_labels_are_removed_from_llm_history_only(self):
