@@ -96,6 +96,12 @@ class MemoryPromptBuilder:
     def _build_blocks(self, retrieved: RetrievedMemory, conscious: ConsciousContext | None = None) -> list[PromptBlock]:
         blocks: list[PromptBlock] = []
         budgets = self._block_budgets(retrieved.intent)
+        anchored_fact_lines = self._format_anchored_fact_items(retrieved)
+        anchored_fact_keys = {
+            item.get("key")
+            for item in getattr(self, "_last_anchored_fact_items", [])
+            if isinstance(item, dict) and item.get("key")
+        }
         if conscious is not None:
             conscious_text = conscious.render(max_chars=self._conscious_char_limit(retrieved.intent))
             if conscious_text:
@@ -112,6 +118,21 @@ class MemoryPromptBuilder:
                         priority=10,
                     )
                 )
+
+        if anchored_fact_lines:
+            blocks.append(
+                PromptBlock(
+                    name="anchored_facts",
+                    title="【本轮必须承接的记忆】",
+                    body="\n".join(anchored_fact_lines),
+                    usage=(
+                        "使用方式：这些事实和用户当前这句话直接相关。回复必须默认你已经知道这些背景，"
+                        "不要反问已知事实；若涉及敏感身体/健康信息，只承接和关心，不展开隐私细节。"
+                    ),
+                    budget=budgets["anchored_facts"],
+                    priority=15,
+                )
+            )
 
         understanding_text = self._format_understanding(retrieved)
         if understanding_text:
@@ -159,7 +180,7 @@ class MemoryPromptBuilder:
                 )
             )
 
-        fact_lines = self._format_semantic_items(retrieved)
+        fact_lines = self._format_semantic_items(retrieved, skip_keys=anchored_fact_keys)
         if fact_lines:
             blocks.append(
                 PromptBlock(
@@ -199,6 +220,7 @@ class MemoryPromptBuilder:
                 "understanding": 0.24,
                 "relationship": 0.10,
                 "daily": 0.08,
+                "anchored_facts": 0.08,
                 "semantic": 0.12,
                 "episodic": 0.06,
             }
@@ -208,6 +230,7 @@ class MemoryPromptBuilder:
                 "understanding": 0.34,
                 "relationship": 0.16,
                 "daily": 0.12,
+                "anchored_facts": 0.08,
                 "semantic": 0.10,
                 "episodic": 0.14,
             }
@@ -217,6 +240,7 @@ class MemoryPromptBuilder:
                 "understanding": 0.28,
                 "relationship": 0.14,
                 "daily": 0.10,
+                "anchored_facts": 0.08,
                 "semantic": 0.08,
                 "episodic": 0.08,
             }
@@ -645,9 +669,26 @@ class MemoryPromptBuilder:
             lines.append("  - 未完成情绪话题：" + "；".join(str(item) for item in open_threads[:3]))
         return "\n".join(lines)
 
-    def _format_semantic_items(self, retrieved: RetrievedMemory) -> list[str]:
+    def _format_anchored_fact_items(self, retrieved: RetrievedMemory) -> list[str]:
+        items = _anchored_semantic_items(retrieved)
+        self._last_anchored_fact_items = items
+        lines: list[str] = []
+        for item in items:
+            category = item.get("category") or "general"
+            key = item.get("key")
+            value = item.get("value")
+            if not key or not value:
+                continue
+            if _is_sensitive_fact(item):
+                lines.append(f"  - [{category}] {key}: {value}（敏感背景：只顺着当前话题承接，不主动追问细节）")
+            else:
+                lines.append(f"  - [{category}] {key}: {value}")
+        return lines
+
+    def _format_semantic_items(self, retrieved: RetrievedMemory, *, skip_keys: set[str] | None = None) -> list[str]:
         known_keys = set()
         known_values = set()
+        skip_keys = skip_keys or set()
         understanding = retrieved.user_understanding
         if isinstance(understanding, dict):
             manual = understanding.get("manual") if isinstance(understanding.get("manual"), dict) else {}
@@ -702,7 +743,7 @@ class MemoryPromptBuilder:
         for item in retrieved.semantic_items:
             key = item.get("key")
             value = item.get("value")
-            if not key or not value or key in known_keys or value in known_values:
+            if not key or not value or key in skip_keys or key in known_keys or value in known_values:
                 continue
             category = item.get("category") or "general"
             lines.append(f"  - [{category}] {key}: {value}")
@@ -780,6 +821,126 @@ def _format_interaction_style(style: dict[str, object]) -> list[str]:
         if isinstance(values, list) and values:
             lines.append(f"  - {title}：" + "；".join(str(v) for v in values[:5]))
     return lines
+
+
+def _anchored_semantic_items(retrieved: RetrievedMemory) -> list[dict]:
+    """Facts that are too relevant to remain as soft background this turn."""
+    selected: list[dict] = []
+    selected.extend(_stable_continuity_items(retrieved.user_understanding))
+
+    for item in retrieved.semantic_items:
+        if not isinstance(item, dict) or not _should_anchor_semantic_item(item):
+            continue
+        selected.append(dict(item))
+
+    result: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in selected:
+        key = str(item.get("key") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not key or not value:
+            continue
+        marker = (key, value)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        result.append(item)
+        if len(result) >= 6:
+            break
+    return result
+
+
+def _stable_continuity_items(understanding: object) -> list[dict]:
+    if not isinstance(understanding, dict):
+        return []
+    layered = understanding.get("layered") if isinstance(understanding.get("layered"), dict) else {}
+    core = layered.get("core") if isinstance(layered.get("core"), dict) else {}
+    current = layered.get("current") if isinstance(layered.get("current"), dict) else {}
+    identity = _clean_dict(core.get("identity"))
+
+    items: list[dict] = []
+    current_city = identity.get("current_city") or identity.get("城市") or identity.get("所在城市")
+    living_status = identity.get("living_status") or identity.get("居住状态")
+    if current_city:
+        value = f"用户当前在{current_city}"
+        if living_status and str(living_status) not in value:
+            value = f"{value}；{living_status}"
+        items.append({
+            "key": "当前所在地",
+            "value": value,
+            "category": "life_context",
+            "retrieval_reasons": {"stable_continuity": True},
+        })
+
+    for item in _clean_list(current.get("current_context")):
+        if any(cue in item for cue in ("在北京", "人在北京", "一个人在北京", "独居")):
+            items.append({
+                "key": "当前生活状态",
+                "value": item,
+                "category": "life_context",
+                "retrieval_reasons": {"stable_continuity": True},
+            })
+            break
+    return items
+
+
+def _should_anchor_semantic_item(item: dict) -> bool:
+    reasons = item.get("retrieval_reasons") if isinstance(item.get("retrieval_reasons"), dict) else {}
+    overlap = _float(reasons.get("query_cue_overlap"))
+    salient_overlap = _float(reasons.get("salient_overlap"))
+    category = str(item.get("category") or "")
+    confidence = _float(item.get("confidence"))
+    text = f"{item.get('key', '')} {item.get('value', '')}"
+
+    if overlap or salient_overlap:
+        return category in _ANCHORABLE_FACT_CATEGORIES or _is_sensitive_fact(item)
+    if confidence >= 0.92 and any(cue in text for cue in _HIGH_IMPACT_FACT_CUES):
+        return category in {"identity", "life_context", "goals", "routines"}
+    return False
+
+
+def _is_sensitive_fact(item: dict) -> bool:
+    text = f"{item.get('key', '')} {item.get('value', '')}"
+    return any(cue in text for cue in _SENSITIVE_FACT_CUES)
+
+
+_ANCHORABLE_FACT_CATEGORIES = {
+    "identity",
+    "life_context",
+    "goals",
+    "routines",
+    "important_people",
+    "preferences",
+    "dislikes",
+    "boundaries",
+    "open_threads",
+}
+
+_HIGH_IMPACT_FACT_CUES = {
+    "北京",
+    "大理",
+    "城市",
+    "位置",
+    "出行",
+    "29号",
+    "腿脚",
+    "身体",
+    "医生",
+    "减肥",
+}
+
+_SENSITIVE_FACT_CUES = {
+    "身体",
+    "健康",
+    "腿",
+    "脚",
+    "腰",
+    "神经",
+    "失禁",
+    "乙肝",
+    "医生",
+    "病",
+}
 
 
 _SECTION_KEYS = {

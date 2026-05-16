@@ -99,6 +99,46 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertIn("当前输入命中用户理解", conscious.active_memory_details[0]["reason"])
         self.assertIn(cat_fact, conscious.active_memory_details[0]["text"])
 
+    def test_prompt_builder_anchors_current_city_and_body_facts(self):
+        from ai_companion.memory.prompt_builder import MemoryPromptBuilder
+
+        retrieved = RetrievedMemory(
+            intent="casual_chat",
+            user_understanding={
+                "layered": {
+                    "core": {
+                        "identity": {"current_city": "北京", "living_status": "一个人在北京生活"},
+                    },
+                    "current": {
+                        "current_context": ["用户目前一个人在北京生活，从事 Java 开发。"],
+                    },
+                }
+            },
+            semantic_items=[
+                {
+                    "key": "用户的身体状况",
+                    "value": "用户有“腿脚不好”的身体情况。",
+                    "category": "life_context",
+                    "confidence": 1.0,
+                    "retrieval_reasons": {"query_cue_overlap": 1, "salient_overlap": 1},
+                },
+                {
+                    "key": "location",
+                    "value": "用户人在北京",
+                    "category": "life_context",
+                    "confidence": 0.9,
+                    "retrieval_reasons": {"query_cue_overlap": 1, "salient_overlap": 1},
+                },
+            ],
+        )
+
+        suffix = MemoryPromptBuilder(max_chars=2400).build(retrieved)
+
+        self.assertIn("【本轮必须承接的记忆】", suffix)
+        self.assertIn("用户当前在北京", suffix)
+        self.assertIn("腿脚不好", suffix)
+        self.assertIn("不要反问已知事实", suffix)
+
     def test_user_understanding_manual_layer_overrides_auto_fact(self):
         async def run():
             with tempfile.TemporaryDirectory(prefix="understanding-manual-layer-") as tmp:
