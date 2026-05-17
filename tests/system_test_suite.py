@@ -255,6 +255,7 @@ class SystemTestSuite:
         self._run_case("T50c", "Conscious memory context and diagnostics are returned", self.case_conscious_memory_context_diagnostics)
         self._run_case("T50e", "Prompt budget diagnostics expose block truncation", self.case_prompt_budget_diagnostics)
         self._run_case("T50d", "Sensitive scene capsules are gated by intent", self.case_sensitive_scene_capsule_gating)
+        self._run_case("T50f", "Unified vector recall enters prompt with sensitivity gating", self.case_unified_vector_recall_prompt_gating)
         self._run_case("T51", "Persona importer plans, applies, and resumes drafts", self.case_persona_importer_plan_apply_resume)
         self._run_case("T52", "Deferred proactive continuity", self.case_deferred_reply_proactive_continuity)
 
@@ -330,9 +331,22 @@ class SystemTestSuite:
     def case_cli_help(self) -> tuple[bool, str, str]:
         cmd = [str(self.python_bin), "-m", "ai_companion", "--help"]
         rc, out, err, to = self._run_cmd(cmd, timeout=40)
-        passed = (rc == 0) and ("gateway" in out) and ("setup" in out) and ("bot" in out)
+        memory_cmd = [str(self.python_bin), "-m", "ai_companion", "memory", "rebuild-vector", "--help"]
+        memory_rc, memory_out, memory_err, memory_to = self._run_cmd(memory_cmd, timeout=40)
+        passed = (
+            (rc == 0)
+            and ("gateway" in out)
+            and ("setup" in out)
+            and ("bot" in out)
+            and ("memory" in out)
+            and (memory_rc == 0)
+            and ("--bot" in memory_out)
+            and ("rebuild-vector" in memory_out)
+        )
         detail = "commands listed" if passed else "help output missing expected commands"
-        return passed, detail, self._fmt_cmd_output(cmd, rc, out, err, to)
+        log = self._fmt_cmd_output(cmd, rc, out, err, to)
+        log += "\n" + self._fmt_cmd_output(memory_cmd, memory_rc, memory_out, memory_err, memory_to)
+        return passed, detail, log
 
     def case_cli_status(self) -> tuple[bool, str, str]:
         cmd = [str(self.python_bin), "-m", "ai_companion", "status"]
@@ -1175,6 +1189,16 @@ class SystemTestSuite:
                     )
                 return "[]"
 
+        class _MemorySpy:
+            def __init__(self):
+                self.calls = 0
+                self.event_counts: list[int] = []
+
+            async def index_life_state(self, life_state):
+                self.calls += 1
+                self.event_counts.append(len(life_state.life_events))
+                return {"enabled": True, "indexed": len(life_state.life_events)}
+
         with tempfile.TemporaryDirectory(prefix="sys-test-life-journal-") as td:
             root = Path(td)
             state = LifeState("life_journal_bot", root)
@@ -1188,12 +1212,13 @@ class SystemTestSuite:
                 time_ratio_warning_threshold=999999,
             )
             model = _DailyEventModel()
+            memory = _MemorySpy()
             engine = LifeEngine(
                 bot_id="life_journal_bot",
                 config=cfg,
                 state=state,
                 model=model,
-                memory=None,
+                memory=memory,
                 persona_dir=None,
             )
 
@@ -1207,13 +1232,15 @@ class SystemTestSuite:
             passed = (
                 event is not None
                 and len(state_data.get("life_events", [])) >= 1
+                and memory.calls >= 1
+                and memory.event_counts[-1] >= 1
                 and len(day_records) >= 2
                 and unique_day_count == len(day_records)
                 and len(event_records) >= 1
             )
             detail = (
                 f"day_records={len(day_records)} unique_day_count={unique_day_count} "
-                f"event_records={len(event_records)}"
+                f"event_records={len(event_records)} vector_index_calls={memory.calls}"
             )
             log = json.dumps(
                 {
@@ -1221,6 +1248,8 @@ class SystemTestSuite:
                     "current_date": state_data.get("current_date"),
                     "life_events_count": len(state_data.get("life_events", [])),
                     "journal_count": len(journal),
+                    "vector_index_calls": memory.calls,
+                    "vector_index_event_counts": memory.event_counts,
                     "day_records": day_records[-5:],
                     "event_records": event_records[-5:],
                 },
@@ -2860,7 +2889,10 @@ class SystemTestSuite:
                     reply
                     and debug_context
                     and diagnostics.get("prompt_block_count", 0) >= 1
+                    and "vector_recall_count" in diagnostics
+                    and "vector_recall_sources" in diagnostics
                     and "retrieved_memory" in debug_context
+                    and "vector_recall" in debug_context.get("retrieved_memory", {})
                     and "response_style_trace" in debug_context
                     and debug_context.get("system_prompt")
                     and debug_context.get("memory_intent") == "emotional_support"
@@ -3411,6 +3443,119 @@ class SystemTestSuite:
                 "emotional": emotional_conscious,
                 "casual_suffix": casual.get("system_suffix"),
                 "emotional_suffix": emotional.get("system_suffix"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    async def case_unified_vector_recall_prompt_gating(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.retriever import MemoryRetriever
+        from ai_companion.memory.prompt_builder import MemoryPromptBuilder
+
+        class WorkingStub:
+            def load_context(self, session_id, max_working_turns=20, max_summaries=None):
+                return []
+
+        class DailyStub:
+            def get_recent_context(self, **kwargs):
+                return {}
+
+        class SemanticStub:
+            async def search_facts(self, *args, **kwargs):
+                return []
+
+        class RelationshipStub:
+            async def get_state(self, **kwargs):
+                return {}
+
+        class UnderstandingStub:
+            def load(self):
+                return {}
+
+        class EpisodicStub:
+            def recall(self, *args, **kwargs):
+                return []
+
+        class VectorStub:
+            def search(self, query, **kwargs):
+                self.last_source_types = kwargs.get("source_types", [])
+                return [
+                    {
+                        "source_type": "user_understanding",
+                        "source_id": "auto.comfort_strategies.0",
+                        "text": "auto.comfort_strategies.0: 用户压力大时希望先被陪一会儿。",
+                        "sensitivity": "normal",
+                        "retrieval_score": 0.91,
+                    },
+                    {
+                        "source_type": "life_event",
+                        "source_id": "life-1",
+                        "text": "Bot 昨天在雨夜散步时想到用户之前说喜欢安静。",
+                        "sensitivity": "normal",
+                        "retrieval_score": 0.82,
+                    },
+                    {
+                        "source_type": "daily_summary",
+                        "source_id": "2026-05-17",
+                        "text": "今天用户在聊向量数据库改造，并希望直接把剩下的做完。",
+                        "sensitivity": "normal",
+                        "retrieval_score": 0.79,
+                    },
+                    {
+                        "source_type": "relationship_narrative",
+                        "source_id": "current",
+                        "text": "你们目前是稳定协作关系，用户偏好直接推进和少绕路。",
+                        "sensitivity": "normal",
+                        "retrieval_score": 0.77,
+                    },
+                    {
+                        "source_type": "semantic_fact",
+                        "source_id": "private_boundary",
+                        "text": "[boundaries] private_boundary: 用户有一段敏感隐私经历。",
+                        "sensitivity": "sensitive",
+                        "retrieval_score": 0.88,
+                    },
+                ]
+
+        vector = VectorStub()
+        retriever = MemoryRetriever(
+            working_store=WorkingStub(),
+            daily_store=DailyStub(),
+            vector_store=vector,
+            episodic_store=EpisodicStub(),
+            semantic_store=SemanticStub(),
+            relationship_store=RelationshipStub(),
+            user_understanding=UnderstandingStub(),
+        )
+        builder = MemoryPromptBuilder(max_chars=3200)
+
+        casual = await retriever.retrieve("今天随便聊聊散步", bot_id="bot", user_id="default_user", session_id="s")
+        emotional = await retriever.retrieve("我因为那段隐私经历又有点难过", bot_id="bot", user_id="default_user", session_id="s")
+        casual_suffix = builder.build(casual)
+        emotional_suffix = builder.build(emotional)
+
+        passed = (
+            len(casual.vector_recall) == 5
+            and "daily_summary" in vector.last_source_types
+            and "relationship_narrative" in vector.last_source_types
+            and "联想到的相关背景" in casual_suffix
+            and "压力大时希望先被陪一会儿" in casual_suffix
+            and "向量数据库改造" in casual_suffix
+            and "稳定协作关系" in casual_suffix
+            and "Bot 昨天在雨夜散步" in casual_suffix
+            and "敏感隐私经历" not in casual_suffix
+            and emotional.intent == "emotional_support"
+            and "敏感隐私经历" in emotional_suffix
+        )
+        return passed, (
+            f"casual_vector={len(casual.vector_recall)} emotional_intent={emotional.intent}"
+        ), json.dumps(
+            {
+                "casual_suffix": casual_suffix,
+                "emotional_suffix": emotional_suffix,
+                "casual_vector": casual.vector_recall,
+                "emotional_vector": emotional.vector_recall,
+                "source_types": vector.last_source_types,
             },
             ensure_ascii=False,
             indent=2,

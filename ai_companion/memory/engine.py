@@ -32,6 +32,7 @@ from .stores.episodic import EpisodicStore
 from .stores.relationship import RelationshipStore
 from .stores.semantic import SemanticStore
 from .stores.user_understanding import UserUnderstandingStore
+from .stores.vector import VectorMemoryDocument, VectorMemoryStore
 from .stores.working import WorkingMemoryStore
 from .stores.daily import DailyMemoryStore, MemoryTurnContext
 from .extractor import MemoryExtractor
@@ -128,6 +129,11 @@ class MemoryEngine:
             embedding_mode=embedding_mode,
             encoder_model=embedding_model,
         )
+        self.vector = VectorMemoryStore(
+            self.memory_dir / "vector",
+            embedding_mode=embedding_mode,
+            encoder_model=embedding_model,
+        )
         self.user_understanding = UserUnderstandingStore(
             self.memory_dir / "user_understanding.json",
             max_value_chars=self.semantic_char_limit,
@@ -137,6 +143,7 @@ class MemoryEngine:
             max_chars=self.semantic_char_limit,
             persona_backstory_path=persona_backstory_path,
             user_understanding=self.user_understanding,
+            vector_store=self.vector,
         )
         self.relationship = RelationshipStore(
             self.memory_dir / "relationship.db",
@@ -152,6 +159,7 @@ class MemoryEngine:
         self.retriever = MemoryRetriever(
             working_store=self.working,
             daily_store=self.daily,
+            vector_store=self.vector,
             episodic_store=self.episodic,
             semantic_store=self.semantic,
             relationship_store=self.relationship,
@@ -203,11 +211,13 @@ class MemoryEngine:
         await self.working.init()
         await self.daily.init()
         await self.episodic.init()
+        await self.vector.init()
         await self.user_understanding.init()
         self._seed_user_understanding_from_builtin()
         await self.semantic.init()
         await self.relationship.init()
         await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id, summarizer=self._summarizer)
+        await self.rebuild_vector_index()
 
     async def load_context(self, current_input: str) -> dict:
         """
@@ -242,6 +252,7 @@ class MemoryEngine:
         return {
             "working_history": retrieved.working_history,
             "episodic_recall": retrieved.episodic_recall,
+            "vector_recall": retrieved.vector_recall,
             "semantic_facts": retrieved.semantic_facts,
             "relationship_state": retrieved.relationship_state,
             "daily_context": retrieved.daily_context,
@@ -330,6 +341,7 @@ class MemoryEngine:
         self._maintenance_counter += 1
         if self._maintenance_counter % 5 == 0:
             await self.maintenance.run_light(bot_id=self.bot_id, user_id=user_id, summarizer=self._summarizer)
+            await self.rebuild_vector_index()
 
     async def record_assistant_message(
         self,
@@ -396,6 +408,7 @@ class MemoryEngine:
         summaries_count = len(self.working.get_summaries(sid))
         episodic_count = self._count_episodes()
         fact_count = await self.semantic.get_fact_count()
+        vector_count = self.vector.count(bot_id=self.bot_id, user_id=self.user_id)
         relationship = await self.relationship.get_state(bot_id=self.bot_id, user_id=self.user_id)
         daily_messages = self.daily.count_messages(bot_id=self.bot_id, user_id=self.user_id)
         daily_days = self.daily.count_recent_days(bot_id=self.bot_id, user_id=self.user_id)
@@ -407,6 +420,7 @@ class MemoryEngine:
             "summaries_count": summaries_count,
             "episodic_count": episodic_count,
             "fact_count": fact_count,
+            "vector_count": vector_count,
             "relationship": relationship,
             "daily_messages": daily_messages,
             "daily_days": daily_days,
@@ -420,12 +434,73 @@ class MemoryEngine:
         await self.semantic.delete_fact(key, bot_id=self.bot_id, user_id=self.user_id)
         await self.user_understanding.delete_auto_fact(key)
 
+    async def rebuild_vector_index(self) -> dict:
+        """Rebuild unified vector recall from authoritative memory stores."""
+        if not self.vector.enabled():
+            return {"enabled": False, "indexed": 0}
+        docs: list[VectorMemoryDocument] = []
+        facts = await self.semantic.list_facts(
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            include_archived=False,
+            limit=None,
+        )
+        for fact in facts:
+            key = str(fact.get("key") or "").strip()
+            value = str(fact.get("value") or "").strip()
+            if not key or not value:
+                continue
+            category = str(fact.get("category") or "general")
+            docs.append(
+                VectorMemoryDocument(
+                    source_type="semantic_fact",
+                    source_id=key,
+                    text=f"[{category}] {key}: {value}",
+                    bot_id=self.bot_id,
+                    user_id=self.user_id,
+                    category=category,
+                    importance=max(0.3, min(1.0, float(fact.get("confidence") or 0.7))),
+                    sensitivity="sensitive" if category in {"boundaries", "sensitive", "health"} else "normal",
+                    created_at=fact.get("created_at"),
+                    updated_at=fact.get("updated_at"),
+                    metadata={
+                        "confidence": float(fact.get("confidence") or 0.7),
+                        "source": fact.get("source") or "",
+                        "manual_override": bool(fact.get("manual_override")),
+                    },
+                )
+            )
+        docs.extend(self._user_understanding_vector_docs())
+        docs.extend(self._daily_summary_vector_docs())
+        docs.extend(await self._relationship_vector_docs())
+        indexed = await self.vector.upsert_many(docs)
+        logger.info("[Memory] unified vector index rebuilt: %s/%s docs", indexed, len(docs))
+        return {"enabled": True, "indexed": indexed, "candidate_docs": len(docs)}
+
+    async def index_life_state(self, life_state) -> dict:
+        """Index bot life events without making LifeState depend on memory."""
+        if not self.vector.enabled() or life_state is None:
+            return {"enabled": False, "indexed": 0}
+        docs: list[VectorMemoryDocument] = []
+        for event in getattr(life_state, "life_events", []) or []:
+            doc = self._life_event_vector_doc(event, source_type="life_event")
+            if doc:
+                docs.append(doc)
+        for event in getattr(life_state, "major_life_events", []) or []:
+            doc = self._life_event_vector_doc(event, source_type="major_life_event")
+            if doc:
+                docs.append(doc)
+        indexed = await self.vector.upsert_many(docs)
+        logger.info("[Memory] indexed life state into vector memory: %s/%s docs", indexed, len(docs))
+        return {"enabled": True, "indexed": indexed, "candidate_docs": len(docs)}
+
     async def close(self):
         if self._compress_task and not self._compress_task.done():
             await self._compress_task
         await self.working.close()
         await self.daily.close()
         await self.episodic.close()
+        self.vector.close()
         await self.semantic.close()
         await self.relationship.close()
 
@@ -438,6 +513,136 @@ class MemoryEngine:
             return
         if self.user_understanding.seed_manual_from(seed_path):
             logger.info("[Memory]  已从内置模板补充 user_understanding.manual: %s", seed_path)
+
+    def _user_understanding_vector_docs(self) -> list[VectorMemoryDocument]:
+        data = self.user_understanding.load()
+        docs: list[VectorMemoryDocument] = []
+        layered = data.get("layered") if isinstance(data.get("layered"), dict) else {}
+        updated_at = str(data.get("updated_at") or layered.get("generated_at") or "")
+        for section_path, value in _flatten_understanding(data):
+            text = _understanding_text(section_path, value)
+            if not text:
+                continue
+            docs.append(
+                VectorMemoryDocument(
+                    source_type="user_understanding",
+                    source_id=section_path,
+                    text=text,
+                    bot_id=self.bot_id,
+                    user_id=self.user_id,
+                    category=_understanding_category(section_path),
+                    importance=_understanding_importance(section_path),
+                    sensitivity=_understanding_sensitivity(section_path),
+                    updated_at=updated_at,
+                    metadata={"section_path": section_path},
+                )
+            )
+        return docs
+
+    def _daily_summary_vector_docs(self) -> list[VectorMemoryDocument]:
+        docs: list[VectorMemoryDocument] = []
+        for item in self.daily.list_summaries(bot_id=self.bot_id, user_id=self.user_id, limit=60):
+            summary = str(item.get("summary") or "").strip()
+            local_date = str(item.get("local_date") or "").strip()
+            if not summary or not local_date:
+                continue
+            topics = _jsonish_list(item.get("topics") or item.get("topics_json"))
+            open_threads = _jsonish_list(item.get("open_threads") or item.get("open_threads_json"))
+            mood = _jsonish_list(item.get("mood") or item.get("mood_json"))
+            parts = [
+                f"{local_date}: {summary}",
+                f"topics: {', '.join(topics)}" if topics else "",
+                f"open_threads: {', '.join(open_threads)}" if open_threads else "",
+                f"mood: {', '.join(mood)}" if mood else "",
+            ]
+            docs.append(
+                VectorMemoryDocument(
+                    source_type="daily_summary",
+                    source_id=local_date,
+                    text=" | ".join(part for part in parts if part),
+                    bot_id=self.bot_id,
+                    user_id=self.user_id,
+                    category="daily_continuity",
+                    importance=0.55,
+                    sensitivity=_text_sensitivity(summary, topics + open_threads + mood),
+                    created_at=local_date,
+                    updated_at=str(item.get("updated_at") or local_date),
+                    metadata={
+                        "local_date": local_date,
+                        "message_count": int(item.get("message_count") or 0),
+                    },
+                )
+            )
+        return docs
+
+    async def _relationship_vector_docs(self) -> list[VectorMemoryDocument]:
+        state = await self.relationship.get_state(bot_id=self.bot_id, user_id=self.user_id)
+        narrative = str(state.get("relationship_narrative") or "").strip()
+        posture = str(state.get("current_posture") or "").strip()
+        guidance = str(state.get("interaction_guidance") or "").strip()
+        key_moments = _jsonish_list(state.get("key_moments"))
+        open_threads = _jsonish_list(state.get("open_emotional_threads"))
+        parts = [
+            narrative,
+            f"current_posture: {posture}" if posture else "",
+            f"interaction_guidance: {guidance}" if guidance else "",
+            f"key_moments: {', '.join(key_moments[:5])}" if key_moments else "",
+            f"open_emotional_threads: {', '.join(open_threads[:5])}" if open_threads else "",
+        ]
+        text = " | ".join(part for part in parts if part)
+        if not text:
+            return []
+        return [
+            VectorMemoryDocument(
+                source_type="relationship_narrative",
+                source_id="current",
+                text=text,
+                bot_id=self.bot_id,
+                user_id=self.user_id,
+                category="relationship",
+                importance=0.85,
+                sensitivity=_text_sensitivity(text, key_moments + open_threads),
+                updated_at=str(state.get("updated_at") or ""),
+                metadata={
+                    "relationship_label": str(state.get("relationship_label") or ""),
+                    "relationship_score": float(state.get("relationship_score") or 0),
+                    "stage_confidence": float(state.get("stage_confidence") or 0),
+                },
+            )
+        ]
+
+    def _life_event_vector_doc(self, event, *, source_type: str) -> VectorMemoryDocument | None:
+        data = event.to_dict() if hasattr(event, "to_dict") else dict(event or {})
+        description = str(data.get("description") or "").strip()
+        if not description:
+            return None
+        mood_tags = data.get("mood_tags") if isinstance(data.get("mood_tags"), list) else []
+        parts = [
+            description,
+            f"mood: {data.get('mood_before') or ''}->{data.get('mood_after') or ''}".strip(),
+            f"tags: {', '.join(str(item) for item in mood_tags)}" if mood_tags else "",
+            f"topic: {data.get('topic_prompt')}" if data.get("topic_prompt") else "",
+        ]
+        text = " | ".join(part for part in parts if part)
+        importance = float(data.get("importance") or 0)
+        return VectorMemoryDocument(
+            source_type=source_type,
+            source_id=str(data.get("id") or data.get("timestamp") or description[:40]),
+            text=text,
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            category=str(data.get("scenario_category") or "life_event"),
+            importance=max(0.35, min(1.0, importance / 10 if importance > 1 else importance or 0.5)),
+            sensitivity="sensitive" if data.get("related_to_user") else "normal",
+            created_at=str(data.get("timestamp") or ""),
+            updated_at=str(data.get("timestamp") or ""),
+            metadata={
+                "shareable": bool(data.get("shareable")),
+                "related_to_user": bool(data.get("related_to_user")),
+                "scenario_key": str(data.get("scenario_key") or ""),
+                "source": str(data.get("source") or ""),
+            },
+        )
 
     def _build_prompt_diagnostics(self, *, retrieved, system_suffix: str, conscious, prompt_budget_diagnostics: dict | None = None) -> dict:
         daily = retrieved.daily_context or {}
@@ -508,6 +713,9 @@ class MemoryEngine:
             "semantic_item_count": len(retrieved.semantic_items),
             "semantic_item_chars": semantic_chars,
             "semantic_item_tokens_est": TokenEstimator.estimate(semantic_text),
+            "vector_recall_count": len(getattr(retrieved, "vector_recall", []) or []),
+            "vector_recall_sources": _vector_recall_source_counts(getattr(retrieved, "vector_recall", []) or []),
+            "vector_recall_top": _vector_recall_top_items(getattr(retrieved, "vector_recall", []) or []),
         }
         if prompt_budget_diagnostics:
             diagnostics["prompt_budget"] = prompt_budget_diagnostics
@@ -613,3 +821,130 @@ class MemoryEngine:
             return count
         except Exception:
             return 0
+
+
+def _flatten_understanding(data: dict) -> list[tuple[str, object]]:
+    result: list[tuple[str, object]] = []
+    if not isinstance(data, dict):
+        return result
+    allowed_roots = {"manual", "auto", "relationship_memory", "layered"}
+
+    def walk(prefix: str, value: object):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{prefix}.{key}" if prefix else str(key)
+                walk(child_path, child)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                if isinstance(child, (dict, list)):
+                    walk(f"{prefix}.{index}", child)
+                elif str(child).strip():
+                    result.append((f"{prefix}.{index}", child))
+        elif str(value or "").strip():
+            result.append((prefix, value))
+
+    for root in allowed_roots:
+        if root in data:
+            walk(root, data.get(root))
+    return result[:160]
+
+
+def _understanding_text(section_path: str, value: object) -> str:
+    clean = str(value or "").strip()
+    if not clean or clean.lower() in {"none", "null"}:
+        return ""
+    if len(clean) > 800:
+        clean = clean[:797] + "..."
+    return f"{section_path}: {clean}"
+
+
+def _understanding_category(section_path: str) -> str:
+    path = section_path.lower()
+    for key, category in [
+        ("identity", "identity"),
+        ("preference", "preferences"),
+        ("dislikes", "dislikes"),
+        ("communication", "communication_style"),
+        ("boundaries", "boundaries"),
+        ("current", "current_context"),
+        ("open_threads", "open_threads"),
+        ("life_context", "life_context"),
+        ("goals", "goals"),
+        ("routines", "routines"),
+        ("relationship", "relationship"),
+        ("stressors", "stressors"),
+    ]:
+        if key in path:
+            return category
+    return "user_understanding"
+
+
+def _understanding_importance(section_path: str) -> float:
+    if section_path.startswith("manual."):
+        return 0.9
+    if ".core." in section_path or section_path.startswith("layered.core"):
+        return 0.85
+    if "relationship_memory" in section_path:
+        return 0.75
+    return 0.6
+
+
+def _understanding_sensitivity(section_path: str) -> str:
+    path = section_path.lower()
+    if any(cue in path for cue in ("sensitive", "boundaries", "stressors", "trauma", "health")):
+        return "sensitive"
+    return "normal"
+
+
+def _jsonish_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except Exception:
+            pass
+        return [text]
+    return []
+
+
+def _text_sensitivity(text: str, extra_items: list[str] | None = None) -> str:
+    combined = " ".join([text or "", *(extra_items or [])]).lower()
+    sensitive_cues = (
+        "sensitive", "boundary", "boundaries", "stress", "trauma", "health", "medical",
+        "隐私", "边界", "压力", "创伤", "健康", "疾病", "医疗", "分手", "吵架",
+    )
+    return "sensitive" if any(cue in combined for cue in sensitive_cues) else "normal"
+
+
+def _vector_recall_source_counts(items: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        source_type = str(item.get("source_type") or "unknown")
+        counts[source_type] = counts.get(source_type, 0) + 1
+    return counts
+
+
+def _vector_recall_top_items(items: list[dict]) -> list[dict]:
+    top: list[dict] = []
+    for item in items[:6]:
+        if not isinstance(item, dict):
+            continue
+        top.append(
+            {
+                "source_type": item.get("source_type"),
+                "source_id": item.get("source_id"),
+                "category": item.get("category"),
+                "sensitivity": item.get("sensitivity"),
+                "retrieval_score": item.get("retrieval_score"),
+                "text": str(item.get("text") or "")[:160],
+            }
+        )
+    return top

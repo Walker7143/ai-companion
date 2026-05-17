@@ -21,6 +21,15 @@ export interface MemoryStats {
   user_understanding_path?: string | null;
   user_understanding_auto_facts?: number;
   embedding_enabled: boolean;
+  vector_count?: number | null;
+  vector_path?: string | null;
+  vector_size_kb?: number;
+}
+
+export interface VectorRebuildResult {
+  enabled: boolean;
+  indexed: number;
+  candidate_docs?: number;
 }
 
 export interface BotMetrics {

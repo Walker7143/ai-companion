@@ -11,6 +11,7 @@ class RetrievedMemory:
     intent: str
     working_history: list[dict] = field(default_factory=list)
     daily_context: dict[str, Any] = field(default_factory=dict)
+    vector_recall: list[dict[str, Any]] = field(default_factory=list)
     episodic_recall: list[dict] = field(default_factory=list)
     semantic_facts: dict[str, str] = field(default_factory=dict)
     semantic_items: list[dict] = field(default_factory=list)
@@ -53,6 +54,7 @@ class MemoryRetriever:
         *,
         working_store,
         daily_store=None,
+        vector_store=None,
         episodic_store,
         semantic_store,
         relationship_store,
@@ -62,6 +64,7 @@ class MemoryRetriever:
     ):
         self.working = working_store
         self.daily = daily_store
+        self.vector = vector_store
         self.episodic = episodic_store
         self.semantic = semantic_store
         self.relationship = relationship_store
@@ -106,6 +109,24 @@ class MemoryRetriever:
         )
         semantic_facts = {item["key"]: item["value"] for item in semantic_items}
 
+        vector_recall = []
+        if self.vector is not None:
+            vector_recall = self.vector.search(
+                current_input,
+                bot_id=bot_id,
+                user_id=user_id,
+                source_types=[
+                    "semantic_fact",
+                    "user_understanding",
+                    "life_event",
+                    "major_life_event",
+                    "daily_summary",
+                    "relationship_narrative",
+                ],
+                limit=self._vector_limit_for_intent(detected_intent),
+                include_archived=False,
+            )
+
         top_k = 5 if detected_intent in {"recall_past", "relationship_repair"} else 2
         episodic = []
         if detected_intent in {"recall_past", "emotional_support", "relationship_repair", "casual_chat"}:
@@ -122,6 +143,7 @@ class MemoryRetriever:
             intent=detected_intent,
             working_history=working,
             daily_context=daily_context,
+            vector_recall=vector_recall,
             episodic_recall=episodic,
             semantic_facts=semantic_facts,
             semantic_items=semantic_items,
@@ -161,3 +183,12 @@ class MemoryRetriever:
             if intent in matched:
                 return intent
         return "casual_chat"
+
+    def _vector_limit_for_intent(self, intent: str) -> int:
+        if intent in {"recall_past", "relationship_repair", "emotional_support"}:
+            return 8
+        if intent in {"planning", "proactive_generation"}:
+            return 6
+        if intent == "task_request":
+            return 3
+        return 5

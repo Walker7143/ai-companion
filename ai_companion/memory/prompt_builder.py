@@ -180,6 +180,22 @@ class MemoryPromptBuilder:
                 )
             )
 
+        vector_text = self._format_vector_recall(retrieved)
+        if vector_text:
+            blocks.append(
+                PromptBlock(
+                    name="vector_recall",
+                    title="【联想到的相关背景】",
+                    body=vector_text,
+                    usage=(
+                        "使用方式：这些是和当前话题语义相关的背景线索，只让它们影响理解和回应方向。"
+                        "除非用户明确追问或自然需要，不要逐条复述，也不要表现得像在检索资料。"
+                    ),
+                    budget=budgets["vector_recall"],
+                    priority=45,
+                )
+            )
+
         fact_lines = self._format_semantic_items(retrieved, skip_keys=anchored_fact_keys)
         if fact_lines:
             blocks.append(
@@ -220,6 +236,7 @@ class MemoryPromptBuilder:
                 "understanding": 0.24,
                 "relationship": 0.10,
                 "daily": 0.08,
+                "vector_recall": 0.08,
                 "anchored_facts": 0.08,
                 "semantic": 0.12,
                 "episodic": 0.06,
@@ -230,6 +247,7 @@ class MemoryPromptBuilder:
                 "understanding": 0.34,
                 "relationship": 0.16,
                 "daily": 0.12,
+                "vector_recall": 0.12,
                 "anchored_facts": 0.08,
                 "semantic": 0.10,
                 "episodic": 0.14,
@@ -240,6 +258,7 @@ class MemoryPromptBuilder:
                 "understanding": 0.28,
                 "relationship": 0.14,
                 "daily": 0.10,
+                "vector_recall": 0.10,
                 "anchored_facts": 0.08,
                 "semantic": 0.08,
                 "episodic": 0.08,
@@ -687,6 +706,35 @@ class MemoryPromptBuilder:
             lines.append("  - 未完成情绪话题：" + "；".join(str(item) for item in open_threads[:3]))
         return "\n".join(lines)
 
+    def _format_vector_recall(self, retrieved: RetrievedMemory) -> str:
+        items = getattr(retrieved, "vector_recall", []) or []
+        if not items:
+            return ""
+        lines: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            sensitivity = str(item.get("sensitivity") or "").lower()
+            if sensitivity == "sensitive" and retrieved.intent not in {"recall_past", "relationship_repair", "emotional_support"}:
+                continue
+            source_type = str(item.get("source_type") or "")
+            source_id = str(item.get("source_id") or "")
+            marker = (source_type, source_id)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            label = _vector_source_label(source_type)
+            score = _float(item.get("retrieval_score"))
+            score_part = f"，相关度{score:.2f}" if score > 0 else ""
+            lines.append(f"  - [{label}{score_part}] {text[:180]}")
+            if len(lines) >= 6:
+                break
+        return "\n".join(lines)
+
     def _format_anchored_fact_items(self, retrieved: RetrievedMemory) -> list[str]:
         items = _anchored_semantic_items(retrieved)
         self._last_anchored_fact_items = items
@@ -790,6 +838,18 @@ def _float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _vector_source_label(source_type: str) -> str:
+    return {
+        "semantic_fact": "事实",
+        "user_understanding": "理解",
+        "life_event": "Bot生活",
+        "major_life_event": "Bot重要经历",
+        "daily_summary": "近日连续性",
+        "relationship_narrative": "关系脉络",
+        "life_journal": "Bot轨迹",
+    }.get(source_type, source_type or "背景")
 
 
 def _clean_dict(value: object) -> dict[str, str]:

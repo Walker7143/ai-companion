@@ -152,6 +152,8 @@ class CLIAdapter:
                     await self._safe_print(f"  已压缩次数: {status['compression_count']}")
                     await self._safe_print(f"  情景记忆条数: {status['episodic_count']}")
                     await self._safe_print(f"  语义记忆事实数: {status['fact_count']}")
+                    if status.get("vector_count") is not None:
+                        await self._safe_print(f"  向量记忆索引数: {status['vector_count']}")
                     relationship = status.get("relationship") or {}
                     if relationship:
                         label = relationship.get("relationship_label", "朋友")

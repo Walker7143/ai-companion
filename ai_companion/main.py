@@ -154,6 +154,40 @@ async def main(bot_filter: str = None):
         await model.close()
 
 
+async def rebuild_vector_index(bot_filter: str | None = None):
+    """Rebuild unified vector memory for one bot or all enabled bots."""
+    config = Config()
+    memory_config = build_memory_config_for_provider(config, config.default_provider)
+    data_dir = get_data_dir()
+    bot_configs = config.get_enabled_bots()
+    if bot_filter:
+        bot_configs = [b for b in bot_configs if b.get("id") == bot_filter]
+
+    if not bot_configs:
+        print("[ERROR] 没有可用的 Bot")
+        sys.exit(1)
+
+    results = []
+    for bot_config in bot_configs:
+        merged_skills = merge_skill_config(config.models.get("skills", {}), bot_config.get("skills", {}))
+        instance_config = {**bot_config, "data_dir": str(data_dir), "skills": merged_skills}
+        bot = BotInstance(instance_config, model=None, memory_config=memory_config)
+        try:
+            await bot.init(start_schedulers=False)
+            if bot.memory:
+                result = await bot.memory.rebuild_vector_index()
+                results.append((bot.id, bot.name, result))
+                print(f"[OK] {bot.name} ({bot.id}) vector_index={result.get('indexed', 0)}/{result.get('candidate_docs', 0)} enabled={result.get('enabled')}")
+            else:
+                results.append((bot.id, bot.name, {"enabled": False, "indexed": 0}))
+                print(f"[WARN] {bot.name} ({bot.id}) 未启用 memory")
+        finally:
+            await bot.close()
+
+    total_indexed = sum(int(item[2].get("indexed", 0) or 0) for item in results if isinstance(item[2], dict))
+    print(f"[OK] 完成向量索引重建: bots={len(results)} indexed={total_indexed}")
+
+
 def show_status():
     """显示状态"""
     config = Config()

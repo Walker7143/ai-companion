@@ -488,6 +488,7 @@ class BotInstance:
             if self.model:
                 self.memory.set_summarizer(self.model)
             self.proactive_engine.set_memory(self.memory)
+            await self.memory.index_life_state(self.life_state)
             self.memory.start_session()
         self._initialized = True
         if start_schedulers:
@@ -685,6 +686,7 @@ class BotInstance:
         ctx = memory_context if isinstance(memory_context, dict) else {}
         working_history = copy.deepcopy(ctx.get("working_history", [])) if isinstance(ctx.get("working_history"), list) else []
         episodic_recall = copy.deepcopy(ctx.get("episodic_recall", [])) if isinstance(ctx.get("episodic_recall"), list) else []
+        vector_recall = copy.deepcopy(ctx.get("vector_recall", [])) if isinstance(ctx.get("vector_recall"), list) else []
         semantic_facts = copy.deepcopy(ctx.get("semantic_facts", {})) if isinstance(ctx.get("semantic_facts"), dict) else {}
         retrieved_relationship = copy.deepcopy(ctx.get("relationship_state", {})) if isinstance(ctx.get("relationship_state"), dict) else {}
         daily_context = copy.deepcopy(ctx.get("daily_context", {})) if isinstance(ctx.get("daily_context"), dict) else {}
@@ -695,6 +697,7 @@ class BotInstance:
         retrieved_memory = {
             "working_history": working_history,
             "episodic_recall": episodic_recall,
+            "vector_recall": vector_recall,
             "semantic_facts": semantic_facts,
             "relationship_state": retrieved_relationship,
             "daily_context": daily_context,

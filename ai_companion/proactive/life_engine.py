@@ -414,6 +414,14 @@ class LifeEngine:
     def set_memory(self, memory: "MemoryEngine"):
         self.memory = memory
 
+    async def _index_life_state_memory(self):
+        if not self.memory or not hasattr(self.memory, "index_life_state"):
+            return
+        try:
+            await self.memory.index_life_state(self.state)
+        except Exception as exc:
+            logger.info("[LifeEngine] life vector indexing skipped: %s", exc)
+
     def set_persona_loader(self, loader):
         self._persona_loader = loader
 
@@ -631,6 +639,7 @@ class LifeEngine:
             self.state.bot_current_activity = self._activity_summary_for_event(event)
             self.state.add_event(event)
             self.state.prune_events(self.config.max_events, self.config.max_context_bits)
+            await self._index_life_state_memory()
             logger.info(f"[LifeEngine] 生成日常事件: {event.description}")
         else:
             logger.info("[LifeEngine] 今日无新增事件")
@@ -753,6 +762,7 @@ class LifeEngine:
             self.state.add_major_event(event)
             self._mark_unexpected_event_if_needed(event)
             await self._apply_major_event(event)
+            await self._index_life_state_memory()
             logger.info(f"[LifeEngine] 生成人生大事: {event.description}")
 
         self.state.last_major_tick = datetime.now()
@@ -1118,6 +1128,7 @@ class LifeEngine:
 
         self.state.add_major_event(event)
         await self._apply_major_event(event)
+        await self._index_life_state_memory()
         logger.info(f"[LifeEngine] 里程碑事件: {event_description} at age {milestone_age}")
 
         return event
@@ -1160,6 +1171,7 @@ class LifeEngine:
         triggered.append(birthday_key)
         self.state._state["_triggered_birthdays"] = triggered
         self.state.save()
+        await self._index_life_state_memory()
         logger.info(f"[LifeEngine] 生日事件: {age}岁生日")
 
         return event

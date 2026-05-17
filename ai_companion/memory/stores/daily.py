@@ -453,6 +453,26 @@ class DailyMemoryStore:
         conn.close()
         return int(row[0] or 0)
 
+    def list_summaries(self, *, bot_id: str, user_id: str, limit: int | None = None) -> list[dict[str, Any]]:
+        if not self.enabled:
+            return []
+        query = """
+            SELECT local_date, summary, topics_json, open_threads_json, mood_json,
+                   commitments_json, updated_at, message_count
+            FROM daily_summaries
+            WHERE bot_id = ? AND user_id = ?
+            ORDER BY local_date DESC
+        """
+        params: list[Any] = [bot_id, user_id]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(max(1, int(limit)))
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        return [_row_to_summary(row) for row in rows]
+
     async def close(self):
         pass
 

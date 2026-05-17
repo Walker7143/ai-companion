@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from .user_understanding import UserUnderstandingStore
+from .vector import VectorMemoryDocument, VectorMemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -122,12 +123,14 @@ class SemanticStore:
 
     def __init__(self, db_path: str, max_chars: int = 4400,
                  persona_backstory_path: str = None,
-                 user_understanding: Optional[UserUnderstandingStore] = None):
+                 user_understanding: Optional[UserUnderstandingStore] = None,
+                 vector_store: Optional[VectorMemoryStore] = None):
         self.db_path = db_path
         self.max_chars = max_chars  # 单条事实的最大字符数（可配置）
         self._summarizer: Optional[object] = None
         self._persona_backstory_path = persona_backstory_path
         self._user_understanding = user_understanding
+        self._vector_store = vector_store
 
     def set_summarizer(self, summarizer):
         """注入 LLM 适配器（用于事实抽取）"""
@@ -331,6 +334,26 @@ class SemanticStore:
             await db.commit()
         if self._user_understanding:
             await self._user_understanding.upsert_auto_item(key=key, value=value, category=category)
+        if self._vector_store:
+            await self._vector_store.upsert(
+                VectorMemoryDocument(
+                    source_type="semantic_fact",
+                    source_id=key,
+                    text=f"[{category}] {key}: {value}",
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    category=category,
+                    importance=max(0.3, min(1.0, float(confidence or 0.7))),
+                    sensitivity=_fact_sensitivity(category, key, value),
+                    created_at=now,
+                    updated_at=now,
+                    metadata={
+                        "confidence": float(confidence),
+                        "source": source,
+                        "manual_override": bool(manual_override),
+                    },
+                )
+            )
 
     async def get_fact(
         self,
@@ -577,6 +600,13 @@ class SemanticStore:
             await db.commit()
         if self._user_understanding:
             await self._user_understanding.delete_auto_fact(key)
+        if self._vector_store:
+            await self._vector_store.delete(
+                source_type="semantic_fact",
+                source_id=key,
+                bot_id=bot_id,
+                user_id=user_id,
+            )
 
     async def archive_expired(self, *, now: str, bot_id: str = "", user_id: str = "default_user"):
         async with aiosqlite.connect(self.db_path) as db:
@@ -916,6 +946,19 @@ def _float(value: object, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _fact_sensitivity(category: str, key: str, value: str) -> str:
+    text = f"{category} {key} {value}".lower()
+    sensitive_cues = {
+        "health", "medical", "body", "trauma", "boundary", "boundaries",
+        "鍋ュ悍", "韬綋", "鐤剧梾", "鍖荤枟", "杈圭晫", "闅愮", "鍒嗘墜", "鍚垫灦",
+    }
+    if str(category or "") in {"boundaries", "sensitive", "health"}:
+        return "sensitive"
+    if any(cue in text for cue in sensitive_cues):
+        return "sensitive"
+    return "normal"
 
 
 _SALIENT_FACT_CUES = {

@@ -1217,6 +1217,7 @@ ai-companion status
 | User Model | 用户事实、偏好、边界、当前状态、目标 | `semantic.db` | 带分类、置信度、来源、证据、过期时间 |
 | Relationship State | 关系标签、好感度、亲密度、信任、紧张度、关键关系时刻 | `relationship.db` | 与普通用户事实分离，影响语气和主动唤醒 |
 | Episodic Memory | 重要共同经历、冲突/和解、承诺、重要事件 | `episodic.db` + 可选 Chroma | 低价值或长期不用会归档 |
+| Unified Vector Index | 语义事实、用户理解、关系脉络、日摘要、Bot 人生轨迹的语义索引 | `vector/` + Chroma | 可从结构化事实源重建，只负责语义召回 |
 | Self / 自传体线索 | Bot 自己近期主动发过什么、为什么发、应该怎样接住回应 | `daily.db` 中带 `assistant_initiated` 的 assistant 消息 | 最近连续性，按预算裁剪 |
 | User Understanding | 用户可编辑的“Bot 对我的理解” | `user_understanding.json` | `manual` 永久优先，`auto` 自动刷新 |
 
@@ -1425,6 +1426,9 @@ data/bots/{bot_id}/memory/user_understanding.json
 - `*_tokens_est`：各块的 token 估算，便于观察真实上下文压力。
 - `truncated`：整体是否被截断。
 - `self_memory_count`：本轮召回的 Bot 自己主动消息数量。
+- `vector_recall_count`：统一向量索引本轮召回的条数。
+- `vector_recall_sources`：召回结果按 source type 的分布，例如 `semantic_fact`、`user_understanding`、`daily_summary`、`relationship_narrative`、`life_event`。
+- `vector_recall_top`：前几条向量召回结果的来源、相关度、敏感级别和短文本，便于排查“为什么想起这条”。
 - `blocks`：`conscious`、`understanding`、`relationship`、`daily`、`semantic`、`episodic` 各块的预算、实际字符数、token 估算和截断状态。
 
 这份 diagnostics 会进入 `BotInstance.get_last_debug_context()`，管理后台调试页也可以据此定位 token 压力来自哪一层。
@@ -1461,15 +1465,75 @@ Prompt 构建优先级：
 
 Bot 不会机械地说“我从记忆里看到”，而是把记忆当作相处背景自然使用。
 
-### 6.9 记忆相关命令
+### 6.9 统一向量记忆索引
+
+统一向量索引是记忆系统的语义召回层。它不取代 SQLite/JSON 中的原始记忆，而是从原始记忆生成一份 Chroma 检索索引：
+
+| source type | 来源 | 用途 |
+|------------|------|------|
+| `semantic_fact` | `semantic.db` | 用户事实、偏好、边界等稳定信息 |
+| `user_understanding` | `user_understanding.json` | 用户理解文件中的手动理解、自动理解和关系理解 |
+| `relationship_narrative` | `relationship.db` | 关系叙事、当前姿态、互动建议 |
+| `daily_summary` | `daily.db` | 近日摘要、未完成话题、情绪和承诺 |
+| `life_event` | Bot life state | Bot 日常生活事件 |
+| `major_life_event` | Bot life state | Bot 重要人生事件 |
+
+运行时流程：
+
+```text
+SQLite / JSON 权威数据
+  → VectorMemoryStore 生成统一 Chroma 索引
+  → MemoryRetriever 按当前输入语义检索
+  → MemoryPromptBuilder 以“联想到的相关背景”加入 prompt
+```
+
+敏感条目默认不会在普通闲聊和任务请求里直接浮出；只有在情绪支持、关系修复或明确回忆场景中才可能进入上下文。
+
+#### 重建向量索引
+
+“重建”指重新扫描 SQLite/JSON 权威数据，并重新写入 Chroma 的 `unified_memory` collection。它不会删除或改写原始记忆，只会刷新检索索引。
+
+适合重建的情况：
+
+- 手动改过 `user_understanding.json`、persona 或记忆数据库。
+- 换了 `embedding_model`。
+- 管理后台显示向量索引数量异常。
+- 怀疑 Chroma 索引和真实记忆不同步。
+
+命令：
+
+```bash
+# 重建全部启用 Bot
+ai-companion memory rebuild-vector
+
+# 只重建指定 Bot
+ai-companion memory rebuild-vector --bot <bot_id>
+```
+
+管理后台也提供同等功能：进入“记忆”页，在“统计概览”点击“重建向量索引”。
+
+如果前端提示 `TypeError: Failed to fetch`，一般是管理 API 没有重启到新代码，或浏览器跨域被挡住。先执行：
+
+```bash
+ai-companion gateway restart
+```
+
+然后刷新后台页面。开发模式下默认放行 `http://localhost:5173` 和 `http://127.0.0.1:5173`。
+
+### 6.10 记忆相关命令
 
 在对话界面使用：
 
-- `/memory` - 查看工作记忆、情景记忆、语义事实数、关系状态、用户理解文件路径。
+- `/memory` - 查看工作记忆、情景记忆、语义事实数、关系状态、用户理解文件路径和向量索引数量。
 - `/forget <key>` - 删除某条自动用户事实，并同步移除 `user_understanding.auto` 中的投影；不会删除 `manual` 或 relationship state。
 - `/new` - 开始新会话，保留长期记忆。
 
-### 6.10 重置记忆
+在系统命令行使用：
+
+- `ai-companion memory rebuild-vector` - 重建所有启用 Bot 的统一向量索引。
+- `ai-companion memory rebuild-vector --bot <bot_id>` - 只重建指定 Bot 的统一向量索引。
+
+### 6.11 重置记忆
 
 ```bash
 # 删除特定 Bot 的自动记忆数据库
@@ -1481,7 +1545,7 @@ rm -f data/bots/*/memory/*.db
 
 `user_understanding.json` 里的 `manual` 是用户手动设定，建议保留。只有当你想完全重置 Bot 对用户的初始化理解时，才删除这个文件。
 
-### 6.11 models.yaml 完整配置（记忆与多媒体）
+### 6.12 models.yaml 完整配置（记忆与多媒体）
 
 ```yaml
 # 默认使用 minimax
@@ -1564,7 +1628,7 @@ skills:
       voice: "alloy"
 ```
 
-### 6.11 记忆引擎配置详解
+### 6.13 记忆引擎配置详解
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
@@ -1952,13 +2016,27 @@ platform_display:
 |------|------|
 | Dashboard | Bot 监控指标（今日会话数、活跃用户、输入/输出字符数） |
 | 会话 | 查看所有会话列表，点击进入详细对话 |
-| 记忆 | 查看工作记忆、情景记忆、用户事实、关系状态和用户理解文件 |
+| 记忆 | 查看工作记忆、日记忆、情景记忆、用户事实、关系状态、用户理解文件和向量索引；支持重建向量索引 |
 | 日志 | 实时日志流（WebSocket 推送） |
 | 设置 | 模型参数热更新、主动唤醒配置热更新 |
 
 **管理后台与 CLI 的数据共享：**
 
 管理后台和 CLI 共用同一份 SQLite 数据（`~/.ai-companion/data/bots/{bot_id}/memory/`）。无论你用 CLI 聊天还是通过网关聊天，管理后台都能看到所有会话。
+
+记忆页的“重建向量索引”按钮会调用：
+
+```text
+POST /api/v1/admin/memory/{bot_id}/rebuild-vector
+```
+
+返回示例：
+
+```json
+{"enabled": true, "indexed": 13, "candidate_docs": 13}
+```
+
+`indexed` 是成功写入 Chroma 的条数，`candidate_docs` 是本次从 SQLite/JSON 中扫描出的候选条数。`enabled=false` 通常表示 `memory.embedding` 被设为 `none`。
 
 ### 11.2 启动和停止
 
@@ -2102,6 +2180,22 @@ minimax:
 ### Q: 记忆变多后 token 会不会急剧增大？
 
 **A**: 设计上不会按记忆总量线性增长。长期记忆会完整保存，但主聊天走 `Retriever -> ConsciousContext -> MemoryPromptBuilder`，每块都有预算；普通聊天只拿短画像、近期连续性和少量 active memories。可以在调试页或 `BotInstance.get_last_debug_context()` 查看 `memory_prompt_diagnostics`，确认是哪一块触发截断或字符增长。
+
+### Q: 后台点“重建向量索引”提示 `TypeError: Failed to fetch` 怎么办？
+
+**A**: 这通常表示浏览器没有成功连到管理 API，而不是索引逻辑失败。先确认 gateway 正在运行：
+
+```bash
+ai-companion gateway status
+```
+
+如果刚更新过代码，执行：
+
+```bash
+ai-companion gateway restart
+```
+
+然后刷新管理后台。开发模式下前端常在 `http://localhost:5173`，gateway 默认已放行该 Origin；如果你改了端口，需要在配置或环境变量 `AI_COMPANION_ADMIN_CORS_ORIGINS` 中加入对应地址。
 
 ### Q: 如何调整 Bot 的主动程度？
 

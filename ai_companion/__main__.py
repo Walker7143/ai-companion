@@ -40,6 +40,7 @@ def main():
     _configure_utf8_stdio()
 
     from ai_companion.main import main as start_main
+    from ai_companion.main import rebuild_vector_index
     from ai_companion.setup import run_setup, run_weixin_setup
     from ai_companion.main import show_status
     from ai_companion.bot.cli import handle_bot_command
@@ -115,6 +116,11 @@ def main():
     subparsers.add_parser("status", help="查看运行状态")
 
     # bot 子命令
+    memory_parser = subparsers.add_parser("memory", help="Memory maintenance")
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_command")
+    memory_rebuild = memory_subparsers.add_parser("rebuild-vector", help="Rebuild unified vector memory index")
+    memory_rebuild.add_argument("--bot", type=str, help="Only rebuild the specified Bot")
+
     bot_parser = subparsers.add_parser("bot", help="Bot 管理")
     bot_subparsers = bot_parser.add_subparsers(dest="bot_command")
 
@@ -179,6 +185,11 @@ def main():
         )
     elif args.command == "status":
         show_status()
+    elif args.command == "memory":
+        if args.memory_command == "rebuild-vector":
+            asyncio.run(rebuild_vector_index(bot_filter=args.bot))
+        else:
+            parser.print_help()
     elif args.command == "bot":
         handle_bot_command(args.bot_command, args)
     elif args.command == "persona":

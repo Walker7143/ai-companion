@@ -252,6 +252,33 @@ def _daily_memory_stats(bot_id: str) -> dict:
     }
 
 
+def _vector_memory_stats(bot_id: str) -> dict:
+    vector_path = _get_data_dir() / bot_id / "memory" / "vector"
+    size_kb = 0
+    vector_count = None
+    if vector_path.exists():
+        try:
+            size_kb = max(1, sum(p.stat().st_size for p in vector_path.rglob("*") if p.is_file()) // 1024)
+        except Exception:
+            size_kb = 0
+        try:
+            import chromadb
+            from chromadb.config import Settings
+
+            client = chromadb.PersistentClient(
+                path=str(vector_path),
+                settings=Settings(anonymized_telemetry=False),
+            )
+            vector_count = int(client.get_collection("unified_memory").count())
+        except Exception:
+            vector_count = None
+    return {
+        "vector_count": vector_count,
+        "vector_path": str(vector_path),
+        "vector_size_kb": size_kb,
+    }
+
+
 async def _start_admin_api(bot_manager: BotManager, config: Config):
     """Start the admin API HTTP server on port 8642."""
     global _admin_app, _admin_runner
@@ -281,6 +308,28 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         """GET /api/v1/admin/bots"""
         bots = _discover_bots()
         return web.json_response({"bots": bots})
+
+    async def handle_memory_rebuild_vector(request):
+        """POST /api/v1/admin/memory/:bot_id/rebuild-vector"""
+        bot_id = request.match_info["bot_id"]
+        target = next((b for b in _discover_bots() if b.get("id") == bot_id), None)
+        if not target:
+            return web.json_response({"error": "Bot not found"}, status=404)
+        try:
+            from ai_companion.bot.instance import BotInstance
+            merged_skills = merge_skill_config(config.models.get("skills", {}), target.get("skills", {}))
+            instance_config = {**target, "data_dir": str(resolve_data_dir()), "skills": merged_skills}
+            bot = BotInstance(instance_config, model=None, memory_config=memory_config)
+            try:
+                await bot.init(start_schedulers=False)
+                if not bot.memory:
+                    return web.json_response({"enabled": False, "indexed": 0})
+                result = await bot.memory.rebuild_vector_index()
+                return web.json_response(result)
+            finally:
+                await bot.close()
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
 
     async def handle_gateway_status(request):
         """GET /api/v1/admin/gateway/status"""
@@ -395,6 +444,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "user_understanding_path": understanding_path,
                 "user_understanding_auto_facts": _understanding_auto_count(understanding),
                 "embedding_enabled": embedding_enabled,
+                **_vector_memory_stats(bot_id),
             },
         })
 
@@ -614,6 +664,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             "user_understanding_path": understanding_path,
             "user_understanding_auto_facts": _understanding_auto_count(understanding),
             "embedding_enabled": embedding_enabled,
+            **_vector_memory_stats(bot_id),
         })
 
     async def handle_memory_working(request):
@@ -1107,6 +1158,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/daily", handle_memory_daily)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/episodic", handle_memory_episodic)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/semantic", handle_memory_semantic)
+    _admin_app.router.add_post("/api/v1/admin/memory/{bot_id}/rebuild-vector", handle_memory_rebuild_vector)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding)
     _admin_app.router.add_put("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding_update)
     _admin_app.router.add_delete("/api/v1/admin/memory/{bot_id}/all", handle_memory_clear_all)

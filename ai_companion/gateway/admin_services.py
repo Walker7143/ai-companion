@@ -1453,7 +1453,12 @@ def allowed_cors_origins(config: dict) -> set[str]:
         return {item.strip() for item in raw.split(",") if item.strip()}
     if isinstance(raw, list):
         return {str(item).strip() for item in raw if str(item).strip()}
-    return {"http://localhost:1421", "http://127.0.0.1:1421"}
+    return {
+        "http://localhost:1421",
+        "http://127.0.0.1:1421",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    }
 
 
 def list_sessions(bot_id: str | None = None) -> list[dict]:

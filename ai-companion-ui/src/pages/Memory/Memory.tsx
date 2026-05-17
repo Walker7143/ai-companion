@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Brain, CalendarDays, Clock, Filter, Heart, RefreshCw, Search, Star, Trash2, User } from 'lucide-react';
+import { Brain, CalendarDays, Clock, Database, Filter, Heart, RefreshCw, Search, Star, Trash2, User } from 'lucide-react';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Modal, useToast } from '../../components/ui';
 import { memoryApi } from '../../api';
 import { useBotStore } from '../../stores';
@@ -69,6 +69,7 @@ export function Memory() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [rebuildingVector, setRebuildingVector] = useState(false);
   const [workingQuery, setWorkingQuery] = useState('');
   const [dailyQuery, setDailyQuery] = useState('');
   const [episodicQuery, setEpisodicQuery] = useState('');
@@ -147,6 +148,22 @@ export function Memory() {
       await fetchAllData('refresh');
     } catch (err) {
       toast.error(`清空记忆失败: ${err}`);
+    }
+  }, [currentBotId, fetchAllData, toast]);
+
+  const handleRebuildVector = useCallback(async () => {
+    if (!currentBotId) return;
+    setRebuildingVector(true);
+    try {
+      const result = await memoryApi.rebuildVector(currentBotId);
+      const indexed = result.indexed ?? 0;
+      const candidates = result.candidate_docs ?? indexed;
+      toast.success(result.enabled ? `向量索引已重建：${indexed}/${candidates}` : '向量索引未启用');
+      await fetchAllData('refresh');
+    } catch (err) {
+      toast.error(`向量索引重建失败: ${err}`);
+    } finally {
+      setRebuildingVector(false);
     }
   }, [currentBotId, fetchAllData, toast]);
 
@@ -239,6 +256,10 @@ export function Memory() {
             <RefreshCw style={{ width: 14, height: 14, marginRight: 4 }} />
             刷新
           </Button>
+          <Button variant="secondary" size="sm" onClick={handleRebuildVector} loading={rebuildingVector}>
+            <Database style={{ width: 14, height: 14, marginRight: 4 }} />
+            重建向量索引
+          </Button>
           <Button variant="danger" size="sm" onClick={handleClearAll}>
             <Trash2 style={{ width: 14, height: 14, marginRight: 4 }} />
             清空全部
@@ -292,6 +313,7 @@ export function Memory() {
               { label: '日记忆', value: memoryStats.daily_count ?? 0, icon: CalendarDays, color: 'var(--success)', size: memoryStats.daily_size_kb ?? 0 },
               { label: '情景记忆', value: memoryStats.episodic_count, icon: Brain, color: 'var(--warning)', size: memoryStats.episodic_size_kb },
               { label: '语义记忆', value: memoryStats.semantic_count, icon: User, color: 'var(--info)', size: memoryStats.semantic_size_kb },
+              { label: '向量索引', value: memoryStats.vector_count ?? 0, icon: Database, color: 'var(--accent)', size: memoryStats.vector_size_kb ?? 0 },
             ].map((item) => (
               <Card key={item.label} style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
                 <CardContent style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -316,6 +338,32 @@ export function Memory() {
               </div>
               <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
                 如果你是为了“手动删脏记忆”，优先看“语义记忆”和“情景记忆”；前者影响人物画像，后者影响“她记得哪些经历”。
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+            <CardContent style={{ padding: 16, display: 'grid', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <Database style={{ width: 16, height: 16, color: 'var(--accent)' }} />
+                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>统一向量索引</span>
+                  <Badge variant={memoryStats.embedding_enabled ? 'success' : 'default'}>
+                    {memoryStats.embedding_enabled ? '已启用' : '未启用'}
+                  </Badge>
+                </div>
+                <Button variant="secondary" size="sm" onClick={handleRebuildVector} loading={rebuildingVector}>
+                  <RefreshCw style={{ width: 14, height: 14, marginRight: 4 }} />
+                  重建
+                </Button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Badge>索引 {memoryStats.vector_count ?? 0} 条</Badge>
+                <Badge>目录 {((memoryStats.vector_size_kb ?? 0) / 1024).toFixed(2)} MB</Badge>
+                {memoryStats.daily_summary_count !== undefined && <Badge>日摘要 {memoryStats.daily_summary_count} 条</Badge>}
+              </div>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
+                索引来源包含语义事实、用户理解、关系脉络、日摘要和 Bot 人生轨迹；结构化数据库仍是事实源。
               </p>
             </CardContent>
           </Card>

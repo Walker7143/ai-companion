@@ -10,6 +10,7 @@ import type {
   DailyMemoryPayload,
   UnderstandingPayload,
   DebugContextPayload,
+  VectorRebuildResult,
   LogPage,
   BotConfig,
   BotInfo,
@@ -94,6 +95,9 @@ export const memoryApi = {
       method: 'PUT',
       body: JSON.stringify({ data }),
     }),
+
+  rebuildVector: (botId: string): Promise<VectorRebuildResult> =>
+    fetchApi<VectorRebuildResult>(`/admin/memory/${botId}/rebuild-vector`, { method: 'POST' }),
 
   deleteMemory: (botId: string, type: string, id: string): Promise<void> =>
     fetchApi<void>(

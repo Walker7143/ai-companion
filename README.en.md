@@ -1,19 +1,20 @@
 # AI Companion / AI 知己
 
-An open-source AI companion product supporting macOS / Linux / Windows. Each bot has its own personality and memory system, interacting with you like a real person.
+Open-source AI companion product for macOS / Linux / Windows. Each bot has an independent personality and memory system, interacting with you like a real person.
 
-## Core Features
+## Key Features
 
 | Feature | Description |
 |---------|-------------|
 | **Multi-Model Support** | MiniMax / OpenAI / Claude / MiMo / Ollama / Custom API |
-| **Distinct Personalities** | Each Bot has unique character, backstory, and speaking style (tsundere / lively / gentle / aloof...) |
-| **Intelligent Memory System** | Working memory + User model + Relationship state + Episodic memory + User understanding file, retrieved by intent rather than dumping context |
-| **Local Vector Embedding** | Supports sentence-transformers for local semantic retrieval, Chinese-friendly |
-| **Life Trajectory** | Each Bot has its own timeline with daily events, life milestones, birthdays, and low-probability surprises |
-| **Proactive Messaging** | Bots can initiate conversations, remind you of things, and occasionally act clingy based on LLM reasoning, incorporating current timeline and recent life events |
-| **Relationship Evolution** | Bot behavior gradually changes based on interaction depth (stranger → lover) |
-| **Personality-Based Refusal** | Determines whether to answer based on personality, not simple keyword filtering |
+| **Independent Personality** | Each bot has unique personality, backstory, and speaking style (tsundere / lively / gentle / aloof...) |
+| **Intelligent Memory System** | Working memory + user model + relationship state + episodic memory + user understanding file + conscious workspace, recalled by intent and budget rather than mechanically stuffing context |
+| **Local Vector Embedding** | sentence-transformers local vector semantic recall, Chinese-friendly |
+| **Life Trajectory** | Each bot has an independent timeline, generating daily events, major life events, birthdays, and low-probability surprise events |
+| **Proactive Messaging** | Proactively chats with you, reminds you of things, occasionally acts cute; based on LLM reasoning to judge timing, with proactive source metadata and self-memory to continue the same topic |
+| **Token Budget Control** | Memory layers injected into prompt by intent block, with debug diagnostics output for easy token consumption tracking |
+| **Relationship Evolution** | Bot behavior evolves based on interaction depth (stranger → lover) |
+| **Personality-Based Refusal** | Decides whether to respond based on personality, not simple keyword filtering |
 | **Multimedia Skills** | Image generation, voice synthesis |
 | **Multi-Platform Gateway** | Local CLI / Feishu / Webhook, multiple message delivery methods |
 
@@ -23,15 +24,15 @@ An open-source AI companion product supporting macOS / Linux / Windows. Each bot
 
 ### Prerequisites
 
-Before running the installation commands, ensure you have:
+Before running the installation commands, make sure you have the following:
 
-- **Python 3.11+**: Required for backend and CLI tools
-- **Git**: Installation scripts pull project code
-- **Network connection**: Required to download Python dependencies, frontend dependencies, and project code
-- **A model provider**: Any one of MiniMax / OpenAI / Claude / MiMo / Ollama / Custom API. Cloud models require an API Key; Ollama requires a running local Ollama service
-- **Node.js + npm (recommended)**: For the admin web UI. Optional if using CLI only
+- **Python 3.11+**: Required for the backend and CLI tool.
+- **Git**: The installation script will clone the project code.
+- **Network connection**: Required to download Python dependencies, frontend dependencies, and project code.
+- **A model source**: Any one of MiniMax / OpenAI / Claude / MiMo / Ollama / Custom API. Cloud models require an API Key; Ollama requires a running Ollama service on your machine.
+- **Node.js + npm (recommended)**: Used to launch the admin web UI. You can skip this if you only want the CLI; install when you need the Web UI.
 
-Dependencies are installed automatically by the installation script and `ai-companion setup`.
+Dependencies are automatically handled by the installation scripts and `ai-companion setup`.
 
 ### Installation
 
@@ -45,16 +46,32 @@ curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/script
 irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.ps1 -UseBasicParsing | iex
 ```
 
-**International users** please download the corresponding script from [Gitee Release](https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/releases).
+**Overseas users** please visit [Gitee Release](https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/releases) to download the corresponding scripts.
 
-### Initial Setup
+### First-Time Configuration
 
 ```bash
-source ~/.ai-companion/.venv/bin/activate  # If using virtual environment
+source ~/.ai-companion/.venv/bin/activate  # If using a virtual environment
 ai-companion setup
 ```
 
-When re-running `setup`, it merges updates with existing configuration: parts not reconfigured or overwritten retain their old values. For example, changing only the model won't overwrite existing Bot, timeline, or proactive configurations.
+Running `setup` again will merge configuration updates: parts you choose not to reconfigure or overwrite will retain their old values. For example, changing only the model won't rewrite existing Bot, life trajectory, or proactive messaging configurations.
+
+### Update
+
+To update without reinstalling:
+
+```bash
+ai-companion update
+```
+
+For China network, you can use the Tsinghua PyPI mirror:
+
+```bash
+ai-companion update --cn
+```
+
+The update command preserves Bot configurations, memory, and logs under `~/.ai-companion/`. If the Gateway is running, it will be stopped first and automatically restarted after the update completes.
 
 ---
 
@@ -62,32 +79,33 @@ When re-running `setup`, it merges updates with existing configuration: parts no
 
 ```
 ai_companion/
-├── bot/              # Bot core
+├── bot/              # Bot core instances
 │   ├── instance.py   # BotInstance - core runtime
-│   └── manager.py    # BotManager - multi-Bot management
+│   └── manager.py    # BotManager - multi-bot management
 ├── memory/           # Memory system
-│   ├── engine.py     # MemoryEngine - memory write, retrieval, maintenance coordination
+│   ├── engine.py     # MemoryEngine - memory write, recall, maintenance coordination
 │   ├── extractor.py  # MemoryExtractor - extract candidate memories from conversations
-│   ├── governor.py   # MemoryGovernor - evaluate if candidates are worth long-term storage
-│   ├── retriever.py  # MemoryRetriever - plan retrieval by current intent
+│   ├── governor.py   # MemoryGovernor - decide whether candidates are worth long-term storage
+│   ├── retriever.py  # MemoryRetriever - plan recall based on current intent
+│   ├── conscious.py  # ConsciousContext - current-turn conscious workspace
 │   ├── prompt_builder.py  # MemoryPromptBuilder - build memory context
-│   ├── maintenance.py     # MemoryMaintenance - expiration, archival, projection refresh
+│   ├── maintenance.py     # MemoryMaintenance - expiry, archival, projection refresh
 │   └── stores/
-│       ├── working.py    # Working memory / raw message stream
+│       ├── working.py    # Working memory / raw message log
 │       ├── episodic.py   # Episodic memory - important shared experiences
 │       ├── semantic.py   # User model - structured user facts
-│       ├── relationship.py       # Relationship state - affection, intimacy, tension, key moments
+│       ├── relationship.py       # Relationship state - affinity, intimacy, tension, key moments
 │       └── user_understanding.py # User-editable understanding file
 ├── persona/          # Personality system
 │   ├── loader.py     # PersonaLoader - personality loading
 │   ├── engine.py     # PersonaEngine - System Prompt construction
-│   └── refusal_engine.py  # RefusalEngine - personality-based refusal
+│   └── refusal_engine.py  # Refusal engine - personality-based refusal
 ├── proactive/        # Proactive messaging system
-│   ├── engine.py     # ProactiveEngine - LLM judgment + message generation
-│   ├── scheduler.py   # ProactiveScheduler - proactive check scheduling
-│   ├── platform.py   # Platform adapter (CLI/Feishu/Webhook)
+│   ├── engine.py     # ProactiveEngine - LLM reasoning + message generation
+│   ├── scheduler.py   # ProactiveScheduler - proactive messaging scheduled checks
+│   ├── platform.py   # Platform adapters (CLI/Feishu/Webhook)
 │   ├── life_engine.py     # LifeEngine - life trajectory event generation
-│   ├── life_scheduler.py  # LifeScheduler - independent timeline scheduling
+│   ├── life_scheduler.py  # LifeScheduler - independent life trajectory scheduling
 │   ├── life_config.py     # life.json config loading
 │   └── life_state.py      # life_state.json state persistence
 ├── context/          # Context management
@@ -120,49 +138,55 @@ ai-companion-ui/      # Admin web UI
 │   ├── pages/        # Pages (Dashboard/Session/Memory/Settings)
 │   ├── stores/       # Zustand state management
 │   └── api/          # Frontend API layer
-└── vite.config.ts   # Vite build configuration
+└── vite.config.ts   # Vite build config
 ```
 
 ---
 
 ## Intelligent Memory System
 
-AI Companion's memory system doesn't simply "store more" — it first evaluates what's worth remembering, then selects relevant memories based on the current conversation intent. Core flow:
+The memory system doesn't simply "store more". It first judges what's worth remembering, then selects relevant memories based on the current conversation intent, and compresses the results into a small set of clues that can actually enter conscious awareness this turn. Complete memories are preserved, but the main model only sees the relevant, budgeted portion each turn.
 
 ```text
-Current conversation
-  → Working/Raw Log saves original text
+Current Conversation
+  → Working/Raw Log saves original text and metadata
   → Extractor extracts candidate memories
-  → Governor decides write/skip/archive
-  → User Model / Episodic / Relationship layered storage
-  → Retriever retrieves by intent
-  → PromptBuilder generates memory context
+  → Governor decides: write / skip / archive / refresh projection
+  → User Model / Episodic / Relationship stored in layers
+  → Retriever recalls by intent
+  → ConsciousContextBuilder generates conscious workspace
+  → PromptBuilder generates memory context with budget and diagnostics
 ```
 
 ### Memory Layers
 
 | Layer | Storage | Description |
 |-------|---------|-------------|
-| Working / Raw Log | `working.db` | Current session original, compressed summary, debug ledger |
-| User Model | `semantic.db` | Structured user facts with category, confidence, source, evidence, expiration |
-| Relationship State | `relationship.db` | Bot-user relationship labels, affection, intimacy, tension, key relationship moments |
-| Episodic Memory | `episodic.db` + optional Chroma | Important shared experiences, conflicts/resolutions, commitments, life events; regular small talk not recorded |
-| User Understanding | `user_understanding.json` | User-editable "Bot's understanding of user" with `manual` and `auto` sections |
+| Working / Raw Log | `working.db` | Current session original text, compressed summaries, debug ledger |
+| Conscious / Workspace | Generated by `conscious.py`, not persisted | Compresses recall results into current focus, emotional reading, relationship stance, and a few active memories; only clues truly needed right now enter the prompt |
+| User Model | `semantic.db` | Structured user facts with categories, confidence, sources, evidence, expiry |
+| Relationship State | `relationship.db` | Relationship labels, affinity, intimacy, tension, key relationship moments between bot and user |
+| Episodic Memory | `episodic.db` + optional Chroma | Important shared experiences, conflicts/resolutions, promises, life events; does not record ordinary small talk |
+| Unified Vector Index | `vector/` + Chroma | Unified semantic recall index for semantic facts, user understanding, relationship narratives, daily summaries, and bot life trajectory; can be rebuilt anytime |
+| Self / Autobiographical | Assistant messages with `assistant_initiated` in `daily.db` | What the bot proactively sent recently, why it sent it, how to follow up on user replies |
+| User Understanding | `user_understanding.json` | User-editable "bot's understanding of me", split into `manual` and `auto` sections |
+
+Long-term memories are fully preserved, but only the `ConsciousContext` compressed short snippet enters the main model each turn. `MemoryPromptBuilder` further allocates budget by intent, injecting `understanding`, `relationship`, `daily`, `self_memory`, `semantic`, and `episodic` in blocks, and records character counts, token estimates, truncation status, and total budget in `memory_prompt_diagnostics` for easy token debugging.
 
 ### User Understanding File
 
-Each Bot has a directly editable user understanding file:
+Each bot has a directly editable user understanding file:
 
-```
+```text
 ~/.ai-companion/data/bots/{bot_id}/memory/user_understanding.json
 ```
 
-Used to initialize and correct the Bot's understanding of the user:
+It is used for initializing and correcting the bot's understanding of the user:
 
-- `manual`: User-written content, always prioritized, never overwritten by auto memory
-- `auto`: Understanding formed from daily conversations, relationship state, and Bot reflection, auto-refreshed
-- Prompt uses `manual` first, then relevant `auto`
-- Built-in Bots include initial `manual` for basic interaction guidelines; `auto` refreshes over time
+- `manual`: Manually filled by the user, always takes priority; auto memories won't overwrite it.
+- `auto`: Understanding formed by the system from daily conversations, relationship state, and bot reflections; auto-refreshes.
+- Prompt prioritizes `manual`, then relevant `auto`.
+- Built-in bots come with initial `manual`, so they have basic social awareness out of the box; `auto` refreshes with daily conversations.
 
 Example:
 
@@ -170,41 +194,55 @@ Example:
 {
   "version": 3,
   "manual": {
-    "summary": "User prefers to be treated gently without being dismissed.",
-    "facts": {"nickname": "Achi"},
+    "summary": "The user wants to be treated gently but not dismissively.",
+    "facts": {"nickname": "A-Chi"},
     "communication_style": ["Empathize first, then give advice"],
-    "boundaries": ["Don't make jokes about weight"],
-    "relationship_expectations": ["Wants Bot to accompany with the familiarity of someone who knows the boundaries"]
+    "boundaries": ["Don't joke about weight"],
+    "relationship_expectations": ["Wants the bot to accompany like someone who knows them well"]
   },
   "auto": {
-    "profile_summary": "User has been under recent stress and needs to be met with empathy when emotionally low.",
+    "profile_summary": "User has been under higher stress recently, needs to be heard first when feeling down.",
     "facts": {"city": "Shanghai"},
-    "emotional_patterns": ["Gets anxious under pressure but willing to push forward"],
-    "comfort_strategies": ["Spend time together first, then give specific advice"],
-    "current_context": ["Recently preparing portfolio"],
-    "open_threads": ["User wants to continue discussing portfolio"]
+    "emotional_patterns": ["Tends to get anxious under stress but willing to keep pushing forward"],
+    "comfort_strategies": ["Stay with them for a while, then give concrete suggestions"],
+    "current_context": ["Recently working on a portfolio"],
+    "open_threads": ["User wants to continue discussing the portfolio"]
   },
   "relationship_memory": {
-    "what_user_seems_to_need_from_bot": ["Stable companionship, not mechanical advice"],
+    "what_user_seems_to_need_from_bot": ["Steady companionship, not mechanical advice"],
     "things_that_brought_them_closer": ["User started proactively sharing vulnerable moments"]
   }
 }
 ```
 
-### Dynamic Retrieval
+### Dynamic Recall
 
-System evaluates current intent first, then selects different memories:
+The system first determines the current intent, then selects different memories:
 
-| Intent | Priority Retrieval |
-|--------|-------------------|
-| Emotional support | Communication preferences, boundaries, recent stressors, relationship state |
-| Recalling old events | Episodic memory first, cross-session if needed |
-| Advancing plans | open_threads, goals, recent context |
-| Relationship repair | Relationship state, conflict/resolution fragments, boundaries |
-| Task requests | Minimal necessary preferences, avoid irrelevant emotional memory interference |
-| Proactive messaging | open_threads, relationship state, recent user state, Bot life timeline |
+| Intent | Priority Recall |
+|--------|----------------|
+| Emotional Support | Communication preferences, boundaries, recent stressors, relationship state |
+| Reminiscing | Episodic memory first, cross-session if needed |
+| Plan Progression | open_threads, goals, recent context |
+| Relationship Repair | Relationship state, conflict/resolution episodes, boundaries |
+| Task Request | Minimal necessary preferences, avoid irrelevant emotional memories |
+| Proactive Messaging | open_threads, relationship state, recent user state, bot life trajectory |
 
-### Local Vector Retrieval
+### Unified Vector Memory Index
+
+AI Companion uses a hybrid architecture where "structured databases are the source of truth, and Chroma is the semantic index". SQLite/JSON still stores editable, deletable, verifiable raw memories; Chroma only handles "what background would this sentence semantically associate with".
+
+The unified vector index is generated from these authoritative sources:
+
+- `semantic.db`: User facts, preferences, boundaries.
+- `user_understanding.json`: `manual` / `auto` / `relationship_memory` projections from user understanding.
+- `relationship.db`: Relationship narratives, current stance, interaction suggestions.
+- `daily.db`: Recent summaries and open topics.
+- Bot life trajectory: Daily events and major life events.
+
+These are written to the Chroma collection `unified_memory` under `data/bots/{bot_id}/memory/vector/` as source types: `semantic_fact`, `user_understanding`, `relationship_narrative`, `daily_summary`, `life_event`, `major_life_event`, etc.
+
+"Rebuilding vector index" only regenerates the Chroma search index; it does not delete or rewrite raw memories in SQLite/JSON. Useful when you've manually edited memory files, switched embedding models, or suspect the index is out of sync.
 
 ```yaml
 # Enable local vector embedding
@@ -213,20 +251,32 @@ memory:
   embedding_model: "all-MiniLM-L6-v2"
 ```
 
+Manual rebuild:
+
+```bash
+# Rebuild unified vector index for all enabled bots
+ai-companion memory rebuild-vector
+
+# Rebuild for a specific bot
+ai-companion memory rebuild-vector --bot <bot_id>
+```
+
+You can also click "Rebuild Vector Index" on the "Memory" page in the admin UI. If the admin page is served from Vite dev port `5173`, make sure the gateway has been updated and restarted so the admin API CORS allows `http://localhost:5173`.
+
 ---
 
 ## Proactive Messaging System
 
 ### Trigger Mechanisms
 
-- **Idle trigger**: Bot reaches out when user hasn't interacted for a while
-- **Emotional trigger**: Delayed care when user messages contain specific emotional keywords
-- **Gradient silence**: Adjust frequency based on time since last contact (7/14/30 day thresholds)
-- **Life topics**: Proactive judgment and message generation read Bot's current date, dynamic age, life stage, and recent shareable events
+- **Idle Trigger**: Bot proactively contacts the user after a period of inactivity
+- **Emotion Trigger**: Delayed care when user messages contain specific emotional keywords
+- **Gradient Silence**: Adjusts frequency based on time since last contact (7/14/30 day thresholds)
+- **Life Topics**: Proactive messaging reasoning and message generation read the bot's current date, dynamic age, life stage, and recent shareable events
 
-### Delivery Platforms
+### Sending Platforms
 
-| Platform | Config | Message destination |
+| Platform | Config | Message Destination |
 |----------|--------|---------------------|
 | CLI | `platform.type: "cli"` | Terminal stdout |
 | Feishu | `platform.type: "feishu"` | Feishu user/group |
@@ -237,46 +287,50 @@ memory:
 - Maximum daily proactive messages
 - Minimum send interval
 - Cooldown mechanism
-- Anger degradation (reduce interruptions after multiple user non-replies)
+- Anger degradation (reduced disturbance after user ignores multiple messages)
+
+### Proactive Continuity
+
+Proactive messages are now written to Working / Daily memory with `metadata.proactive=true`, `metadata.assistant_initiated=true`, and `proactive_kind`. This way, when the user replies, the bot knows the previous message was self-initiated and won't restart the conversation as if it never happened. `proactive_kind` distinguishes sources like `idle_reminder`, `deferred_reply`, `topic_continuation`, `emotion_followup`, `life_event`, etc. These enter the conscious workspace as `self_memory`, letting the bot remember "why I proactively reached out to you". Fallback messages are also more natural, no longer just a bare "Are you there?".
 
 ---
 
 ## Life Trajectory System
 
-Bots have an independent life timeline running separately from the proactive scheduler. Life trajectory state feeds into regular conversations, daily events, life milestones, and proactive messaging prompts — preventing Bot from answering based on a static age after the timeline progresses.
+Bots have an independent life trajectory, running separately from the proactive messaging scheduler. Life trajectory state feeds into normal conversations, daily events, major life events, and proactive messaging prompts, preventing the bot from answering with static age after its timeline has advanced.
 
 ### Event Types
 
-| Type | Period | Description |
-|------|--------|-------------|
-| Daily events | Based on `life.json` `daily_interval_seconds / time_ratio` | Random selection from 200+ scenario pool, limited candidates given to LLM; last 100 events retained max |
-| Life milestones | Based on `life.json` `major_interval_seconds / time_ratio` | Specific long-term events triggering personality file updates |
-| Random events | Independent low-probability channel | Default 0.01 probability per Bot day, overall cooldown default 365 days |
+| Type | Cycle | Description |
+|------|-------|-------------|
+| Daily Events | Per `life.json` `daily_interval_seconds / time_ratio` | Randomly selects a few candidates from 200+ scenario pool for LLM; keeps most recent 100 |
+| Major Life Events | Per `life.json` `major_interval_seconds / time_ratio` | Concrete long-term events that trigger persona file updates |
+| Surprise Events | Independent low-probability channel | Default `0.01` probability per bot per day, overall cooldown default 365 days |
 
-### Event Deduplication and Life Profile
+### Event Deduplication & Life Profile
 
-- `event_policy.scenario_cooldown_days` and `major_scenario_cooldown_days` control same-type event cooldowns
-- `event_policy.llm_daily_candidate_limit` controls daily candidates given to LLM, default 12, avoiding flooding prompt with full 200+ pool
-- `daily_life_profile` describes Bot's city, commute, residence, work, interests, and event preferences; personality tags also affect candidate weights
+- `event_policy.scenario_cooldown_days` and `major_scenario_cooldown_days` control cooldown for similar events.
+- `event_policy.llm_daily_candidate_limit` controls how many daily candidates are sent to the LLM each time (default 12); the full 200+ scenario pool is never stuffed into the prompt.
+- `daily_life_profile` describes the bot's city, commute, living situation, work, interests, and event preferences; personality tags also influence candidate weights.
 
 ### Time Acceleration
 
-`time_ratio` controls Bot internal time flow speed:
+`time_ratio` controls how fast the bot's internal time flows:
 
-| time_ratio | Default daily check interval | Common effect | Use case |
-|------------|------------------------------|---------------|----------|
-| 1 | 86400 seconds | 1 real day = 1 Bot day | Normal experience (default) |
-| 24 | 3600 seconds | 1 real hour = 1 Bot day | Light acceleration |
-| 1440 | 60 seconds | 1 real minute = 1 Bot day | Observation/testing |
-| 3600 | 1 second | Extreme testing, constrained by 1-second polling minimum | Quick verification |
+| time_ratio | Default Daily Check Interval | Effect | Use Case |
+|------------|------------------------------|--------|----------|
+| 1 | 86400 seconds | Real 1 day = 1 bot day | Normal experience (default) |
+| 24 | 3600 seconds | Real 1 hour = 1 bot day | Mild acceleration |
+| 1440 | 60 seconds | Real 1 minute = 1 bot day | Observation/testing |
+| 3600 | 1 second | Ultra-fast testing, constrained by 1-second poll floor | Quick verification |
 
-LifeScheduler adapts polling interval between 1-10 seconds; single `tick_daily` advances at least 1 day, long offline or extremely high `time_ratio` backfills by elapsed time, max 365 days per single tick.
+LifeScheduler uses adaptive polling with intervals between 1-10 seconds; each `tick_daily` advances at least 1 day. Long offline periods or very high `time_ratio` values will catch up based on elapsed time, with a maximum of 365 days advanced per tick.
 
 ---
 
 ## Configuration
 
-### Config File Location
+### Configuration File Locations
 
 ```
 ~/.ai-companion/
@@ -285,7 +339,7 @@ LifeScheduler adapts polling interval between 1-10 seconds; single `tick_daily` 
 │   ├── models.yaml  # AI model config
 │   └── bots.yaml    # Bot list
 └── data/
-    └── bots/        # Bot config, memory, life_state/proactive_state
+    └── bots/        # Bot configs, memory, life_state/proactive_state
 ```
 
 ### models.yaml Example
@@ -337,6 +391,20 @@ memory:
   max_working_turns: 20
   hard_limit_chars: 5000
   soft_limit_chars: 3000
+
+skills:
+  image_generation:
+    enabled: true
+    auto: true
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-image-1"
+    api_key: "${OPENAI_API_KEY}"
+  image_understanding:
+    enabled: true
+    auto: true
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"
 ```
 
 ### Environment Variables
@@ -377,6 +445,13 @@ ai-companion gateway start
 
 To disable auto UI, set `START_UI=false` or `AI_COMPANION_START_UI=false`.
 
+### One-Click Update
+
+```bash
+ai-companion update       # Update code and dependencies, preserve local data
+ai-companion update --cn  # Use Tsinghua PyPI mirror
+```
+
 ### Built-in Commands
 
 In the conversation interface:
@@ -384,15 +459,21 @@ In the conversation interface:
 | Command | Description |
 |---------|-------------|
 | `/new` | Start new session |
-| `/memory` | View working memory, episodic memory, user facts, relationship state, and user understanding file paths |
+| `/memory` | View working memory, episodic memory, user facts, relationship state, user understanding file paths, and vector index count |
 | `/forget <key>` | Delete an auto user fact, sync removing `auto` projection from user understanding file |
 | `quit` | Exit |
+
+Maintenance commands:
+
+```bash
+ai-companion memory rebuild-vector [--bot <bot_id>]
+```
 
 ---
 
 ## Bot Initialization
 
-Repository provides three male and three female Bot personas as examples. See `docs/BOT_DESIGN_GUIDE.md`. You can also create your own Bot via `ai-companion setup` and configure in `data/bots/{bot_id}/persona/`.
+The repository provides three male and three female bot persona examples. See `docs/BOT_DESIGN_GUIDE.md`. You can also create your own bot via `ai-companion setup` and configure it in `data/bots/{bot_id}/persona/`.
 
 ---
 
@@ -402,7 +483,7 @@ Repository provides three male and three female Bot personas as examples. See `d
 data/bots/mybot/persona/
 ├── profile.json        # Basic profile (name, age, occupation, etc.)
 ├── backstory.json      # Life experiences
-├── values.json        # Values and bottom lines
+├── values.json         # Values and bottom lines
 ├── speaking_style.json # Speaking style
 ├── conversation_style_rules.json # Conversation style rules to reduce AI flavor
 ├── proactive.json      # Proactive messaging config
@@ -419,20 +500,14 @@ cp -r data/bots/_template data/bots/mybot
 
 ## Testing
 
-Project includes offline system test suite:
+Project includes an offline system test suite:
 
 ```bash
 # End-to-end system tests (config, model factory, memory, BotInstance, proactive, life trajectory, gateway, frontend build)
 python tests/system_test_suite.py
 ```
 
-Test reports written to `.artifacts/system-test-rebuilt-*/`, current suite covers 40+ core behaviors.
-
----
-
-## Installation
-
-For detailed installation instructions, see [Quick Start](#quick-start) above.
+Test reports are written to `.artifacts/system-test-rebuilt-*/`, current suite covers 40+ core behaviors.
 
 ---
 
@@ -509,11 +584,14 @@ A: `export MINIMAX_API_KEY="your_key"`
 **Q: Bot doesn't send proactive messages**
 A: Check `data/bots/{bot_id}/persona/proactive.json` `enabled`, `mode`, `platform.type` and platform sender config; messages won't count when platform sender isn't configured.
 
+**Q: Bot doesn't seem to know about its own proactive messages?**
+A: Proactive messages are written to Working / Daily memory with `assistant_initiated` / `proactive` / `proactive_kind` metadata. The next reply will automatically follow up on the proactive motivation and project it as "what the bot recently proactively did" via `self_memory`. If you still see old behavior, check `~/.ai-companion/logs/gateway.log`, `working.db` and `daily.db` for `metadata_json` to confirm it's not stale data or records from an older version.
+
 **Q: Vector embedding not working**
-A: Confirm `models.yaml` `memory.embedding: "local"` (sentence-transformers should be installed by default)
+A: Confirm `models.yaml` has `memory.embedding: "local"` (sentence-transformers should be installed by default), then run `ai-companion memory rebuild-vector --bot <bot_id>`. If clicking rebuild in the admin UI shows `TypeError: Failed to fetch`, the gateway usually hasn't restarted or CORS is blocked; run `ai-companion gateway restart` and refresh the page.
 
 **Q: How to reset memory?**
-A: Delete auto memory by clearing `~/.ai-companion/data/bots/{bot_id}/memory/*.db`. `manual` in `user_understanding.json` is user-written understanding, recommend not deleting directly unless you want to fully reset Bot's initialization understanding of user.
+A: Delete auto memory by clearing `~/.ai-companion/data/bots/{bot_id}/memory/*.db`. `manual` in `user_understanding.json` is user-written understanding; recommend not deleting directly unless you want to fully reset the bot's initialization understanding of the user.
 
 ---
 
@@ -525,6 +603,7 @@ A: Delete auto memory by clearing `~/.ai-companion/data/bots/{bot_id}/memory/*.d
 | [Bot Design Guide](./docs/BOT_DESIGN_GUIDE.md) | New Bot examples and self-built Bot methodology |
 | [Bot JSON Fields](./docs/BOT_JSON_FIELDS.md) | `profile.json` / `life.json` / `proactive.json` / state file field descriptions |
 | [Proactive Design](./docs/DESIGN_phase5_proactive.md) | Proactive messaging architecture and algorithm design |
+| [Human-Like Memory & Token Control Design](./docs/DESIGN_human_like_memory_token_architecture.md) | Memory hierarchy, conscious workspace, and context budget design |
 | [UI Design](./docs/ui/UI_DESIGN.md) | Admin UI design specifications |
 | [UI Spec](./docs/ui/UI_SPEC.md) | Admin UI feature list |
 
@@ -532,4 +611,24 @@ A: Delete auto memory by clearing `~/.ai-companion/data/bots/{bot_id}/memory/*.d
 
 ## License
 
-MIT
+This project is licensed under [BSL 1.1 (Business Source License)](./LICENSE).
+
+| Item | Details |
+|------|---------|
+| **Change Date** | 2031-05-17 |
+| **Change License** | Mulan Permissive Software License, Version 2 (MulanPSL-2) |
+
+### Allowed
+
+- Personal, non-commercial self-hosted use
+- Internal organizational use (including evaluation, testing, and development)
+- Modifying the code for non-commercial purposes
+- Contributing to the project via pull requests
+
+### Prohibited
+
+- Offering this project or its core functionality as a SaaS service to third parties
+- Building a hosted platform with similar functionality for paid use
+- Reselling or redistributing this project's functionality as a paid service
+
+The above restrictions automatically expire on the Change Date (2031-05-17), after which the project will be fully open-sourced under the MulanPSL-2 license.
