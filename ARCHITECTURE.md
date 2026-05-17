@@ -30,13 +30,13 @@
 **macOS / Linux：**
 
 ```bash
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Walker7143/ai-companion/master/install.sh | bash
 ```
 
 **Windows（PowerShell）：**
 
 ```powershell
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/install.ps1 | iex
 ```
 
 ### 2.2 安装脚本功能
@@ -354,8 +354,8 @@ should_refuse(request, personality, memory, relationship)
 ### 开发环境
 
 ```bash
-git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
-cd ai-girl-friend
+git clone git@github.com:Walker7143/ai-companion.git
+cd ai-companion
 python -m venv venv
 source venv/bin/activate  # macOS/Linux
 # venv\Scripts\activate   # Windows
@@ -375,7 +375,7 @@ docker-compose up
 
 ```powershell
 # 下载并运行安装脚本
-irm https://gitee.com/xxx/install.ps1 | iex
+irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install.ps1 | iex
 ```
 
 ---

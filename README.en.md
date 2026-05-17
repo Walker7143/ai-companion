@@ -38,15 +38,15 @@ Dependencies are automatically handled by the installation scripts and `ai-compa
 
 **macOS / Linux (China users):**
 ```bash
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-cn.sh | bash
 ```
 
 **Windows (China users):**
 ```powershell
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.ps1 -UseBasicParsing | iex
+irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-cn.ps1 -UseBasicParsing | iex
 ```
 
-**Overseas users** please visit [Gitee Release](https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/releases) to download the corresponding scripts.
+**Overseas users** please visit [GitHub Release](https://github.com/Walker7143/ai-companion/releases) to download the corresponding scripts.
 
 ### First-Time Configuration
 

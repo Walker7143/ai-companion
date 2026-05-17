@@ -38,15 +38,15 @@
 
 **macOS / Linux（国内用户）：**
 ```bash
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-cn.sh | bash
 ```
 
 **Windows（国内用户）：**
 ```powershell
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.ps1 -UseBasicParsing | iex
+irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-cn.ps1 -UseBasicParsing | iex
 ```
 
-**海外用户**请访问 [Gitee Release](https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/releases) 下载对应脚本。
+**海外用户**请访问 [GitHub Release](https://github.com/Walker7143/ai-companion/releases) 下载对应脚本。
 
 ### 首次配置
 

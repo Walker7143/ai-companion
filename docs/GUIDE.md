@@ -30,21 +30,21 @@
 **macOS / Linux：**
 ```bash
 # 自动检测 Docker 或本地安装
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install.sh | bash
 
 # 指定模式
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --docker  # Docker 模式
-curl -fsSL https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.sh | bash -s -- --local   # 本地模式
+curl -fsSL https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install.sh | bash -s -- --docker  # Docker 模式
+curl -fsSL https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install.sh | bash -s -- --local   # 本地模式
 ```
 
 **Windows：**
 ```powershell
 # 国内用户（推荐使用清华镜像，更快）
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-cn.ps1 -UseBasicParsing | iex
+irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-cn.ps1 -UseBasicParsing | iex
 .\scripts\install-cn.ps1
 
 # 海外用户（使用官方 PyPI）
-irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install-global.ps1 -UseBasicParsing | iex
+irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-global.ps1 -UseBasicParsing | iex
 .\scripts\install-global.ps1
 
 # Docker 模式
@@ -53,8 +53,8 @@ irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/insta
 
 **或克隆后本地安装：**
 ```bash
-git clone git@gitee.com:wang_xiao_wei_7143/ai-girl-friend.git
-cd ai-girl-friend
+git clone git@github.com:Walker7143/ai-companion.git
+cd ai-companion
 ./scripts/install.sh
 ```
 

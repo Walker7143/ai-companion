@@ -183,8 +183,8 @@ echo "📥 正在下载项目..."
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
-# Gitee 存档下载 URL
-ARCHIVE_URL="https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/repository/archive/master.tar.gz"
+# GitHub 存档下载 URL
+ARCHIVE_URL="https://github.com/Walker7143/ai-companion/archive/refs/heads/master.tar.gz"
 
 if command -v curl &> /dev/null; then
     curl -fsSL "$ARCHIVE_URL" -o "$TEMP_DIR/project.tar.gz" || {
@@ -208,7 +208,7 @@ tar -xzf "$TEMP_DIR/project.tar.gz" -C "$TEMP_DIR/extracted" || {
     exit 1
 }
 
-# 找到解压后的项目目录（Gitee 会创建一个带 commit hash 的子目录）
+# 找到解压后的项目目录（GitHub 会创建一个带 commit hash 的子目录）
 PROJECT_DIR=$(find "$TEMP_DIR/extracted" -mindepth 1 -maxdepth 1 -type d | head -1)
 
 if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/setup.py" ]; then

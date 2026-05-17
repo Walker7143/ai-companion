@@ -15,8 +15,8 @@ from typing import Iterable
 from urllib.request import urlopen
 
 
-DEFAULT_ARCHIVE_URL = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/repository/archive/master.tar.gz"
-MANAGED_SOURCE_DIR = Path.home() / ".ai-companion" / "source" / "ai-girl-friend"
+DEFAULT_ARCHIVE_URL = "https://github.com/Walker7143/ai-companion/archive/refs/heads/master.tar.gz"
+MANAGED_SOURCE_DIR = Path.home() / ".ai-companion" / "source" / "ai-companion"
 MANAGED_SOURCE_MARKER = ".ai-companion-managed-source"
 
 

@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 
 # AI Companion Installer
 # Usage:
-#   Online: irm https://gitee.com/wang_xiao_wei_7143/ai-girl-friend/raw/master/scripts/install.ps1 -UseBasicParsing -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
+#   Online: irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install.ps1 -UseBasicParsing -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
 #   Local: .\install.ps1
 #   Docker: .\install.ps1 -Docker
 
@@ -127,7 +127,7 @@ function Download-Project {
     }
 
     Write-Host "  Using Git clone..." -ForegroundColor Gray
-    $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1","https://gitee.com/wang_xiao_wei_7143/ai-girl-friend",$InstallDir -NoNewWindow -Wait -PassThru
+    $process = Start-Process -FilePath "git" -ArgumentList "clone","--depth","1","https://github.com/Walker7143/ai-companion",$InstallDir -NoNewWindow -Wait -PassThru
     if ($process.ExitCode -eq 0 -and (Test-Path $InstallDir)) {
         Write-Host "  [OK] Download complete" -ForegroundColor Green
         return $true
