@@ -172,6 +172,9 @@ class UserUnderstandingStore:
         "relationship_to_user",
         "relationship_level",
         "key_moment",
+        "用户身份信息",
+        "用户身份",
+        "identity",
     }
 
     def __init__(self, path: str | Path, max_value_chars: int = 4400):
@@ -986,7 +989,11 @@ class UserUnderstandingStore:
         data["facts"] = deepcopy(manual.get("facts", {}))
         for section in self.SECTIONS:
             data[section] = list(manual.get(section, []))
-        data["auto_facts"] = deepcopy(auto.get("facts", {}))
+        auto_facts = deepcopy(auto.get("facts", {}))
+        for key in list(auto_facts.keys()):
+            if key in self.INTERNAL_KEYS:
+                auto_facts.pop(key, None)
+        data["auto_facts"] = auto_facts
         return data
 
     def _append_unique(self, items: list[str], value: str, limit: int = 12):
