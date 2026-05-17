@@ -1868,71 +1868,54 @@ ai-companion skill list --runtime --json
 
 自动路由支持 `skills.<name>.auto=false`。关闭后，不会再因自然语言或媒体输入自动触发该能力，但 `/skill <name> ...` 显式调用仍然可用。
 
-### 9.2 查看已安装技能
+### 9.2 查看内置能力状态
+
+AI Companion 现在只保留与陪伴产品定位直接相关的内置能力：
+
+- `image_generation`：图片生成
+- `image_understanding`：图片理解
+- `tts`：语音合成
+
+命令行查看运行时状态：
 
 ```bash
 ai-companion skill list
 ai-companion skill list --json
 ```
 
-### 9.3 安装技能
-
-```bash
-# 从本地安装
-ai-companion skill install ./my-skill
-
-# 从 URL 安装
-ai-companion skill install https://example.com/skill.zip
-
-# 覆盖同名技能
-ai-companion skill install ./my-skill --force
-```
-
-### 9.4 卸载技能
-
-```bash
-ai-companion skill uninstall my-skill
-```
-
-### 9.5 执行技能
-
-命令行直接执行：
-
-```bash
-ai-companion skill run my-skill '{"text":"你好"}'
-ai-companion skill run my-skill text=你好
-```
-
-对话中显式执行：
+对话中查看同一份状态：
 
 ```text
 /skills
-/skill my-skill {"text":"你好"}
-/skill my-skill 你好
-帮我安装 skill ./my-skill
-查看技能列表
 ```
 
-### 9.6 技能包结构
+输出会包含 `enabled`、`auto`、`available`、`provider`、`model` 和 `reason`。
 
-```
-skill-my-skill/
-├── skill.json      # 元数据
-└── my_skill.py     # 入口文件
-```
+### 9.3 显式调用内置能力
 
-**skill.json 示例**：
-```json
-{
-  "name": "my-skill",
-  "version": "1.0.0",
-  "description": "我的自定义技能",
-  "entry": "my_skill.py",
-  "commands": ["/mycommand"]
-}
+命令行调用：
+
+```bash
+ai-companion skill run image_generation "一张午后街景"
+ai-companion skill run image_understanding '{"media_urls":["/tmp/demo.jpg"],"prompt":"这张图里有什么？"}'
+ai-companion skill run tts "你好，今天也辛苦啦"
 ```
 
-默认技能目录位于 `~/.ai-companion/data/bots/_skills/`。旧版项目目录 `data/bots/_skills/` 中的技能会在默认运行时迁移到用户目录；设置 `AI_COMPANION_HOME` 时只使用该 home 下的数据，便于测试和多实例隔离。
+对话中显式调用：
+
+```text
+/skill image_generation 一张海边日落
+/skill image_understanding {"media_urls":["/tmp/demo.jpg"],"prompt":"描述这张图"}
+/skill tts 你好，今天也辛苦啦
+```
+
+自然语言自动路由只用于内置多模态能力。例如，图片消息会在 `image_understanding.auto=true` 且能力可用时先进入图片理解；画图请求会在 `image_generation.auto=true` 且能力可用时触发图片生成。
+
+### 9.4 已移除的旧扩展平台
+
+旧版的外部能力安装、卸载、创建和 registry 入口已经移除。现在项目只保留内置多媒体能力与对应的显式调用方式，不再维护通用插件市场。
+
+对话中的“帮我安装 skill ...”也不会再修改本地能力目录，而是按普通聊天处理。能力扩展应优先落到项目内置能力层或 MCP / 平台适配层。
 
 ---
 

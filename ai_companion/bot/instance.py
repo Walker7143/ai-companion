@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import json
 import logging
 import re
 import uuid
@@ -31,7 +30,7 @@ from ..proactive.closeout_analyzer import CloseoutAnalyzer
 from ..proactive.deferred_detector import DeferredReplyDetector
 from ..proactive.motives import ConversationTask, ConversationTaskStatus, ConversationTaskType
 from ..proactive.orchestrator import ProactiveOrchestrator
-from ..skill import SkillDispatcher, SkillRegistry, MultimodalSender, create_channel, BuiltinSkillManager
+from ..skill import SkillDispatcher, MultimodalSender, create_channel, BuiltinSkillManager
 from ..skill.base import SkillContext
 from ..skill.capability_resolver import build_capability_statuses, resolve_skill_config
 from ..skill.auto_router import AutoSkillRouter
@@ -39,7 +38,6 @@ from ..skill.command import (
     contains_sensitive_token,
     execute_skill_command,
     is_skill_command,
-    is_skill_management_command,
     redact_sensitive_tokens,
 )
 from ..temporal_guard import (
@@ -172,48 +170,17 @@ class BotInstance:
         # ── 技能系统 ─────────────────────────────────────
         self.skill_dispatcher = SkillDispatcher()
         self._register_skills()
-        self.auto_skill_router = AutoSkillRouter(
-            self.skill_dispatcher,
-            installed_skill_planner=self._plan_installed_skill_route,
-        )
+        self.auto_skill_router = AutoSkillRouter(self.skill_dispatcher)
 
         self.multimodal_sender: Optional[MultimodalSender] = None
         self._channel = None
         self.response_polisher = ResponseStylePolisher()
 
     def _register_skills(self):
-        """注册可用技能（内置 + 已安装的）"""
+        """Register built-in companion capabilities."""
         builtin_manager = BuiltinSkillManager(self.skill_dispatcher)
         resolved_skill_config = resolve_skill_config({}, self.skill_config)
         self._capability_statuses = builtin_manager.register(resolved_skill_config, self._capability_statuses)
-
-        # 从注册中心加载已安装的 Skills
-        self.skill_registry = SkillRegistry()
-        for skill_info in self.skill_registry.list_installed():
-            if skill_info.get("enabled", True):
-                skill = self.skill_registry.load_skill(skill_info["name"])
-                if skill:
-                    self.skill_dispatcher.register(skill)
-                    logger.info(f"[BotInstance] 加载已安装技能: {skill_info['name']}")
-                    self._capability_statuses[skill.name] = {
-                        "name": skill.name,
-                        "source": "installed",
-                        "enabled": True,
-                        "auto": bool(skill_info.get("auto", False)),
-                        "registered": True,
-                        "available": bool(skill.is_available()),
-                        "reason": "" if skill.is_available() else "unavailable_runtime_check",
-                        "provider": "",
-                        "model": getattr(skill, "default_model", "") or "",
-                        "description": getattr(skill, "description", "") or str(skill_info.get("description", "") or ""),
-                        "capabilities": list(getattr(skill, "capabilities", []) or []),
-                        "routing_keywords": (
-                            list(skill_info.get("routing_keywords", []))
-                            if isinstance(skill_info.get("routing_keywords"), list)
-                            else []
-                        ),
-                        "confidence_threshold": float(skill_info.get("confidence_threshold", 0.72) or 0.72),
-                    }
 
     def _detect_personality_type(self) -> str:
         """检测性格类型"""
@@ -784,11 +751,6 @@ class BotInstance:
             )
             if cancelled:
                 logger.info("[BotInstance] 用户回来，自动取消 %d 个待执行任务 session=%s", cancelled, _session_id)
-
-        if is_skill_management_command(user_input):
-            response = await self._handle_skill_command(user_input)
-            self._record_skill_command_history(user_input, response)
-            return response
 
         document_context_suffix, document_user_hint, document_memory_text = self._prepare_document_context(
             user_input,
@@ -1542,81 +1504,6 @@ class BotInstance:
             personality_tags=self.persona.profile.get("personality_tags", []) if self.persona else [],
         )
 
-    async def _plan_installed_skill_route(
-        self,
-        user_text: str,
-        candidates: list[dict],
-        context: SkillContext,
-    ) -> dict | None:
-        if not self.model or not user_text.strip() or not candidates:
-            return None
-
-        candidate_lines: list[str] = []
-        for idx, candidate in enumerate(candidates, start=1):
-            caps = candidate.get("capabilities") if isinstance(candidate.get("capabilities"), list) else []
-            keywords = candidate.get("keywords") if isinstance(candidate.get("keywords"), list) else []
-            candidate_lines.append(
-                f"{idx}. name={candidate.get('name')}, "
-                f"description={str(candidate.get('description', '')).strip() or '-'}, "
-                f"capabilities={','.join(str(item) for item in caps) or '-'}, "
-                f"keywords={','.join(str(item) for item in keywords) or '-'}"
-            )
-
-        planner_prompt = (
-            "你是技能路由器。请从候选技能中选择最匹配用户请求的一个，或返回 none。\n"
-            "必须只输出 JSON：{\"skill\":\"...|none\",\"confidence\":0~1,\"params\":{...}}。\n"
-            "规则：\n"
-            "1) 只在技能明确更适合时选择；不确定返回 none。\n"
-            "2) confidence 表示把握度；低于 0.72 视为不触发。\n"
-            "3) params 仅放技能需要的关键参数；否则给空对象。\n"
-            "4) 不要解释，不要 markdown。"
-        )
-        planner_input = (
-            "候选技能：\n"
-            + "\n".join(candidate_lines)
-            + "\n\n用户请求：\n"
-            + user_text
-        )
-
-        try:
-            raw = await self.model.chat(
-                messages=[{"role": "user", "content": planner_input}],
-                system_prompt=planner_prompt,
-                temperature=0.1,
-                max_tokens=280,
-            )
-        except Exception as exc:
-            logger.debug("[BotInstance] installed skill planner failed: %s", exc)
-            return None
-
-        plan = self._extract_json_object(raw)
-        if not isinstance(plan, dict):
-            return None
-        skill_name = str(plan.get("skill", "") or "").strip()
-        if skill_name.lower() in {"none", "null", "no"}:
-            return None
-        plan["skill"] = skill_name
-        return plan
-
-    def _extract_json_object(self, text: str) -> dict | None:
-        raw = str(text or "").strip()
-        if not raw:
-            return None
-        try:
-            data = json.loads(raw)
-            return data if isinstance(data, dict) else None
-        except json.JSONDecodeError:
-            pass
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start == -1 or end <= start:
-            return None
-        try:
-            data = json.loads(raw[start:end + 1])
-            return data if isinstance(data, dict) else None
-        except json.JSONDecodeError:
-            return None
-
     def _merge_memory_suffix(self, original_suffix: str | None, extra_suffix: str) -> str:
         base = (original_suffix or "").strip()
         extra = (extra_suffix or "").strip()
@@ -1790,7 +1677,6 @@ class BotInstance:
             self.skill_dispatcher,
             user_input,
             context,
-            self.skill_registry,
             capabilities=self.get_skill_capabilities(),
         )
 

@@ -7,8 +7,6 @@ Skill 模块 - 技能系统
 
 from .base import Skill, SkillContext, SkillResult, SkillInfo
 from .dispatcher import SkillDispatcher
-from .registry import SkillRegistry
-from .installer import SkillInstaller
 from .image_generation import ImageGenerationSkill
 from .image_understanding import ImageUnderstandingSkill
 from .tts import TTSSkill
@@ -30,8 +28,6 @@ __all__ = [
     "SkillResult",
     "SkillInfo",
     "SkillDispatcher",
-    "SkillRegistry",
-    "SkillInstaller",
     "ImageGenerationSkill",
     "ImageUnderstandingSkill",
     "TTSSkill",

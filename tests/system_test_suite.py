@@ -194,8 +194,8 @@ class SystemTestSuite:
         self._run_case("T02", "CLI status", self.case_cli_status)
         self._run_case("T03", "CLI bot list", self.case_cli_bot_list)
         self._run_case("T03b", "Skill CLI mounted", self.case_skill_cli_mounted)
-        self._run_case("T03c", "Skill registry install and command execution", self.case_skill_registry_and_command)
-        self._run_case("T03d", "Bot natural-language skill management", self.case_bot_natural_language_skill_management)
+        self._run_case("T03c", "Built-in skill command execution", self.case_builtin_skill_command)
+        self._run_case("T03d", "Bot ignores natural-language skill install", self.case_bot_natural_language_skill_management_removed)
         self._run_case("T04", "Config loader", self.case_config_loader)
         self._run_case("T05", "ModelFactory provider registry", self.case_model_factory_registry)
         self._run_case("T05b", "MiMo adapter OpenAI-compatible request", self.case_mimo_adapter_request_contract)
@@ -374,350 +374,54 @@ class SystemTestSuite:
         detail = "skill CLI mounted" if passed else "skill CLI unavailable"
         return passed, detail, self._fmt_cmd_output(cmd, rc, out, err, to)
 
-    def case_skill_registry_and_command(self) -> tuple[bool, str, str]:
-        from ai_companion.skill.command import (
-            contains_sensitive_token,
-            execute_skill_command,
-            parse_skill_management_command,
-            redact_sensitive_tokens,
-        )
-        from ai_companion.skill.installer import SkillInstaller
-        from ai_companion.skill.registry import SkillRegistry
+    def case_builtin_skill_command(self) -> tuple[bool, str, str]:
+        from ai_companion.skill.command import contains_sensitive_token, execute_skill_command, redact_sensitive_tokens
         from ai_companion.skill.dispatcher import SkillDispatcher
-        from ai_companion.skill.base import SkillContext
+        from ai_companion.skill.base import Skill, SkillContext, SkillResult
 
-        async def run_command(dispatcher: SkillDispatcher) -> str:
+        class EchoSkill(Skill):
+            name = "echo"
+            description = "Echo test"
+            capabilities = ["echo"]
+
+            async def execute(self, params: dict, context: SkillContext) -> SkillResult:
+                return SkillResult(success=True, content=params.get("message") or params.get("input") or "empty")
+
+        async def run_command() -> str:
+            dispatcher = SkillDispatcher()
+            dispatcher.register(EchoSkill())
             return await execute_skill_command(
                 dispatcher,
                 "/skill echo {\"message\":\"hi\"}",
                 SkillContext(bot_id="test", user_id="user", conversation_history=[], personality_tags=[]),
             )
 
-        with tempfile.TemporaryDirectory(prefix="sys-test-skill-") as td:
-            root = Path(td)
-            registry = SkillRegistry(root / "installed")
-            source = root / "skill-echo"
-            source.mkdir()
-            (source / "skill.json").write_text(
-                json.dumps(
-                    {
-                        "name": "echo",
-                        "version": "1.0.0",
-                        "description": "Echo test",
-                        "entry": "echo_skill.py",
-                        "enabled": True,
-                        "requirements": [],
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-            (source / "echo_skill.py").write_text(
-                "\n".join(
-                    [
-                        "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
-                        "class EchoSkill(Skill):",
-                        "    name = 'echo'",
-                        "    description = 'Echo test'",
-                        "    capabilities = ['echo']",
-                        "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
-                        "        return SkillResult(success=True, content=params.get('message') or params.get('input') or 'empty')",
-                    ]
-                ),
-                encoding="utf-8",
-            )
+        command_output = asyncio.run(run_command())
+        secret_text = "????? sk-cp-" + ("A" * 32)
+        secret_ok = contains_sensitive_token(secret_text) and "sk-cp-" not in redact_sensitive_tokens(secret_text)
+        passed = command_output == "hi" and secret_ok
+        detail = f"command_output={command_output!r} secret_redact={secret_ok}"
+        return passed, detail, json.dumps({"command_output": command_output, "secret_ok": secret_ok}, ensure_ascii=False)
 
-            installed = registry.register_skill(source)
-            skill = registry.load_skill("echo")
-            dispatcher = SkillDispatcher()
-            if skill:
-                dispatcher.register(skill)
-            command_output = asyncio.run(run_command(dispatcher)) if skill else ""
-
-            bad = root / "skill-bad"
-            bad.mkdir()
-            (bad / "skill.json").write_text(
-                json.dumps({"name": "bad", "version": "1.0.0", "entry": "../escape.py"}),
-                encoding="utf-8",
-            )
-            rejected = registry.register_skill(bad) is None
-
-            instruction_source = root / "skill-mmx-cli"
-            instruction_source.mkdir()
-            (instruction_source / "SKILL.md").write_text(
-                "\n".join(
-                    [
-                        "---",
-                        "name: mmx-cli",
-                        "description: Use mmx via MiniMax.",
-                        "---",
-                        "# MiniMax CLI",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            instruction_installed = registry.register_skill(instruction_source)
-            instruction_skill = registry.load_skill("mmx-cli")
-            nested_source = root / "repo-with-nested-skill"
-            nested_skill = nested_source / "skill"
-            nested_skill.mkdir(parents=True)
-            (nested_skill / "SKILL.md").write_text(
-                "\n".join(
-                    [
-                        "---",
-                        "name: nested-md",
-                        "description: Nested SKILL.md import.",
-                        "---",
-                        "# Nested",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            nested_registry = SkillRegistry(root / "nested-installed")
-            nested_installed = SkillInstaller(nested_registry).install_from_path(nested_source)
-
-            github_parsed = parse_skill_management_command("/skill GitHub - MiniMax-AI/cli: Generate text")
-            github_ok = github_parsed == ("install", {"source": "https://github.com/MiniMax-AI/cli.git", "force": False})
-            windows_path = r"D:\data\个人\ai-girl-friend\.artifacts\system-test\skill-natural\skill-mmx-cli"
-            windows_natural_parsed = parse_skill_management_command(f"帮我安装 skill {windows_path}")
-            windows_explicit_parsed = parse_skill_management_command(f"/skill install {windows_path} --force")
-            windows_path_ok = windows_natural_parsed == ("install", {"source": windows_path, "force": False})
-            windows_explicit_ok = windows_explicit_parsed == ("install", {"force": True, "source": windows_path})
-            secret_text = "帮我安装 skill ./demo 我的密钥是 sk-cp-" + ("A" * 32)
-            secret_ok = contains_sensitive_token(secret_text) and "sk-cp-" not in redact_sensitive_tokens(secret_text)
-
-            passed = (
-                bool(installed)
-                and bool(skill)
-                and command_output == "hi"
-                and rejected
-                and bool(instruction_installed)
-                and bool(instruction_skill)
-                and instruction_skill.get_capabilities() == ["instruction"]
-                and bool(nested_installed)
-                and github_ok
-                and windows_path_ok
-                and windows_explicit_ok
-                and secret_ok
-            )
-            detail = (
-                f"installed={bool(installed)} loaded={bool(skill)} rejected_bad_entry={rejected} "
-                f"instruction={bool(instruction_skill)} nested={bool(nested_installed)} "
-                f"github_parse={github_ok} win_path={windows_path_ok and windows_explicit_ok} "
-                f"secret_redact={secret_ok}"
-            )
-            log = json.dumps(
-                {
-                    "installed": installed,
-                    "command_output": command_output,
-                    "installed_dir": str(registry.skills_dir),
-                    "bad_rejected": rejected,
-                    "instruction_installed": instruction_installed,
-                    "instruction_skill_name": getattr(instruction_skill, "name", None),
-                    "nested_installed": nested_installed,
-                    "github_parsed": github_parsed,
-                    "windows_natural_parsed": windows_natural_parsed,
-                    "windows_explicit_parsed": windows_explicit_parsed,
-                    "windows_path_ok": windows_path_ok,
-                    "windows_explicit_ok": windows_explicit_ok,
-                    "secret_ok": secret_ok,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            return passed, detail, log
-
-    async def case_bot_natural_language_skill_management(self) -> tuple[bool, str, str]:
+    async def case_bot_natural_language_skill_management_removed(self) -> tuple[bool, str, str]:
         from ai_companion.bot.instance import BotInstance
 
-        skill_root = self.artifacts_dir / "skill-natural"
-        skill_home = self.artifacts_dir / "skill-natural-home"
-        source = skill_root / "skill-natural"
-        source.mkdir(parents=True, exist_ok=True)
-        (source / "skill.json").write_text(
-            json.dumps(
-                {
-                    "name": "natural",
-                    "version": "1.0.0",
-                    "description": "Natural install test",
-                    "entry": "natural_skill.py",
-                    "enabled": True,
-                    "requirements": [],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        (source / "natural_skill.py").write_text(
-            "\n".join(
-                [
-                    "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
-                    "class NaturalSkill(Skill):",
-                    "    name = 'natural'",
-                    "    description = 'Natural install test'",
-                    "    capabilities = ['natural']",
-                    "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
-                    "        return SkillResult(success=True, content='natural-ok')",
-                ]
-            ),
-            encoding="utf-8",
-        )
-
-        leaky_source = skill_root / "skill-leaky"
-        leaky_source.mkdir(parents=True, exist_ok=True)
-        (leaky_source / "skill.json").write_text(
-            json.dumps(
-                {
-                    "name": "leaky",
-                    "version": "1.0.0",
-                    "description": "Leaky install test",
-                    "entry": "leaky_skill.py",
-                    "enabled": True,
-                    "requirements": [],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        (leaky_source / "leaky_skill.py").write_text(
-            "\n".join(
-                [
-                    "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
-                    "class LeakySkill(Skill):",
-                    "    name = 'leaky'",
-                    "    description = 'Leaky install test'",
-                    "    capabilities = ['leaky']",
-                    "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
-                    "        return SkillResult(success=True, content='leaky-ok')",
-                ]
-            ),
-            encoding="utf-8",
-        )
-
-        configured_source = skill_root / "skill-configured"
-        configured_source.mkdir(parents=True, exist_ok=True)
-        (configured_source / "skill.json").write_text(
-            json.dumps(
-                {
-                    "name": "configured",
-                    "version": "1.0.0",
-                    "description": "Configured install test",
-                    "entry": "configured_skill.py",
-                    "enabled": True,
-                    "requirements": [],
-                },
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        (configured_source / "configured_skill.py").write_text(
-            "\n".join(
-                [
-                    "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
-                    "class ConfiguredSkill(Skill):",
-                    "    name = 'configured'",
-                    "    description = 'Configured install test'",
-                    "    capabilities = ['configured']",
-                    "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
-                    "        return SkillResult(success=True, content='has-key' if self.config.get('api_key') else 'missing-key')",
-                ]
-            ),
-            encoding="utf-8",
-        )
-
-        minimax_source = skill_root / "skill-mmx-cli"
-        minimax_source.mkdir(parents=True, exist_ok=True)
-        (minimax_source / "SKILL.md").write_text(
-            "\n".join(
-                [
-                    "---",
-                    "name: mmx-cli",
-                    "description: Use mmx via MiniMax.",
-                    "---",
-                    "# MiniMax CLI",
-                ]
-            ),
-            encoding="utf-8",
-        )
-
-        old_home = os.environ.get("AI_COMPANION_HOME")
-        old_mmx_home = os.environ.get("MMX_CONFIG_HOME")
-        os.environ["AI_COMPANION_HOME"] = str(skill_home)
-        os.environ["MMX_CONFIG_HOME"] = str(skill_home / "mmx")
         bot = BotInstance(
-            {"id": "aiyue", "name": "爱月", "description": "", "data_dir": str(self.root / "data" / "bots")},
+            {"id": "aiyue", "name": "???", "description": "", "data_dir": str(self.root / "data" / "bots")},
             model=FakeModel(),
             memory_config=None,
             refusal_enabled=True,
         )
         try:
             await bot.init(start_schedulers=False)
-            before = await bot.handle_message("/skill natural")
-            install_reply = await bot.handle_message(f"帮我安装 skill {source}")
-            run_reply = await bot.handle_message("/skill natural")
-            list_reply = await bot.handle_message("查看技能列表")
-            leaky_reply = await bot.handle_message(f"帮我安装 skill {leaky_source} 我的密钥是 sk-cp-{'A' * 32}")
-            leaky_run = await bot.handle_message("/skill leaky")
-            configured_reply = await bot.handle_message(f"帮我安装 skill {configured_source} 我的密钥是 sk-cp-{'B' * 32}")
-            configured_run = await bot.handle_message("/skill configured")
-            minimax_reply = await bot.handle_message(f"/skill install {minimax_source} --force 我的密钥是 sk-cp-{'C' * 32}")
-            minimax_run = await bot.handle_message("/skill mmx-cli")
-            history_text = "\n".join(item.get("content", "") for item in bot.conversation_history)
-            configured_secrets = skill_home / "data" / "bots" / "_skills" / "skill-configured" / ".skill-secrets.json"
-            minimax_secrets = skill_home / "data" / "bots" / "_skills" / "skill-mmx-cli" / ".skill-secrets.json"
-            minimax_cli_config = skill_home / "mmx" / "config.json"
-            passed = (
-                "Skill Error" in before
-                and "技能已安装：natural" in install_reply
-                and run_reply == "natural-ok"
-                and "natural" in list_reply
-                and "技能已安装：leaky" in leaky_reply
-                and leaky_run == "leaky-ok"
-                and "已保存该技能需要的密钥配置" in configured_reply
-                and configured_run == "has-key"
-                and configured_secrets.exists()
-                and "技能已安装：mmx-cli" in minimax_reply
-                and "指令型技能已安装：mmx-cli" in minimax_run
-                and minimax_secrets.exists()
-                and minimax_cli_config.exists()
-                and "sk-cp-" not in history_text
-            )
-            detail = (
-                f"installed={'技能已安装：natural' in install_reply} run={run_reply} "
-                f"secret_install={'技能已安装：leaky' in leaky_reply} configured={configured_run}"
-            )
-            log = json.dumps(
-                {
-                    "before": before,
-                    "install_reply": install_reply,
-                    "run_reply": run_reply,
-                    "list_reply": list_reply,
-                    "leaky_reply": leaky_reply,
-                    "leaky_run": leaky_run,
-                    "configured_reply": configured_reply,
-                    "configured_run": configured_run,
-                    "configured_secrets_exists": configured_secrets.exists(),
-                    "minimax_reply": minimax_reply,
-                    "minimax_run": minimax_run,
-                    "minimax_secrets_exists": minimax_secrets.exists(),
-                    "minimax_cli_config_exists": minimax_cli_config.exists(),
-                    "history_contains_secret": "sk-cp-" in history_text,
-                    "home": str(skill_home),
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
+            install_reply = await bot.handle_message("???? skill ./demo")
+            list_reply = await bot.handle_message("/skills")
+            passed = "Skill Error" not in install_reply and "image_generation" in list_reply
+            detail = f"install_reply={install_reply[:40]!r} list_has_builtin={'image_generation' in list_reply}"
+            log = json.dumps({"install_reply": install_reply, "list_reply": list_reply}, ensure_ascii=False, indent=2)
             return passed, detail, log
         finally:
             await bot.close()
-            if old_home is None:
-                os.environ.pop("AI_COMPANION_HOME", None)
-            else:
-                os.environ["AI_COMPANION_HOME"] = old_home
-            if old_mmx_home is None:
-                os.environ.pop("MMX_CONFIG_HOME", None)
-            else:
-                os.environ["MMX_CONFIG_HOME"] = old_mmx_home
 
     def case_config_loader(self) -> tuple[bool, str, str]:
         from ai_companion.config.loader import Config

@@ -1,9 +1,0 @@
-{
-  "name": "hello",
-  "version": "1.0.0",
-  "description": "测试技能",
-  "author": "test",
-  "entry": "hello_skill.py",
-  "enabled": true,
-  "requirements": []
-}

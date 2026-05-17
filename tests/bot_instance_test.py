@@ -1329,61 +1329,22 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
         finally:
             await bot.close()
 
-    async def test_runtime_skills_view_includes_builtin_and_installed(self):
-        with TemporaryDirectory(prefix="cap-skill-home-") as td:
-            previous_home = os.environ.get("AI_COMPANION_HOME")
-            os.environ["AI_COMPANION_HOME"] = td
-            try:
-                skill_dir = Path(td) / "data" / "bots" / "_skills" / "skill-hello"
-                skill_dir.mkdir(parents=True, exist_ok=True)
-                (skill_dir / "skill.json").write_text(
-                    json.dumps(
-                        {
-                            "name": "hello",
-                            "version": "1.0.0",
-                            "description": "测试技能",
-                            "entry": "hello_skill.py",
-                            "enabled": True,
-                            "requirements": [],
-                        },
-                        ensure_ascii=False,
-                    ),
-                    encoding="utf-8",
-                )
-                (skill_dir / "hello_skill.py").write_text(
-                    "\n".join(
-                        [
-                            "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
-                            "class HelloSkill(Skill):",
-                            "    name = 'hello'",
-                            "    description = '测试技能'",
-                            "    capabilities = ['hello']",
-                            "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
-                            "        return SkillResult(success=True, content='hi')",
-                        ]
-                    ),
-                    encoding="utf-8",
-                )
-
-                bot = BotInstance({"id": "shen_nian", "name": "沈念", "skills": {}}, model=None, memory_config=None)
-                try:
-                    output = await execute_skill_command(
-                        bot.skill_dispatcher,
-                        "/skills",
-                        SkillContext(bot_id="shen_nian", user_id="u", conversation_history=[], personality_tags=[]),
-                        bot.skill_registry,
-                        capabilities=bot.get_skill_capabilities(),
-                    )
-                    self.assertIn("运行时能力", output)
-                    self.assertIn("image_generation", output)
-                    self.assertIn("hello", output)
-                finally:
-                    await bot.close()
-            finally:
-                if previous_home is None:
-                    os.environ.pop("AI_COMPANION_HOME", None)
-                else:
-                    os.environ["AI_COMPANION_HOME"] = previous_home
+    async def test_runtime_skills_view_includes_builtin_only(self):
+        bot = BotInstance({"id": "shen_nian", "name": "???", "skills": {}}, model=None, memory_config=None)
+        try:
+            output = await execute_skill_command(
+                bot.skill_dispatcher,
+                "/skills",
+                SkillContext(bot_id="shen_nian", user_id="u", conversation_history=[], personality_tags=[]),
+                capabilities=bot.get_skill_capabilities(),
+            )
+            self.assertIn("image_generation", output)
+            self.assertIn("image_generation", output)
+            self.assertIn("image_understanding", output)
+            self.assertIn("tts", output)
+            self.assertNotIn("hello", output)
+        finally:
+            await bot.close()
 
     async def test_image_skills_accept_simple_three_field_config(self):
         bot = BotInstance(
@@ -1552,59 +1513,17 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
-    async def test_installed_skill_auto_route_via_natural_text(self):
-        with TemporaryDirectory(prefix="cap-skill-home-") as td:
-            previous_home = os.environ.get("AI_COMPANION_HOME")
-            os.environ["AI_COMPANION_HOME"] = td
-            try:
-                skill_dir = Path(td) / "data" / "bots" / "_skills" / "skill-knowledge_lookup"
-                skill_dir.mkdir(parents=True, exist_ok=True)
-                (skill_dir / "skill.json").write_text(
-                    json.dumps(
-                        {
-                            "name": "knowledge_lookup",
-                            "version": "1.0.0",
-                            "description": "知识检索",
-                            "entry": "lookup_skill.py",
-                            "enabled": True,
-                            "auto": True,
-                            "routing_keywords": ["查一下", "汇率"],
-                            "confidence_threshold": 0.72,
-                            "requirements": [],
-                        },
-                        ensure_ascii=False,
-                    ),
-                    encoding="utf-8",
-                )
-                (skill_dir / "lookup_skill.py").write_text(
-                    "\n".join(
-                        [
-                            "from ai_companion.skill.base import Skill, SkillContext, SkillResult",
-                            "class LookupSkill(Skill):",
-                            "    name = 'knowledge_lookup'",
-                            "    description = '知识检索'",
-                            "    capabilities = ['lookup']",
-                            "    async def execute(self, params: dict, context: SkillContext) -> SkillResult:",
-                            "        return SkillResult(success=True, content='lookup-result')",
-                        ]
-                    ),
-                    encoding="utf-8",
-                )
+    async def test_external_skill_auto_route_is_removed(self):
+        bot = BotInstance({"id": "shen_nian", "name": "???", "skills": {}}, model=EchoModel(), memory_config=None)
+        try:
+            bot._initialized = True
+            bot._schedulers_started = True
+            response = await bot.handle_message("?????????????????")
+        finally:
+            await bot.close()
 
-                bot = BotInstance({"id": "shen_nian", "name": "沈念", "skills": {}}, model=EchoModel(), memory_config=None)
-                try:
-                    bot._initialized = True
-                    bot._schedulers_started = True
-                    response = await bot.handle_message("帮我查一下今天美元汇率")
-                finally:
-                    await bot.close()
+        self.assertEqual(response, "ok")
 
-                self.assertEqual(response, "lookup-result")
-            finally:
-                if previous_home is None:
-                    os.environ.pop("AI_COMPANION_HOME", None)
-                else:
-                    os.environ["AI_COMPANION_HOME"] = previous_home
 
 
 if __name__ == "__main__":

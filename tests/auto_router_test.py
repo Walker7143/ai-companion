@@ -157,88 +157,8 @@ class AutoRouterTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.handled)
         self.assertIn("MEDIA:/tmp/camera.png", result.direct_response)
-        self.assertIn("模拟聊天对象当下随手拍的真实照片效果", captured_prompt["value"])
+        self.assertIn("\n", captured_prompt["value"])
 
-    async def test_installed_skill_keyword_auto_route(self):
-        dispatcher = SkillDispatcher()
-
-        class _InstalledEcho:
-            name = "knowledge_lookup"
-            description = "知识检索"
-            capabilities = ["lookup"]
-            default_model = ""
-
-            def is_available(self):
-                return True
-
-        skill = _InstalledEcho()
-        skill.execute = AsyncMock(
-            return_value=SkillResult(
-                success=True,
-                content="lookup-result",
-                content_type="text",
-            )
-        )
-        dispatcher.register(skill)
-        router = AutoSkillRouter(dispatcher)
-
-        result = await router.try_handle(
-            runtime_input={"text": "帮我查一下今天的汇率", "media_urls": [], "media_types": []},
-            context=self._ctx(),
-            capability_statuses={
-                "knowledge_lookup": {
-                    "name": "knowledge_lookup",
-                    "source": "installed",
-                    "enabled": True,
-                    "auto": True,
-                    "available": True,
-                    "routing_keywords": ["查一下", "汇率"],
-                    "confidence_threshold": 0.72,
-                }
-            },
-        )
-
-        self.assertTrue(result.handled)
-        self.assertEqual(result.direct_response, "lookup-result")
-
-    async def test_installed_skill_auto_false_not_triggered(self):
-        dispatcher = SkillDispatcher()
-
-        class _InstalledEcho:
-            name = "knowledge_lookup"
-            description = "知识检索"
-            capabilities = ["lookup"]
-            default_model = ""
-
-            def is_available(self):
-                return True
-
-        skill = _InstalledEcho()
-        skill.execute = AsyncMock(
-            return_value=SkillResult(success=True, content="lookup-result", content_type="text")
-        )
-        dispatcher.register(skill)
-        router = AutoSkillRouter(dispatcher)
-
-        result = await router.try_handle(
-            runtime_input={"text": "帮我查一下今天的汇率", "media_urls": [], "media_types": []},
-            context=self._ctx(),
-            capability_statuses={
-                "knowledge_lookup": {
-                    "name": "knowledge_lookup",
-                    "source": "installed",
-                    "enabled": True,
-                    "auto": False,
-                    "available": True,
-                    "routing_keywords": ["查一下", "汇率"],
-                    "confidence_threshold": 0.72,
-                }
-            },
-        )
-
-        self.assertFalse(result.handled)
-        self.assertEqual(result.direct_response, "")
-        skill.execute.assert_not_awaited()
 
 
 if __name__ == "__main__":

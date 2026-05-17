@@ -15,7 +15,7 @@
 | **Token 预算控制** | 各层记忆按意图分块进入 prompt，并输出调试诊断，方便观察 token 消耗 |
 | **关系进化** | 根据互动深度，Bot 行为会逐渐变化（陌生网友 → 恋人） |
 | **性格推断拒绝** | 基于性格判断该不该回答，不是简单的关键词过滤 |
-| **多媒体技能** | 支持图片生成、语音合成 |
+| **多媒体能力** | 支持图片生成、图片理解、语音合成 |
 | **多平台网关** | 本地 CLI / 飞书 / Webhook，多种消息发送方式 |
 
 ---
@@ -111,11 +111,12 @@ ai_companion/
 ├── context/          # 上下文管理
 │   ├── compressor.py  # ContextCompressor - 上下文压缩
 │   └── tokenizer.py   # TokenEstimator - Token 估算
-├── skill/            # 技能系统
-│   ├── dispatcher.py  # SkillDispatcher - 技能调度
-│   ├── registry.py    # SkillRegistry - 技能注册
-│   ├── image_gen.py   # 图片生成技能
-│   └── tts.py         # 语音合成技能
+├── skill/            # 内置能力层
+│   ├── dispatcher.py  # SkillDispatcher - 能力调度
+│   ├── auto_router.py  # 图片理解 / 图片生成自动路由
+│   ├── image_generation.py   # 图片生成
+│   ├── image_understanding.py # 图片理解
+│   └── tts.py         # 语音合成
 ├── model/            # 模型系统
 │   ├── factory.py    # ModelFactory - 模型工厂
 │   └── adapters/     # 模型适配器

@@ -15,7 +15,7 @@ Open-source AI companion product for macOS / Linux / Windows. Each bot has an in
 | **Token Budget Control** | Memory layers injected into prompt by intent block, with debug diagnostics output for easy token consumption tracking |
 | **Relationship Evolution** | Bot behavior evolves based on interaction depth (stranger → lover) |
 | **Personality-Based Refusal** | Decides whether to respond based on personality, not simple keyword filtering |
-| **Multimedia Skills** | Image generation, voice synthesis |
+| **Multimedia Capabilities** | Image generation, image understanding, voice synthesis |
 | **Multi-Platform Gateway** | Local CLI / Feishu / Webhook, multiple message delivery methods |
 
 ---
@@ -111,11 +111,12 @@ ai_companion/
 ├── context/          # Context management
 │   ├── compressor.py  # ContextCompressor - context compression
 │   └── tokenizer.py   # TokenEstimator - token estimation
-├── skill/            # Skill system
-│   ├── dispatcher.py  # SkillDispatcher - skill dispatch
-│   ├── registry.py    # SkillRegistry - skill registration
-│   ├── image_gen.py   # Image generation skill
-│   └── tts.py         # Voice synthesis skill
+├── skill/            # Built-in capability layer
+│   ├── dispatcher.py  # SkillDispatcher - capability dispatch
+│   ├── auto_router.py  # Auto routing for image understanding / generation
+│   ├── image_generation.py   # Image generation
+│   ├── image_understanding.py # Image understanding
+│   └── tts.py         # Voice synthesis
 ├── model/            # Model system
 │   ├── factory.py    # ModelFactory - model factory
 │   └── adapters/     # Model adapters
