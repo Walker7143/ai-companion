@@ -532,6 +532,23 @@ class ProactiveEngine:
         clipped = text[:max_chars].rstrip()
         return clipped + "\n...（上下文已截断，只保留最相关部分）"
 
+    def _get_latest_session_id(self) -> str | None:
+        """获取最新的活跃会话 ID"""
+        if not self.memory:
+            return None
+        # 优先使用当前绑定的 session
+        current = getattr(self.memory, "_session_id", None) or getattr(self.memory.working, "current_session", None)
+        if current:
+            return current
+        # 如果没有绑定的 session，查找数据库中最新的会话
+        try:
+            sessions = self.memory.working.list_sessions(limit=1)
+            if sessions:
+                return sessions[0].get("session_id")
+        except Exception:
+            pass
+        return None
+
     async def _build_context(self, max_chars: int | None = None) -> str:
         """构建发送给 LLM 的上下文"""
         lines = []
@@ -539,7 +556,10 @@ class ProactiveEngine:
         # 最近对话
         if self.memory:
             try:
-                recent = self.memory.working.get_recent(session_id=None, turns=3)
+                # 主动唤醒在后台运行时，current_session 可能为 None
+                # 需要查找最新的活跃会话来获取对话上下文
+                session_id = self._get_latest_session_id()
+                recent = self.memory.working.get_recent(session_id=session_id, turns=3)
                 if recent:
                     lines.append("最近对话：")
                     for msg in recent[-6:]:
