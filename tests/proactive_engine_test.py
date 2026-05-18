@@ -92,6 +92,8 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             engine = _build_engine(Path(td), "")
             self.assertEqual(engine._classify_generated_message_issue(""), "empty")
             self.assertEqual(engine._classify_generated_message_issue("开头，主体，结尾"), "placeholder")
+            self.assertEqual(engine._classify_generated_message_issue("对了，我突然想起..."), "incomplete_fragment")
+            self.assertEqual(engine._classify_generated_message_issue("对了，昨天..."), "incomplete_fragment")
             self.assertEqual(
                 engine._classify_generated_message_issue('{"opening":"喂","topic":"test","ending":"来"}'),
                 "raw_json",
@@ -163,10 +165,20 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertTrue(sent)
             self.assertEqual(len(sent_messages), 1)
-            self.assertIn(sent_messages[0], ["对了，昨天...", "有件事想跟你分享～", "你知道吗，今天..."])
+            self.assertIn(sent_messages[0], ["对了，刚才有件小事想跟你分享。", "有件事想跟你分享～", "今天有个小瞬间，突然很想讲给你听。"])
             self.assertNotIn("开头", sent_messages[0])
             self.assertNotIn("主体", sent_messages[0])
             self.assertNotIn("结尾", sent_messages[0])
+
+    def test_fallback_message_skips_incomplete_fragments(self):
+        with TemporaryDirectory(prefix="proactive-fallback-fragments-") as td:
+            engine = _build_engine(Path(td), "")
+            engine.personality_type = "傲娇"
+
+            message = engine._get_fallback_message("with_topic")
+
+            self.assertEqual(message, "对了，我刚才突然想起一件小事，想顺手跟你说一下。")
+            self.assertNotEqual(message, "对了，我突然想起...")
 
     async def test_send_proactive_message_regenerates_invalid_message_before_send(self):
         with TemporaryDirectory(prefix="proactive-send-regenerate-") as td:
@@ -399,6 +411,41 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("那你怎么看", prompt)
             self.assertIn("不要像重新开一个话题", prompt)
             self.assertIn("刚才你问的那个问题", message)
+
+    async def test_contextual_message_trims_large_memory_context_and_raises_completion_budget(self):
+        from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
+
+        class LargeMemoryEngine(ProactiveEngine):
+            async def _build_context(self, max_chars=None):
+                text = "用户记忆：" + ("很长的上下文。" * 2000)
+                return self._clip_context_text(text, max_chars) if max_chars is not None else text
+
+        with TemporaryDirectory(prefix="proactive-context-budget-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = CaptureModel('{"message":"刚才数零钱，居然刚好够买杯热饮。"}')
+            engine = LargeMemoryEngine(
+                bot_id="context_bot",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("context_bot", root / "runtime"),
+                model=model,
+            )
+            motive = ProactiveMotive(
+                type=ProactiveMotiveType.LIFE_EVENT,
+                priority=60,
+                reason="想把今天发生的一件小事随手讲给对方听",
+                prompt_context="你准备主动发一条日常小事：零钱够买热饮。",
+            )
+
+            await engine.generate_contextual_message(motive)
+
+            call = model.calls[-1]
+            prompt = call["messages"][-1]["content"]
+            self.assertLess(len(prompt), 7000)
+            self.assertIn("上下文已截断", prompt)
+            self.assertEqual(call["kwargs"]["max_completion_tokens"], 2048)
+            self.assertEqual(call["kwargs"]["max_tokens"], 2048)
 
     async def test_generate_message_prompt_includes_current_life_anchor(self):
         with TemporaryDirectory(prefix="proactive-life-anchor-") as td:

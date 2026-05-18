@@ -42,6 +42,28 @@ _PLACEHOLDER_COMBINED_MESSAGES = (
     "开头主体结尾",
 )
 
+_INCOMPLETE_MESSAGE_FRAGMENTS = (
+    "...",
+    "…",
+    "。",
+    "对了...",
+    "对了…",
+    "对了，我突然想起...",
+    "对了，我突然想起…",
+    "...你知道吗，最近...",
+    "…你知道吗，最近…",
+    "对了，昨天...",
+    "对了，昨天…",
+    "你知道吗，今天...",
+    "你知道吗，今天…",
+)
+
+PROACTIVE_DECISION_CONTEXT_CHARS = 6000
+PROACTIVE_GENERATION_CONTEXT_CHARS = 3500
+PROACTIVE_REGENERATION_CONTEXT_CHARS = 2200
+PROACTIVE_GENERATION_MAX_TOKENS = 2048
+PROACTIVE_REGENERATION_MAX_TOKENS = 2048
+
 
 # LLM 判断 Prompt
 SHOULD_CONTACT_PROMPT = """【角色】
@@ -227,9 +249,9 @@ PERSONALITY_MESSAGES = {
             "诶，有空吗？",
         ],
         "with_topic": [  # 有话题时
-            "对了，我突然想起...",
+            "对了，我刚才突然想起一件小事，想顺手跟你说一下。",
             "有件事想跟你说～",
-            "...你知道吗，最近...",
+            "刚才有个小插曲，莫名就想拿来烦你一下。",
         ],
     },
     "温柔": {
@@ -250,9 +272,9 @@ PERSONALITY_MESSAGES = {
             "嗨～",
         ],
         "with_topic": [
-            "对了，昨天...",
+            "对了，刚才有件小事想跟你分享。",
             "有件事想跟你分享～",
-            "你知道吗，今天...",
+            "今天有个小瞬间，突然很想讲给你听。",
         ],
     },
     "活泼": {
@@ -282,7 +304,7 @@ PERSONALITY_MESSAGES = {
         "default": [
             "想起个事。",
             "有事找你。",
-            "...",
+            "刚才想到你了。",
             "你忙完了没。",
         ],
         "long_no_reply": [
@@ -293,7 +315,7 @@ PERSONALITY_MESSAGES = {
         "short_no_reply": [
             "忙完了没。",
             "有空吗。",
-            "。",
+            "出来说句话。",
         ],
         "with_topic": [
             "有件事。",
@@ -317,7 +339,7 @@ PERSONALITY_MESSAGES = {
             "嗨～",
         ],
         "with_topic": [
-            "对了...",
+            "对了，刚才想起个小事。",
             "有件事想跟你说。",
         ],
     },
@@ -503,7 +525,14 @@ class ProactiveEngine:
         delta = datetime.now() - last
         return delta.total_seconds() / 3600
 
-    async def _build_context(self) -> str:
+    def _clip_context_text(self, text: str, max_chars: int) -> str:
+        text = str(text or "").strip()
+        if max_chars <= 0 or len(text) <= max_chars:
+            return text
+        clipped = text[:max_chars].rstrip()
+        return clipped + "\n...（上下文已截断，只保留最相关部分）"
+
+    async def _build_context(self, max_chars: int | None = None) -> str:
         """构建发送给 LLM 的上下文"""
         lines = []
 
@@ -545,7 +574,10 @@ class ProactiveEngine:
             except Exception:
                 pass
 
-        return "\n".join(lines) if lines else "最近没什么特别的对话"
+        context = "\n".join(lines) if lines else "最近没什么特别的对话"
+        if max_chars is not None:
+            return self._clip_context_text(context, max_chars)
+        return context
 
     def _get_persona_dir(self) -> Path | None:
         persona_dir = getattr(self.config, "persona_dir", None)
@@ -763,7 +795,7 @@ class ProactiveEngine:
         rel_level = await self._get_relationship_level()
         rel_desc = await self._get_relationship_desc()
         bot_time_context = self._build_bot_time_context()
-        recent_context = await self._build_context()
+        recent_context = await self._build_context(max_chars=PROACTIVE_DECISION_CONTEXT_CHARS)
         prompt = SHOULD_CONTACT_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             age=getattr(self, "age", "?"),
@@ -816,7 +848,7 @@ class ProactiveEngine:
         rel_desc = await self._get_relationship_desc()
         persona_style_context = self._build_persona_style_context()
         current_life_context = self._build_current_life_anchor_context()
-        user_memory_context = await self._build_context()
+        user_memory_context = await self._build_context(max_chars=PROACTIVE_GENERATION_CONTEXT_CHARS)
 
         # 获取 Bot 可分享的生活事件
         bot_life_context = ""
@@ -848,7 +880,9 @@ class ProactiveEngine:
         try:
             response = await self.model.chat(
                 messages=[{"role": "user", "content": prompt}],
-                system_prompt=None
+                system_prompt=None,
+                max_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
+                max_completion_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
             )
             # 尝试解析结构化输出
             message = self._parse_structured_message(response)
@@ -883,7 +917,7 @@ class ProactiveEngine:
         rel_desc = await self._get_relationship_desc()
         persona_style_context = self._build_persona_style_context()
         current_life_context = self._build_current_life_anchor_context()
-        user_memory_context = await self._build_context()
+        user_memory_context = await self._build_context(max_chars=PROACTIVE_GENERATION_CONTEXT_CHARS)
         prompt = GENERATE_CONTEXTUAL_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
@@ -900,6 +934,8 @@ class ProactiveEngine:
             response = await self.model.chat(
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=None,
+                max_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
+                max_completion_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
             )
             message = self._parse_structured_message(response)
             if message:
@@ -953,6 +989,8 @@ class ProactiveEngine:
             response = await self.model.chat(
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=None,
+                max_tokens=PROACTIVE_REGENERATION_MAX_TOKENS,
+                max_completion_tokens=PROACTIVE_REGENERATION_MAX_TOKENS,
             )
             message = self._parse_structured_message(response)
             if message:
@@ -979,7 +1017,7 @@ class ProactiveEngine:
                 relationship_desc=await self._get_relationship_desc(),
                 persona_style_context=self._build_persona_style_context(),
                 current_life_context=self._build_current_life_anchor_context(),
-                user_memory_context=await self._build_context(),
+                user_memory_context=await self._build_context(max_chars=PROACTIVE_REGENERATION_CONTEXT_CHARS),
             )
         except Exception as e:
             logger.error(f"[ProactiveEngine] 构建主动消息重写上下文失败: {e}")
@@ -1057,12 +1095,27 @@ class ProactiveEngine:
         hit_count = sum(1 for token in _PLACEHOLDER_STRUCTURED_PARTS if token in normalized)
         return hit_count >= 2
 
+    def _is_incomplete_message_fragment(self, message: str) -> bool:
+        normalized = self._normalize_message_text(message)
+        if not normalized:
+            return False
+        fragments = {self._normalize_message_text(item) for item in _INCOMPLETE_MESSAGE_FRAGMENTS}
+        if normalized in fragments:
+            return True
+        if len(normalized) <= 18 and normalized.endswith("..."):
+            return True
+        if len(normalized) <= 18 and normalized.endswith("…"):
+            return True
+        return False
+
     def _classify_generated_message_issue(self, message: str) -> Optional[str]:
         cleaned = self._clean_message(str(message or ""))
         if not cleaned:
             return "empty"
         if self._is_placeholder_message(cleaned):
             return "placeholder"
+        if self._is_incomplete_message_fragment(cleaned):
+            return "incomplete_fragment"
         if self._looks_like_structured_message_payload(cleaned):
             return "raw_json"
         return None
@@ -1297,6 +1350,9 @@ class ProactiveEngine:
 
         # 使用 rotation 机制避免连续使用同一开场白
         last_style = getattr(self.state, 'last_opening_style', "") or ""
+        templates = [item for item in templates if not self._should_reject_generated_message(item)]
+        if not templates:
+            templates = ["刚刚想到你了。"]
         if last_style and last_style in templates:
             idx = templates.index(last_style)
             next_idx = (idx + 1) % len(templates)
