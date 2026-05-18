@@ -35,7 +35,7 @@ book = ["pypdf>=4.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
 
 [project.urls]
-Homepage = "https://gitee.com/wang_xiao_wei_7143/ai-girl-friend"
+Homepage = "https://github.com/Walker7143/ai-companion"
 
 [project.scripts]
 ai-companion = "ai_companion.__main__:main"

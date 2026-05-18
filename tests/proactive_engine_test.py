@@ -35,6 +35,21 @@ class CaptureModel:
         return self.response
 
 
+class SequenceModel:
+    provider = "test"
+    model = "sequence-model"
+
+    def __init__(self, responses: list[str]):
+        self.responses = list(responses)
+        self.calls = []
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        self.calls.append({"messages": messages, "system_prompt": system_prompt, "kwargs": kwargs})
+        if not self.responses:
+            return ""
+        return self.responses.pop(0)
+
+
 def _build_engine(root: Path, response: str) -> ProactiveEngine:
     persona_dir = root / "persona"
     persona_dir.mkdir(parents=True, exist_ok=True)
@@ -153,6 +168,33 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("主体", sent_messages[0])
             self.assertNotIn("结尾", sent_messages[0])
 
+    async def test_send_proactive_message_regenerates_invalid_message_before_send(self):
+        with TemporaryDirectory(prefix="proactive-send-regenerate-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = SequenceModel(['{"message":"刚才突然想到你，就过来碰一下你的窗口。"}'])
+            engine = ProactiveEngine(
+                bot_id="test_bot",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("test_bot", root / "runtime"),
+                model=model,
+                memory=None,
+                personality_type="温柔",
+            )
+            sent_messages = []
+
+            async def sender(message: str):
+                sent_messages.append(message)
+                return True
+
+            engine._platform_sender = sender
+            sent = await engine._send_proactive_message("开头，主体，结尾")
+
+            self.assertTrue(sent)
+            self.assertEqual(sent_messages, ["刚才突然想到你，就过来碰一下你的窗口。"])
+            self.assertEqual(len(model.calls), 1)
+
     async def test_generate_message_falls_back_when_model_returns_placeholder_text(self):
         with TemporaryDirectory(prefix="proactive-placeholder-") as td:
             engine = _build_engine(Path(td), "《开场白/称呼，话题内容或空字符串，结尾语》")
@@ -163,6 +205,33 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("结尾语", message)
             self.assertNotIn("在吗", message)
             self.assertNotIn("最近怎么样", message)
+
+    async def test_generate_message_regenerates_before_template_fallback(self):
+        with TemporaryDirectory(prefix="proactive-regenerate-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = SequenceModel(
+                [
+                    "《开场白/称呼，话题内容或空字符串，结尾语》",
+                    '{"message":"刚才路过窗边忽然想起你，顺手戳一下。"}',
+                ]
+            )
+            engine = ProactiveEngine(
+                bot_id="test_bot",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("test_bot", root / "runtime"),
+                model=model,
+                personality_type="温柔",
+            )
+
+            message = await engine.generate_message("想主动联系一下")
+
+            self.assertEqual(message, "刚才路过窗边忽然想起你，顺手戳一下。")
+            self.assertEqual(len(model.calls), 2)
+            retry_prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("重新写一条全新的主动消息", retry_prompt)
+            self.assertIn("不要使用固定模板", retry_prompt)
 
     async def test_generate_message_falls_back_when_model_returns_unparsed_structured_payload(self):
         with TemporaryDirectory(prefix="proactive-structured-fallback-") as td:

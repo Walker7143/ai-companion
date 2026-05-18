@@ -171,11 +171,47 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 输出 JSON：{{"message":"一条可以直接发送的消息"}}
 只输出 JSON，不要其他内容。"""
 
+REGENERATE_PROACTIVE_MESSAGE_PROMPT = """【角色】
+你是{bot_name}，性格：{personality_tags}
+
+【你的真实说话风格】
+{persona_style_context}
+
+【Bot 时间线】
+{bot_time_context}
+
+【当前生活锚点】
+{current_life_context}
+
+【当前关系】
+{relationship_desc}
+
+【用户记忆与最近上下文】
+{user_memory_context}
+
+【这次主动联系的原因】
+{contact_reason}
+
+【刚才生成失败的内容】
+{invalid_message}
+
+【重写要求】
+- 重新写一条全新的主动消息，不要复述或改写失败内容。
+- 不要使用固定模板、示例句、占位符、JSON 字段名或“在吗”“最近怎么样”这类泛泛开场。
+- 每次都根据性格、关系、当前情绪、生活锚点和上下文自然生成，像本人临时想到后随手发出。
+- 只写一条适合直接发送的短消息，允许短句、停顿、吐槽、反问。
+- 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生。
+- 任何生活细节都必须服从“Bot 时间线”里的当前时间一致性约束。
+- 称呼必须服从“用户记忆与最近上下文”；不要继续使用用户最近否认或纠正过的称呼。
+
+【输出格式】
+输出 JSON：{{"message":"一条可以直接发送的消息"}}
+只输出 JSON，不要其他内容。"""
+
 # 性格消息模板（fallback 用）
 PERSONALITY_MESSAGES = {
     "傲娇": {
         "default": [
-            "...刚才说了你随时在的，人呢？",
             "你是不是把我忘了？",
             "哼，这么久不联系我。",
             "...算了，没什么。",
@@ -821,7 +857,17 @@ class ProactiveEngine:
             cleaned = self._clean_message(response)
             issue = self._classify_generated_message_issue(cleaned)
             if issue:
-                logger.warning(f"[ProactiveEngine] LLM 生成消息不可用(issue={issue})，使用 fallback")
+                logger.warning(f"[ProactiveEngine] LLM 生成消息不可用(issue={issue})，尝试重新生成")
+                regenerated = await self._regenerate_proactive_message(
+                    contact_reason=reason or "想和用户聊天",
+                    invalid_message=cleaned or response,
+                    relationship_desc=rel_desc,
+                    persona_style_context=persona_style_context,
+                    current_life_context=current_life_context,
+                    user_memory_context=user_memory_context,
+                )
+                if regenerated:
+                    return regenerated
                 return self._get_fallback_message(scenario)
             return cleaned
         except Exception as e:
@@ -863,10 +909,81 @@ class ProactiveEngine:
                 return cleaned
             issue = self._classify_generated_message_issue(cleaned)
             if issue:
-                logger.warning(f"[ProactiveEngine] 上下文主动消息不可用(issue={issue})，使用 fallback")
+                logger.warning(f"[ProactiveEngine] 上下文主动消息不可用(issue={issue})，尝试重新生成")
+                regenerated = await self._regenerate_proactive_message(
+                    contact_reason=motive.reason,
+                    invalid_message=cleaned or response,
+                    relationship_desc=rel_desc,
+                    persona_style_context=persona_style_context,
+                    current_life_context=current_life_context,
+                    user_memory_context=user_memory_context,
+                )
+                if regenerated:
+                    return regenerated
         except Exception as e:
             logger.error(f"[ProactiveEngine] 上下文主动消息生成失败: {e}")
         return self._fallback_contextual_message(motive)
+
+    async def _regenerate_proactive_message(
+        self,
+        *,
+        contact_reason: str,
+        invalid_message: str,
+        relationship_desc: str,
+        persona_style_context: str,
+        current_life_context: str,
+        user_memory_context: str,
+    ) -> Optional[str]:
+        """Ask the LLM for a fresh one-off proactive line before falling back to templates."""
+        if self.model is None:
+            return None
+
+        prompt = REGENERATE_PROACTIVE_MESSAGE_PROMPT.format(
+            bot_name=getattr(self, "bot_name", self.bot_id),
+            personality_tags=self._get_personality_type(),
+            persona_style_context=persona_style_context,
+            bot_time_context=self._build_bot_time_context(),
+            current_life_context=current_life_context,
+            relationship_desc=relationship_desc,
+            user_memory_context=user_memory_context,
+            contact_reason=contact_reason or "想和用户聊天",
+            invalid_message=str(invalid_message or "")[:300],
+        )
+        try:
+            response = await self.model.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=None,
+            )
+            message = self._parse_structured_message(response)
+            if message:
+                return message
+            cleaned = self._clean_message(response)
+            if cleaned and not self._should_reject_generated_message(cleaned):
+                return cleaned
+            issue = self._classify_generated_message_issue(cleaned)
+            logger.warning(f"[ProactiveEngine] LLM 重新生成主动消息仍不可用(issue={issue})")
+        except Exception as e:
+            logger.error(f"[ProactiveEngine] LLM 重新生成主动消息失败: {e}")
+        return None
+
+    async def _regenerate_proactive_message_from_current_context(
+        self,
+        *,
+        contact_reason: str,
+        invalid_message: str,
+    ) -> Optional[str]:
+        try:
+            return await self._regenerate_proactive_message(
+                contact_reason=contact_reason,
+                invalid_message=invalid_message,
+                relationship_desc=await self._get_relationship_desc(),
+                persona_style_context=self._build_persona_style_context(),
+                current_life_context=self._build_current_life_anchor_context(),
+                user_memory_context=await self._build_context(),
+            )
+        except Exception as e:
+            logger.error(f"[ProactiveEngine] 构建主动消息重写上下文失败: {e}")
+            return None
 
     def _recent_visible_shareable_life_events(self, limit: int = 2) -> list:
         life_engine = getattr(self, "life_engine", None)
@@ -1257,15 +1374,27 @@ class ProactiveEngine:
         if parsed_message:
             message = parsed_message
         elif self._is_placeholder_message(message):
-            logger.warning("[ProactiveEngine] 主动消息不可发送(issue=placeholder)，使用 fallback")
-            message = self._get_fallback_message("with_topic")
+            logger.warning("[ProactiveEngine] 主动消息不可发送(issue=placeholder)，尝试重新生成")
+            regenerated = await self._regenerate_proactive_message_from_current_context(
+                contact_reason="准备主动联系用户，但上一版消息是占位符",
+                invalid_message=message,
+            )
+            message = regenerated or self._get_fallback_message("with_topic")
         elif self._looks_like_structured_message_payload(message):
             issue = self._classify_partial_structured_parse_failure(message) or "raw_json"
-            logger.warning(f"[ProactiveEngine] 主动消息不可发送(issue={issue})，使用 fallback")
-            message = self._get_fallback_message("with_topic")
+            logger.warning(f"[ProactiveEngine] 主动消息不可发送(issue={issue})，尝试重新生成")
+            regenerated = await self._regenerate_proactive_message_from_current_context(
+                contact_reason="准备主动联系用户，但上一版消息格式不可发送",
+                invalid_message=message,
+            )
+            message = regenerated or self._get_fallback_message("with_topic")
         elif not message:
-            logger.warning("[ProactiveEngine] 主动消息不可发送(issue=empty)，使用 fallback")
-            message = self._get_fallback_message("with_topic")
+            logger.warning("[ProactiveEngine] 主动消息不可发送(issue=empty)，尝试重新生成")
+            regenerated = await self._regenerate_proactive_message_from_current_context(
+                contact_reason="准备主动联系用户，但上一版消息为空",
+                invalid_message=message,
+            )
+            message = regenerated or self._get_fallback_message("with_topic")
 
         if not self._platform_sender:
             logger.warning(f"[ProactiveEngine] 未配置 platform_sender，消息未发送: {message[:50]}...")
