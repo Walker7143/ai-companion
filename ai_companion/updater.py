@@ -157,7 +157,10 @@ def _update_git_checkout(project_dir: Path) -> SourceUpdate:
     if dirty:
         print("[WARN] 当前仓库有未提交修改；如与远端冲突，git pull 会停止。")
 
-    _run(["git", "pull", "--ff-only"], cwd=project_dir, step="拉取最新代码")
+    remote, branch = _resolve_git_pull_target(project_dir)
+    print(f"使用远端 {remote}/{branch} 拉取最新代码...")
+    _run(["git", "fetch", "--prune", remote], cwd=project_dir, step="刷新远端引用")
+    _run(["git", "pull", "--ff-only", remote, branch], cwd=project_dir, step="拉取最新代码")
     after = _git_revision(project_dir)
     return SourceUpdate(
         project_dir=project_dir,
@@ -165,6 +168,94 @@ def _update_git_checkout(project_dir: Path) -> SourceUpdate:
         before_revision=before,
         after_revision=after,
     )
+
+
+def _resolve_git_pull_target(project_dir: Path) -> tuple[str, str]:
+    current_branch = _git_current_branch(project_dir)
+    if current_branch == "HEAD":
+        raise UpdateError("当前处于 detached HEAD，无法自动更新；请切换到可跟踪的分支后重试。")
+
+    try:
+        upstream = _capture(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=project_dir).strip()
+    except UpdateError:
+        upstream = ""
+
+    if upstream and "/" in upstream:
+        remote, branch = upstream.split("/", 1)
+        return remote, branch
+
+    remote = _primary_git_remote(project_dir)
+    if _remote_branch_exists(project_dir, remote, current_branch):
+        return remote, current_branch
+
+    default_branch = _remote_default_branch(project_dir, remote)
+    if default_branch and current_branch in {"master", "main", default_branch}:
+        return remote, default_branch
+
+    raise UpdateError(
+        f"当前分支 {current_branch} 没有 upstream，且未找到对应的 {remote}/{current_branch}；"
+        "请先切换到主分支，或手动运行 git pull <remote> <branch>"
+    )
+
+
+def _git_current_branch(project_dir: Path) -> str:
+    return _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=project_dir).strip()
+
+
+def _primary_git_remote(project_dir: Path) -> str:
+    remotes = [
+        line.strip()
+        for line in _capture(["git", "remote"], cwd=project_dir).splitlines()
+        if line.strip()
+    ]
+    if not remotes:
+        raise UpdateError("当前仓库没有配置远端，无法更新。")
+    if "origin" in remotes:
+        return "origin"
+    if len(remotes) == 1:
+        return remotes[0]
+    return remotes[0]
+
+
+def _remote_default_branch(project_dir: Path, remote: str) -> str | None:
+    try:
+        result = _run_capture(
+            ["git", "symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"],
+            cwd=project_dir,
+        )
+    except OSError:
+        result = None
+    if result is not None and result.returncode == 0:
+        symbolic = _decode_process_output(result.stdout).strip()
+        if symbolic:
+            return symbolic.split("/", 1)[1] if "/" in symbolic else symbolic
+
+    try:
+        result = _run_capture(["git", "ls-remote", "--symref", remote, "HEAD"], cwd=project_dir)
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+
+    output = _decode_process_output(result.stdout).splitlines()
+    for line in output:
+        line = line.strip()
+        if line.startswith("ref:") and "\tHEAD" in line:
+            ref = line.split(None, 1)[1].split("\t", 1)[0].strip()
+            if ref.startswith("refs/heads/"):
+                return ref.removeprefix("refs/heads/")
+    return None
+
+
+def _remote_branch_exists(project_dir: Path, remote: str, branch: str) -> bool:
+    try:
+        result = _run_capture(["git", "ls-remote", "--heads", remote, branch], cwd=project_dir)
+    except OSError:
+        return False
+    if result.returncode != 0:
+        return False
+    stdout = _decode_process_output(result.stdout).strip()
+    return bool(stdout)
 
 
 def _git_revision(project_dir: Path) -> str | None:
