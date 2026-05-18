@@ -381,6 +381,71 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(engine._get_personality_type(), "傲娇")
 
+    async def test_build_context_uses_latest_session_and_preserves_recent_message_tail(self):
+        class Working:
+            current_session = None
+
+            def __init__(self):
+                self.requested_session_id = None
+
+            def list_sessions(self, limit=1):
+                return [{"session_id": "gw_latest"}]
+
+            def get_recent(self, session_id=None, turns=3):
+                self.requested_session_id = session_id
+                return [
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "（看了眼时间）" + "她把前面的闲聊铺垫说得很长。" * 12
+                            + "行了，你的黄焖鸡该到了吧？快去吃饭，别凉了。"
+                        ),
+                    },
+                    {"role": "user", "content": "好，嘿嘿，真乖"},
+                    {"role": "assistant", "content": "……这下满意了吧？"},
+                    {"role": "user", "content": "又吃牛肉粉，你除了饵丝就是牛肉粉，吃点别的"},
+                ]
+
+        class UserUnderstanding:
+            def format_for_prompt(self):
+                return ""
+
+            def known_fact_keys(self):
+                return set()
+
+        class Semantic:
+            async def get_all_facts(self, **kwargs):
+                return {}
+
+        class Memory:
+            _session_id = None
+
+            def __init__(self):
+                self.working = Working()
+                self.user_understanding = UserUnderstanding()
+                self.semantic = Semantic()
+                self.bot_id = "yangsisi"
+                self.user_id = "default_user"
+
+        with TemporaryDirectory(prefix="proactive-recent-context-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            memory = Memory()
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=None,
+                memory=memory,
+            )
+
+            context = await engine._build_context()
+
+            self.assertEqual(memory.working.requested_session_id, "gw_latest")
+            self.assertIn("黄焖鸡该到了吧", context)
+            self.assertIn("又吃牛肉粉", context)
+
     async def test_contextual_message_prompt_includes_motive_and_prior_topic(self):
         from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
 

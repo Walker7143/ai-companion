@@ -549,6 +549,14 @@ class ProactiveEngine:
             pass
         return None
 
+    def _compact_recent_message_content(self, content: str, max_chars: int = 160) -> str:
+        text = " ".join(str(content or "").split())
+        if len(text) <= max_chars:
+            return text
+        head_chars = max(40, max_chars // 2)
+        tail_chars = max(40, max_chars - head_chars - 3)
+        return f"{text[:head_chars].rstrip()}...{text[-tail_chars:].lstrip()}"
+
     async def _build_context(self, max_chars: int | None = None) -> str:
         """构建发送给 LLM 的上下文"""
         lines = []
@@ -559,12 +567,12 @@ class ProactiveEngine:
                 # 主动唤醒在后台运行时，current_session 可能为 None
                 # 需要查找最新的活跃会话来获取对话上下文
                 session_id = self._get_latest_session_id()
-                recent = self.memory.working.get_recent(session_id=session_id, turns=3)
+                recent = self.memory.working.get_recent(session_id=session_id, turns=5)
                 if recent:
                     lines.append("最近对话：")
-                    for msg in recent[-6:]:
+                    for msg in reversed(recent[:10]):
                         role = "用户" if msg.get("role") == "user" else self.bot_id
-                        content = msg.get("content", "")[:50]
+                        content = self._compact_recent_message_content(msg.get("content", ""))
                         lines.append(f"  {role}：{content}")
             except Exception as e:
                 logger.warning(f"[ProactiveEngine] 获取最近对话失败: {e}")
