@@ -54,6 +54,7 @@ from ai_companion.logging_utils import (
     start_log_limit_maintenance,
 )
 from ai_companion.ui_server import (
+    UI_PORT,
     UIStartResult,
     ensure_ui_server,
     release_ui_server,
@@ -1926,7 +1927,7 @@ async def run_gateway(daemon: bool = True):
     print("=" * 50)
     if ui_available:
         print("网关 + UI 已启动")
-        print(f"  管理后台: http://localhost:1421")
+        print(f"  管理后台: http://localhost:{UI_PORT}")
         print("  按 Ctrl+C 退出")
     else:
         platforms = []

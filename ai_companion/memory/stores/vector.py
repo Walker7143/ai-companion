@@ -84,7 +84,10 @@ class VectorMemoryStore:
             try:
                 from sentence_transformers import SentenceTransformer
 
-                self._encoder = SentenceTransformer(self.encoder_model)
+                try:
+                    self._encoder = SentenceTransformer(self.encoder_model, local_files_only=True)
+                except Exception:
+                    self._encoder = SentenceTransformer(self.encoder_model)
             except Exception as exc:
                 logger.info("[VectorMemory] embedding model unavailable, disabling vector recall: %s", exc)
                 self.embedding_mode = "none"

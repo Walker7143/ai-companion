@@ -18,7 +18,7 @@ from typing import Any, Iterator
 from ai_companion.logging_utils import get_log_max_bytes, start_log_limit_maintenance, trim_log_file
 
 
-UI_PORT = int(os.environ.get("AI_COMPANION_UI_PORT", "1421"))
+UI_PORT = int(os.environ.get("AI_COMPANION_UI_PORT", "14210"))
 UI_URL = f"http://localhost:{UI_PORT}"
 _STATE_DIR = Path.home() / ".ai-companion"
 UI_PID_FILE = Path(os.environ.get("AI_COMPANION_UI_PID_FILE", _STATE_DIR / "ui.pid"))

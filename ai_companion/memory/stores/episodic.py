@@ -139,7 +139,10 @@ class EpisodicStore:
         if self._encoder is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                self._encoder = SentenceTransformer(self.encoder_model)
+                try:
+                    self._encoder = SentenceTransformer(self.encoder_model, local_files_only=True)
+                except Exception:
+                    self._encoder = SentenceTransformer(self.encoder_model)
             except Exception:
                 self.embedding_mode = "none"
                 return None

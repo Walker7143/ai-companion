@@ -1454,8 +1454,8 @@ def allowed_cors_origins(config: dict) -> set[str]:
     if isinstance(raw, list):
         return {str(item).strip() for item in raw if str(item).strip()}
     return {
-        "http://localhost:1421",
-        "http://127.0.0.1:1421",
+        "http://localhost:14210",
+        "http://127.0.0.1:14210",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     }
