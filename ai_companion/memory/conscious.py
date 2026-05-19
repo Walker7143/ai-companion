@@ -194,6 +194,25 @@ class ConsciousContextBuilder:
                     )
                 )
 
+        for item in retrieved.rollup_recall[:2]:
+            if not isinstance(item, dict):
+                continue
+            summary = str(item.get("summary") or "").strip()
+            if not summary:
+                continue
+            scope = str(item.get("scope") or "rollup").strip()
+            topic_key = str(item.get("topic_key") or "").strip()
+            text = f"rollup[{scope}/{topic_key}]: {summary[:100]}" if topic_key else f"rollup[{scope}]: {summary[:100]}"
+            candidates.append(
+                ActiveMemory(
+                    text=text,
+                    source="rollup",
+                    score=self._activation_score(current_input, text, intent=intent, source="daily"),
+                    expression_mode=self._expression_mode(intent, source="daily"),
+                    reason="高层记忆概括",
+                )
+            )
+
         known_keys, known_values = _known_understanding_items(retrieved.user_understanding)
         for item in retrieved.semantic_items[:4]:
             key = str(item.get("key") or "").strip()

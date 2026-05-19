@@ -12,6 +12,7 @@ class RetrievedMemory:
     working_history: list[dict] = field(default_factory=list)
     daily_context: dict[str, Any] = field(default_factory=dict)
     vector_recall: list[dict[str, Any]] = field(default_factory=list)
+    rollup_recall: list[dict] = field(default_factory=list)
     episodic_recall: list[dict] = field(default_factory=list)
     semantic_facts: dict[str, str] = field(default_factory=dict)
     semantic_items: list[dict] = field(default_factory=list)
@@ -58,6 +59,7 @@ class MemoryRetriever:
         episodic_store,
         semantic_store,
         relationship_store,
+        rollup_store=None,
         user_understanding,
         max_working_turns: int = 20,
         max_summaries: int = 5,
@@ -68,6 +70,7 @@ class MemoryRetriever:
         self.episodic = episodic_store
         self.semantic = semantic_store
         self.relationship = relationship_store
+        self.rollups = rollup_store
         self.user_understanding = user_understanding
         self.max_working_turns = max_working_turns
         self.max_summaries = max_summaries
@@ -97,6 +100,15 @@ class MemoryRetriever:
             )
         understanding = self.user_understanding.load()
         relationship = await self.relationship.get_state(bot_id=bot_id, user_id=user_id)
+        rollup_recall = []
+        if self.rollups is not None:
+            scope = "day" if detected_intent in {"planning", "emotional_support", "proactive_generation"} else "topic"
+            rollup_recall = await self.rollups.get_recent_rollups(
+                bot_id=bot_id,
+                user_id=user_id,
+                scope=scope,
+                limit=4,
+            )
 
         categories = self.FACT_CATEGORIES_BY_INTENT.get(detected_intent, self.FACT_CATEGORIES_BY_INTENT["casual_chat"])
         semantic_items = await self.semantic.search_facts(
@@ -126,10 +138,9 @@ class MemoryRetriever:
                 limit=self._vector_limit_for_intent(detected_intent),
                 include_archived=False,
             )
-
         top_k = 5 if detected_intent in {"recall_past", "relationship_repair"} else 2
         episodic = []
-        if detected_intent in {"recall_past", "emotional_support", "relationship_repair", "casual_chat"}:
+        if detected_intent in {"recall_past", "emotional_support", "relationship_repair", "casual_chat", "planning"}:
             episodic = self.episodic.recall(
                 current_input,
                 top_k=top_k,
@@ -139,11 +150,20 @@ class MemoryRetriever:
                 include_archived=False,
             )
 
+        if detected_intent in {"planning", "emotional_support"} and self.daily is not None:
+            daily_context = self.daily.get_recent_context(
+                bot_id=bot_id,
+                user_id=user_id,
+                current_session_id=session_id,
+                intent=detected_intent,
+            )
+
         return RetrievedMemory(
             intent=detected_intent,
             working_history=working,
             daily_context=daily_context,
             vector_recall=vector_recall,
+            rollup_recall=rollup_recall,
             episodic_recall=episodic,
             semantic_facts=semantic_facts,
             semantic_items=semantic_items,

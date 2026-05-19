@@ -320,6 +320,9 @@ class DailyMemoryStore:
             "summaries": summaries,
             "recent_messages": messages,
             "self_memory": self_memory,
+            "open_threads": self._extract_open_threads(summaries),
+            "commitments": self._extract_commitments(summaries),
+            "mood": self._extract_mood(summaries),
         }
         return self._trim_context(context, max_chars=self._prompt_limit_for_intent(intent))
 
@@ -586,6 +589,51 @@ class DailyMemoryStore:
         while size(context) > max_chars and context.get("self_memory"):
             context["self_memory"].pop()
         return context
+
+    def _extract_open_threads(self, summaries: list[dict[str, Any]]) -> list[str]:
+        items: list[str] = []
+        for summary in summaries:
+            if not isinstance(summary, dict):
+                continue
+            if isinstance(summary.get("open_threads"), list):
+                for value in summary.get("open_threads") or []:
+                    text = str(value).strip()
+                    if text and text not in items:
+                        items.append(text)
+            for value in _loads_list(summary.get("open_threads_json")):
+                if value and value not in items:
+                    items.append(value)
+        return items
+
+    def _extract_commitments(self, summaries: list[dict[str, Any]]) -> list[str]:
+        items: list[str] = []
+        for summary in summaries:
+            if not isinstance(summary, dict):
+                continue
+            if isinstance(summary.get("commitments"), list):
+                for value in summary.get("commitments") or []:
+                    text = str(value).strip()
+                    if text and text not in items:
+                        items.append(text)
+            for value in _loads_list(summary.get("commitments_json")):
+                if value and value not in items:
+                    items.append(value)
+        return items
+
+    def _extract_mood(self, summaries: list[dict[str, Any]]) -> list[str]:
+        items: list[str] = []
+        for summary in summaries:
+            if not isinstance(summary, dict):
+                continue
+            if isinstance(summary.get("mood"), list):
+                for value in summary.get("mood") or []:
+                    text = str(value).strip()
+                    if text and text not in items:
+                        items.append(text)
+            for value in _loads_list(summary.get("mood_json")):
+                if value and value not in items:
+                    items.append(value)
+        return items
 
 
 def _hash_text(value: str) -> str:

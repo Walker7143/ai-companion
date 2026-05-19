@@ -640,6 +640,7 @@ class DailyMemoryTest(unittest.TestCase):
                 return model.prompt
 
         prompt = asyncio.run(run())
+        self.assertTrue(prompt)
         self.assertIn("我不是米高", prompt)
         self.assertIn("不要继续使用那个被否定的称呼", prompt)
         self.assertIn("条件式旧称呼", prompt)

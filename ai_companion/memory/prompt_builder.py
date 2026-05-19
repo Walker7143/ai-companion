@@ -209,6 +209,19 @@ class MemoryPromptBuilder:
                 )
             )
 
+        rollup_text = self._format_rollups(retrieved)
+        if rollup_text:
+            blocks.append(
+                PromptBlock(
+                    name="rollups",
+                    title="【记忆 rollup】",
+                    body=rollup_text,
+                    usage="使用方式：这是对最近主题的高层概括，只在能帮助你把话接顺时参考，不要替代当下上下文。",
+                    budget=max(220, int(budgets["semantic"] * 0.8)),
+                    priority=55,
+                )
+            )
+
         if retrieved.episodic_recall:
             moment_lines = [
                 self._format_episode_line(m)
@@ -628,6 +641,12 @@ class MemoryPromptBuilder:
                 values = _clean_list(today_summary.get(key))
                 if values:
                     lines.append(f"    {title}：" + "；".join(values[:3]))
+        if data.get("open_threads"):
+            lines.append("  - 跨会话未完话题：" + "；".join(_clean_list(data.get("open_threads"))[:4]))
+        if data.get("commitments"):
+            lines.append("  - 跨会话承诺/待办：" + "；".join(_clean_list(data.get("commitments"))[:4]))
+        if data.get("mood"):
+            lines.append("  - 跨会话情绪线索：" + "；".join(_clean_list(data.get("mood"))[:4]))
 
         if older_summaries:
             lines.append("  - 最近几天：")
@@ -660,6 +679,23 @@ class MemoryPromptBuilder:
                 date = item.get("local_date") or "最近"
                 lines.append(f"    - {date} [{kind}]: {content[:120]}")
 
+        return "\n".join(lines)
+
+    def _format_rollups(self, retrieved: RetrievedMemory) -> str:
+        rollups = retrieved.rollup_recall or []
+        if not rollups:
+            return ""
+        lines: list[str] = []
+        for item in rollups[:4]:
+            if not isinstance(item, dict):
+                continue
+            scope = str(item.get("scope") or "").strip()
+            topic_key = str(item.get("topic_key") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            if not summary:
+                continue
+            prefix = "/".join(part for part in (scope, topic_key) if part) or "rollup"
+            lines.append(f"  - {prefix}：{summary[:180]}")
         return "\n".join(lines)
 
     def _format_relationship(self, retrieved: RetrievedMemory) -> str:

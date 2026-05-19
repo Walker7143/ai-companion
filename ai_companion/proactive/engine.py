@@ -743,6 +743,87 @@ class ProactiveEngine:
             return ""
         return text if len(text) <= max_chars else text[:max_chars].rstrip() + "…"
 
+    def _format_daily_memory_context(self, daily_context: dict) -> list[str]:
+        lines = ["【今日连续性记忆】"]
+        today = str(daily_context.get("today") or "").strip()
+        if today:
+            lines.append(f"- 今日摘要：{today}")
+        summaries = daily_context.get("summaries") if isinstance(daily_context.get("summaries"), list) else []
+        if summaries:
+            summary_text = str(summaries[-1].get("summary") or "").strip()
+            if summary_text:
+                lines.append(f"- 最近摘要：{summary_text}")
+        open_threads = daily_context.get("open_threads") if isinstance(daily_context.get("open_threads"), list) else []
+        if open_threads:
+            lines.append(f"- 未完话题：{'；'.join(str(item) for item in open_threads[:4])}")
+        commitments = daily_context.get("commitments") if isinstance(daily_context.get("commitments"), list) else []
+        if commitments:
+            lines.append(f"- 承诺/待办：{'；'.join(str(item) for item in commitments[:4])}")
+        mood = daily_context.get("mood") if isinstance(daily_context.get("mood"), list) else []
+        if mood:
+            lines.append(f"- 情绪线索：{'；'.join(str(item) for item in mood[:4])}")
+        return lines
+
+    def _format_relationship_memory_context(self, relationship_state: dict) -> list[str]:
+        lines = ["【关系姿态】"]
+        label = str(relationship_state.get("relationship_label") or "").strip()
+        if label:
+            lines.append(f"- 关系标签：{label}")
+        posture = str(relationship_state.get("current_posture") or "").strip()
+        if posture:
+            lines.append(f"- 当前姿态：{posture}")
+        guidance = str(relationship_state.get("interaction_guidance") or "").strip()
+        if guidance:
+            lines.append(f"- 互动建议：{guidance}")
+        narrative = str(relationship_state.get("relationship_narrative") or "").strip()
+        if narrative:
+            lines.append(f"- 关系叙事：{narrative}")
+        open_threads = relationship_state.get("open_emotional_threads") if isinstance(relationship_state.get("open_emotional_threads"), list) else []
+        if open_threads:
+            lines.append(f"- 未完成情绪话题：{'；'.join(str(item) for item in open_threads[:3])}")
+        return lines
+
+    def _format_user_understanding_context(self, understanding: dict) -> list[str]:
+        lines = ["【长期用户理解】"]
+        layered = understanding.get("layered") if isinstance(understanding.get("layered"), dict) else {}
+        current = layered.get("current") if isinstance(layered.get("current"), dict) else {}
+        deep = layered.get("deep") if isinstance(layered.get("deep"), dict) else {}
+
+        current_context = current.get("current_context") if isinstance(current.get("current_context"), list) else []
+        if current_context:
+            lines.append(f"- 当前状态：{'；'.join(str(item) for item in current_context[:4])}")
+        open_threads = current.get("open_threads") if isinstance(current.get("open_threads"), list) else []
+        if open_threads:
+            lines.append(f"- 当前未完话题：{'；'.join(str(item) for item in open_threads[:4])}")
+        goals = current.get("goals_and_projects") if isinstance(current.get("goals_and_projects"), list) else []
+        if goals:
+            lines.append(f"- 目标和项目：{'；'.join(str(item) for item in goals[:4])}")
+        recent_changes = current.get("recent_changes") if isinstance(current.get("recent_changes"), list) else []
+        if recent_changes:
+            lines.append(f"- 近期变化：{'；'.join(str(item) for item in recent_changes[:4])}")
+        relationship_memory = deep.get("relationship_memory") if isinstance(deep.get("relationship_memory"), dict) else {}
+        if relationship_memory:
+            need = relationship_memory.get("what_user_seems_to_need_from_bot")
+            if isinstance(need, list) and need:
+                lines.append(f"- 关系需要：{'；'.join(str(item) for item in need[:4])}")
+            tension = relationship_memory.get("things_that_created_tension")
+            if isinstance(tension, list) and tension:
+                lines.append(f"- 关系紧张点：{'；'.join(str(item) for item in tension[:3])}")
+        return lines
+
+    def _summarize_target_context(self, target: dict) -> list[str]:
+        lines: list[str] = []
+        for key in ("message", "content", "topic", "reason", "summary"):
+            value = str(target.get(key) or "").strip()
+            if value:
+                lines.append(f"{key}：{value}")
+        metadata = target.get("metadata") if isinstance(target.get("metadata"), dict) else {}
+        for key in ("proactive_kind", "source_session_id", "source_platform"):
+            value = str(metadata.get(key) or "").strip()
+            if value:
+                lines.append(f"{key}：{value}")
+        return lines[:8]
+
     def _get_personality_type(self) -> str:
         """从 personality_tags 检测性格类型"""
         profile = self._load_persona_json("profile.json")
@@ -906,9 +987,8 @@ class ProactiveEngine:
         )
 
         try:
-            response = await self.model.chat(
-                messages=[{"role": "user", "content": prompt}],
-                system_prompt=None,
+            response = await self._chat_with_proactive_limits(
+                prompt,
                 max_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
                 max_completion_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
             )
@@ -945,7 +1025,8 @@ class ProactiveEngine:
         rel_desc = await self._get_relationship_desc()
         persona_style_context = self._build_persona_style_context()
         current_life_context = self._build_current_life_anchor_context()
-        user_memory_context = await self._build_context(max_chars=PROACTIVE_GENERATION_CONTEXT_CHARS)
+        user_memory_context = await self._build_context()
+        proactive_memory_context = await self._build_proactive_memory_context(motive)
         prompt = GENERATE_CONTEXTUAL_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
@@ -955,13 +1036,14 @@ class ProactiveEngine:
             motive_reason=motive.reason,
             motive_context=motive.prompt_context,
             relationship_desc=rel_desc,
-            user_memory_context=user_memory_context,
+            user_memory_context="\n\n".join(
+                block for block in (user_memory_context, proactive_memory_context) if block
+            ),
         )
 
         try:
-            response = await self.model.chat(
-                messages=[{"role": "user", "content": prompt}],
-                system_prompt=None,
+            response = await self._chat_with_proactive_limits(
+                prompt,
                 max_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
                 max_completion_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
             )
@@ -986,6 +1068,8 @@ class ProactiveEngine:
                     return regenerated
         except Exception as e:
             logger.error(f"[ProactiveEngine] 上下文主动消息生成失败: {e}")
+            return self._fallback_contextual_message(motive)
+
         return self._fallback_contextual_message(motive)
 
     async def _regenerate_proactive_message(
@@ -1014,9 +1098,8 @@ class ProactiveEngine:
             invalid_message=str(invalid_message or "")[:300],
         )
         try:
-            response = await self.model.chat(
-                messages=[{"role": "user", "content": prompt}],
-                system_prompt=None,
+            response = await self._chat_with_proactive_limits(
+                prompt,
                 max_tokens=PROACTIVE_REGENERATION_MAX_TOKENS,
                 max_completion_tokens=PROACTIVE_REGENERATION_MAX_TOKENS,
             )
@@ -1050,6 +1133,72 @@ class ProactiveEngine:
         except Exception as e:
             logger.error(f"[ProactiveEngine] 构建主动消息重写上下文失败: {e}")
             return None
+
+    async def _chat_with_proactive_limits(self, prompt: str, *, max_tokens: int, max_completion_tokens: int) -> str:
+        """Call the model with proactive generation limits, falling back for simple test doubles."""
+        try:
+            return await self.model.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=None,
+                max_tokens=max_tokens,
+                max_completion_tokens=max_completion_tokens,
+            )
+        except TypeError:
+            return await self.model.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=None,
+            )
+
+    async def _build_proactive_memory_context(self, motive: "ProactiveMotive") -> str:
+        """聚合主动唤醒需要的专用记忆。"""
+        lines = []
+        motive_type = getattr(getattr(motive, "type", None), "value", str(getattr(motive, "type", "")))
+        if motive_type:
+            lines.append(f"主动动机类型：{motive_type}")
+
+        motive_reason = str(getattr(motive, "reason", "") or "").strip()
+        if motive_reason:
+            lines.append(f"主动动机原因：{motive_reason}")
+
+        target = getattr(motive, "target", None)
+        if isinstance(target, dict) and target:
+            target_lines = self._summarize_target_context(target)
+            if target_lines:
+                lines.append("主动目标线索：")
+                lines.extend(f"  - {item}" for item in target_lines)
+
+        if self.memory:
+            bot_id = getattr(self.memory, "bot_id", self.bot_id)
+            user_id = getattr(self.memory, "user_id", "default_user")
+            daily_context = {}
+            relationship_state = {}
+            understanding = {}
+            try:
+                daily_context = self.memory.daily.get_recent_context(
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    current_session_id=getattr(self.memory, "_session_id", None),
+                    intent="proactive_generation",
+                )
+            except Exception as exc:
+                logger.debug("[ProactiveEngine] 读取 proactive daily 上下文失败: %s", exc)
+            try:
+                relationship_state = await self.memory.relationship.get_state(bot_id=bot_id, user_id=user_id)
+            except Exception as exc:
+                logger.debug("[ProactiveEngine] 读取 proactive relationship 状态失败: %s", exc)
+            try:
+                understanding = self.memory.user_understanding.load()
+            except Exception as exc:
+                logger.debug("[ProactiveEngine] 读取 proactive user_understanding 失败: %s", exc)
+
+            if daily_context:
+                lines.extend(self._format_daily_memory_context(daily_context))
+            if relationship_state:
+                lines.extend(self._format_relationship_memory_context(relationship_state))
+            if understanding:
+                lines.extend(self._format_user_understanding_context(understanding))
+
+        return "\n".join(lines).strip()
 
     def _recent_visible_shareable_life_events(self, limit: int = 2) -> list:
         life_engine = getattr(self, "life_engine", None)

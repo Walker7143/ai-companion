@@ -310,7 +310,7 @@ class MemoryExtractor:
                     type="relationship_event",
                     key="relationship_state",
                     value=label,
-                    confidence=0.75,
+                    confidence=0.75 if (label or key_moment or open_thread) else 0.6,
                     importance=0.75 if key_moment else 0.6,
                     source="auto",
                     evidence=[session_id],

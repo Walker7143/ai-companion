@@ -30,6 +30,7 @@ import aiosqlite
 
 from .stores.episodic import EpisodicStore
 from .stores.relationship import RelationshipStore
+from .stores.memory_rollup import MemoryRollupStore
 from .stores.semantic import SemanticStore
 from .stores.user_understanding import UserUnderstandingStore
 from .stores.vector import VectorMemoryDocument, VectorMemoryStore
@@ -149,6 +150,7 @@ class MemoryEngine:
             self.memory_dir / "relationship.db",
             persona_backstory_path=persona_backstory_path,
         )
+        self.rollups = MemoryRollupStore(self.memory_dir / "rollups.db", enabled=self.config.get("rollups", {}).get("enabled", True) if isinstance(self.config.get("rollups"), dict) else True)
         self.extractor = MemoryExtractor()
         self.governor = MemoryGovernor(
             semantic_store=self.semantic,
@@ -163,6 +165,7 @@ class MemoryEngine:
             episodic_store=self.episodic,
             semantic_store=self.semantic,
             relationship_store=self.relationship,
+            rollup_store=self.rollups,
             user_understanding=self.user_understanding,
             max_working_turns=self.max_working_turns,
             max_summaries=self.max_summaries,
@@ -175,6 +178,7 @@ class MemoryEngine:
             user_understanding=self.user_understanding,
             relationship_store=self.relationship,
             daily_store=self.daily,
+            rollup_store=self.rollups,
         )
 
         self._session_id: Optional[str] = None
@@ -216,6 +220,7 @@ class MemoryEngine:
         self._seed_user_understanding_from_builtin()
         await self.semantic.init()
         await self.relationship.init()
+        await self.rollups.init()
         await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id, summarizer=self._summarizer)
         await self.rebuild_vector_index()
 
@@ -261,6 +266,12 @@ class MemoryEngine:
             "conscious_context": conscious.to_dict(),
             "memory_prompt_diagnostics": diagnostics,
             "system_suffix": suffix,
+            "memory_continuity": {
+                "daily_open_threads": retrieved.daily_context.get("open_threads", []) if isinstance(retrieved.daily_context, dict) else [],
+                "daily_commitments": retrieved.daily_context.get("commitments", []) if isinstance(retrieved.daily_context, dict) else [],
+                "relationship_label": retrieved.relationship_state.get("relationship_label") if isinstance(retrieved.relationship_state, dict) else None,
+                "relationship_status": retrieved.relationship_state.get("relationship_status") if isinstance(retrieved.relationship_state, dict) else None,
+            },
         }
 
     async def on_message(self, user_input: str, llm_output: str, turn_context: MemoryTurnContext | dict | None = None):
@@ -410,8 +421,10 @@ class MemoryEngine:
         fact_count = await self.semantic.get_fact_count()
         vector_count = self.vector.count(bot_id=self.bot_id, user_id=self.user_id)
         relationship = await self.relationship.get_state(bot_id=self.bot_id, user_id=self.user_id)
+        rollup_count = len(await self.rollups.get_latest_by_scope(bot_id=self.bot_id, user_id=self.user_id, scope="global", limit=20)) if self.rollups else 0
         daily_messages = self.daily.count_messages(bot_id=self.bot_id, user_id=self.user_id)
         daily_days = self.daily.count_recent_days(bot_id=self.bot_id, user_id=self.user_id)
+        daily_context = self.daily.get_recent_context(bot_id=self.bot_id, user_id=self.user_id, intent="planning")
 
         return {
             "session_id": sid,
@@ -422,8 +435,11 @@ class MemoryEngine:
             "fact_count": fact_count,
             "vector_count": vector_count,
             "relationship": relationship,
+            "rollup_count": rollup_count,
             "daily_messages": daily_messages,
             "daily_days": daily_days,
+            "daily_open_threads": daily_context.get("open_threads", []) if isinstance(daily_context, dict) else [],
+            "daily_commitments": daily_context.get("commitments", []) if isinstance(daily_context, dict) else [],
             "user_understanding_path": str(self.user_understanding.path),
             "user_understanding_auto_facts": self.user_understanding.auto_fact_count(),
             "health": health,
@@ -503,6 +519,7 @@ class MemoryEngine:
         self.vector.close()
         await self.semantic.close()
         await self.relationship.close()
+        await self.rollups.close()
 
     # ── 内部方法 ─────────────────────────────────────────────
 

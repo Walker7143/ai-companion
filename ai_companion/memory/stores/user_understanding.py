@@ -319,6 +319,7 @@ class UserUnderstandingStore:
         *,
         facts: list[dict[str, Any]],
         relationship: dict[str, Any] | None = None,
+        daily_context: dict[str, Any] | None = None,
     ):
         data = self.load()
         manual = data.setdefault("manual", self._empty_section())
@@ -411,6 +412,19 @@ class UserUnderstandingStore:
             for thread in relationship.get("open_emotional_threads") or []:
                 self._append_unique(auto["open_threads"], str(thread))
                 self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], f"还有未完成的情绪话题：{thread}")
+
+        if daily_context:
+            today_summary = str(daily_context.get("today") or "").strip()
+            if today_summary:
+                self._append_unique(auto["current_context"], today_summary)
+                self._append_unique(auto["recent_changes"], today_summary)
+            for thread in daily_context.get("open_threads") or []:
+                self._append_unique(auto["open_threads"], str(thread))
+            for commitment in daily_context.get("commitments") or []:
+                self._append_unique(auto["goals_and_projects"], str(commitment))
+                self._append_unique(auto["open_threads"], f"待办：{commitment}")
+            for mood in daily_context.get("mood") or []:
+                self._append_unique(auto["emotional_patterns"], str(mood))
 
         auto["profile_summary"] = self._build_profile_summary(manual, auto, relationship_memory)
         auto["last_refresh_at"] = datetime.now().isoformat()
@@ -1012,6 +1026,10 @@ class UserUnderstandingStore:
             parts.append("近期压力源：" + "；".join(auto["stressors"][:2]))
         if auto.get("comfort_strategies"):
             parts.append("有效陪伴方式：" + "；".join(auto["comfort_strategies"][:2]))
+        if auto.get("goals_and_projects"):
+            parts.append("目标和项目：" + "；".join(auto["goals_and_projects"][:2]))
+        if auto.get("recent_changes"):
+            parts.append("近期变化：" + "；".join(auto["recent_changes"][:2]))
         needs = relationship_memory.get("what_user_seems_to_need_from_bot") or []
         if needs:
             parts.append("关系中的需要：" + "；".join(needs[:2]))

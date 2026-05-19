@@ -282,6 +282,7 @@ class SemanticStore:
         value = self._trim_value(value)
         now = datetime.now().isoformat()
         category = category or self._infer_category(key, value)
+        evidence_list = [str(item).strip() for item in (evidence or []) if str(item).strip()]
         async with aiosqlite.connect(self.db_path) as db:
             existing = await db.execute(
                 """
@@ -318,16 +319,16 @@ class SemanticStore:
             """, (
                 bot_id,
                 user_id,
-                key,
-                value,
-                category,
-                float(confidence),
-                source,
-                json.dumps(evidence or [], ensure_ascii=False),
-                session_id,
-                now,
-                now,
-                now,
+                    key,
+                    value,
+                    category,
+                    float(confidence),
+                    source,
+                    json.dumps(evidence_list, ensure_ascii=False),
+                    session_id,
+                    now,
+                    now,
+                    now,
                 expires_at,
                 1 if manual_override else 0,
             ))
@@ -478,6 +479,7 @@ class SemanticStore:
                 "expires_at": row[11],
                 "manual_override": bool(row[12]),
                 "archived": bool(row[13]),
+                "evidence": _json_list(row[6]),
             })
         return result
 

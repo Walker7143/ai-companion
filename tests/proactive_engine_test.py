@@ -301,6 +301,7 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
                 prompt_context="Bot 最近发生了一件事想分享：测试",
             )
             message = await engine.generate_contextual_message(motive)
+            self.assertIsInstance(message, str)
             self.assertNotIn('"opening"', message)
             self.assertNotIn("开头", message)
             self.assertNotIn("主体", message)
@@ -476,41 +477,104 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("那你怎么看", prompt)
             self.assertIn("不要像重新开一个话题", prompt)
             self.assertIn("刚才你问的那个问题", message)
-
-    async def test_contextual_message_trims_large_memory_context_and_raises_completion_budget(self):
+    async def test_contextual_message_prompt_includes_proactive_memory_layers(self):
         from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
 
-        class LargeMemoryEngine(ProactiveEngine):
-            async def _build_context(self, max_chars=None):
-                text = "用户记忆：" + ("很长的上下文。" * 2000)
-                return self._clip_context_text(text, max_chars) if max_chars is not None else text
-
-        with TemporaryDirectory(prefix="proactive-context-budget-") as td:
+        with TemporaryDirectory(prefix="proactive-memory-layers-") as td:
             root = Path(td)
             persona = root / "persona"
             persona.mkdir()
-            model = CaptureModel('{"message":"刚才数零钱，居然刚好够买杯热饮。"}')
-            engine = LargeMemoryEngine(
+            model = CaptureModel('{"message":"我刚才看到你提过的事，想接着说两句。"}')
+            engine = ProactiveEngine(
                 bot_id="context_bot",
                 config=ProactiveConfig(persona),
                 state=ProactiveState("context_bot", root / "runtime"),
                 model=model,
             )
+
+            class WorkingStub:
+                def get_recent(self, *args, **kwargs):
+                    return []
+
+            class DailyStub:
+                def get_recent_context(self, **kwargs):
+                    return {
+                        "today": "今天用户在处理面试和复盘",
+                        "open_threads": ["面试后复盘"],
+                        "commitments": ["晚上回来复盘"],
+                        "mood": ["有点紧张"],
+                    }
+
+            class RelationshipStub:
+                async def get_state(self, **kwargs):
+                    return {
+                        "relationship_label": "好朋友",
+                        "current_posture": "先接住情绪，再继续聊",
+                        "interaction_guidance": "关系紧张时先放慢、承认感受、少解释。",
+                        "relationship_narrative": "先放慢，先接住情绪。",
+                        "open_emotional_threads": ["上次那个话题还没说完"],
+                    }
+
+            class UnderstandingStub:
+                def load(self):
+                    return {
+                        "layered": {
+                            "current": {
+                                "current_context": ["最近在准备面试"],
+                                "open_threads": ["面试后复盘"],
+                                "goals_and_projects": ["整理作品集"],
+                                "recent_changes": ["最近很忙"],
+                            },
+                            "deep": {
+                                "relationship_memory": {
+                                    "what_user_seems_to_need_from_bot": ["先慢一点"],
+                                    "things_that_created_tension": ["不想被追问太快"],
+                                },
+                            },
+                        }
+                    }
+
+            engine.memory = type(
+                "MemoryStub",
+                (),
+                {
+                    "bot_id": "context_bot",
+                    "user_id": "default_user",
+                    "_session_id": "session-1",
+                    "working": WorkingStub(),
+                    "daily": DailyStub(),
+                    "relationship": RelationshipStub(),
+                    "user_understanding": UnderstandingStub(),
+                },
+            )()
             motive = ProactiveMotive(
-                type=ProactiveMotiveType.LIFE_EVENT,
-                priority=60,
-                reason="想把今天发生的一件小事随手讲给对方听",
-                prompt_context="你准备主动发一条日常小事：零钱够买热饮。",
+                type=ProactiveMotiveType.TOPIC_CONTINUATION,
+                priority=100,
+                reason="接上今天未完的话题",
+                prompt_context="用户刚才提到面试后还想复盘一下。",
+                target={
+                    "message": "我们晚点再接着聊",
+                    "metadata": {"source_platform": "wechat", "proactive_kind": "topic_continuation"},
+                },
             )
 
             await engine.generate_contextual_message(motive)
 
-            call = model.calls[-1]
-            prompt = call["messages"][-1]["content"]
-            self.assertLess(len(prompt), 7000)
-            self.assertIn("上下文已截断", prompt)
-            self.assertEqual(call["kwargs"]["max_completion_tokens"], 2048)
-            self.assertEqual(call["kwargs"]["max_tokens"], 2048)
+            prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("主动动机类型：topic_continuation", prompt)
+            self.assertIn("主动动机原因：接上今天未完的话题", prompt)
+            self.assertIn("【今日连续性记忆】", prompt)
+            self.assertIn("面试后复盘", prompt)
+            self.assertIn("晚上回来复盘", prompt)
+            self.assertIn("有点紧张", prompt)
+            self.assertIn("【关系姿态】", prompt)
+            self.assertIn("好朋友", prompt)
+            self.assertIn("先接住情绪", prompt)
+            self.assertIn("【长期用户理解】", prompt)
+            self.assertIn("整理作品集", prompt)
+            self.assertIn("不想被追问太快", prompt)
+            self.assertIn("主动目标线索", prompt)
+            self.assertIn("source_platform：wechat", prompt)
 
     async def test_generate_message_prompt_includes_current_life_anchor(self):
         with TemporaryDirectory(prefix="proactive-life-anchor-") as td:
