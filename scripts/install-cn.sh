@@ -51,6 +51,17 @@ get_user_dir() {
     USER_DIR="$HOME/.ai-companion"
 }
 
+register_gateway_autostart() {
+    local python_exe="$1"
+    echo ""
+    echo "Registering Gateway autostart..."
+    if "$python_exe" -m ai_companion.autostart; then
+        echo "Gateway autostart registered"
+    else
+        echo "Warning: Gateway autostart registration failed"
+    fi
+}
+
 # 本地安装
 install_local() {
     echo ""
@@ -95,6 +106,7 @@ install_local() {
     echo "📦 安装 AI Companion..."
     $VENV_PIP install --no-cache-dir "$PROJECT_DIR" -i "$PYTHON_INDEX" -q
     echo "✓ AI Companion 已安装"
+    register_gateway_autostart "$USER_DIR/.venv/bin/python"
 
     # 复制 Bot 模板到数据目录（pip 不打包运行时数据）
     echo ""

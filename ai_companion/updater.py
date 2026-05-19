@@ -56,6 +56,7 @@ def run_update(options: UpdateOptions | None = None) -> int:
         gateway_was_running = _stop_gateway_if_needed(options.restart_gateway)
         source = _update_source(root, options)
         _install_project(source.project_dir, options)
+        _register_gateway_autostart(source.project_dir)
         _install_ui_dependencies(source.project_dir, skip=options.skip_ui)
     except UpdateError as exc:
         print(f"[ERROR] 更新失败: {exc}")
@@ -406,6 +407,22 @@ def _install_project(project_dir: Path, options: UpdateOptions) -> None:
         cmd.extend(["-i", options.index_url])
     cmd.extend(["-e", str(project_dir)])
     _run(cmd, cwd=project_dir, step="安装当前项目")
+
+
+def _register_gateway_autostart(project_dir: Path | None = None) -> None:
+    print("Registering Gateway autostart...")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "ai_companion.autostart"],
+            cwd=str(project_dir) if project_dir is not None else None,
+            check=False,
+        )
+    except Exception as exc:
+        print(f"[WARN] Gateway autostart registration failed: {exc}")
+        return
+
+    if result.returncode != 0:
+        print(f"[WARN] Gateway autostart registration failed with exit code {result.returncode}")
 
 
 def _install_ui_dependencies(project_dir: Path, skip: bool = False) -> None:

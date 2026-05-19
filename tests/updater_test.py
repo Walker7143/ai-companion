@@ -8,6 +8,27 @@ from ai_companion import updater
 
 
 class UpdaterGitTargetTest(unittest.TestCase):
+    def test_run_update_registers_gateway_autostart_after_install(self):
+        calls: list[str] = []
+
+        with patch.object(updater, "_current_project_root", return_value=Path("project")), patch.object(
+            updater, "_stop_gateway_if_needed", return_value=False
+        ), patch.object(
+            updater,
+            "_update_source",
+            return_value=updater.SourceUpdate(project_dir=Path("project"), mode="git"),
+        ), patch.object(
+            updater, "_install_project", side_effect=lambda *_: calls.append("install")
+        ), patch.object(
+            updater, "_register_gateway_autostart", side_effect=lambda *_: calls.append("autostart")
+        ), patch.object(
+            updater, "_install_ui_dependencies", side_effect=lambda *_, **__: calls.append("ui")
+        ):
+            code = updater.run_update(updater.UpdateOptions(restart_gateway=True))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["install", "autostart", "ui"])
+
     def test_resolve_git_pull_target_uses_origin_default_when_master_has_no_upstream(self):
         commands: list[tuple[str, ...]] = []
 

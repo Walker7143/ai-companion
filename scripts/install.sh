@@ -86,6 +86,17 @@ get_user_dir() {
     USER_DIR="$HOME/.ai-companion"
 }
 
+register_gateway_autostart() {
+    local python_exe="$1"
+    echo ""
+    echo "Registering Gateway autostart..."
+    if "$python_exe" -m ai_companion.autostart; then
+        echo "Gateway autostart registered"
+    else
+        echo "Warning: Gateway autostart registration failed"
+    fi
+}
+
 # 本地安装
 install_local() {
     PYTHON_CMD=""
@@ -151,6 +162,7 @@ install_local() {
     echo "📦 安装 AI Companion..."
     $VENV_PIP install -e "$PROJECT_DIR" -q
     echo "✓ AI Companion 已安装"
+    register_gateway_autostart "$USER_DIR/.venv/bin/python"
 
     # Install frontend UI dependencies (for management dashboard)
     if [ -f "$PROJECT_DIR/ai-companion-ui/package.json" ]; then

@@ -154,6 +154,23 @@ function Test-NeedsVenv {
     }
 }
 
+function Register-GatewayAutostart {
+    param([string]$PythonExe)
+
+    Write-Host ""
+    Write-Host "Registering Gateway autostart..." -ForegroundColor Yellow
+    try {
+        & $PythonExe -m ai_companion.autostart
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[OK] Gateway autostart registered" -ForegroundColor Green
+        } else {
+            Write-Host "[WARN] Gateway autostart registration failed" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "[WARN] Gateway autostart registration failed: $_" -ForegroundColor Yellow
+    }
+}
+
 function Install-Local {
     param([string]$ProjectDir)
 
@@ -209,11 +226,13 @@ function Install-Local {
             & $venvPip install -r requirements.txt -q
             & $venvPip install -e . -q
             Write-Host "[OK] Installed to virtual environment" -ForegroundColor Green
+            Register-GatewayAutostart "$venvDir\Scripts\python.exe"
         } else {
             Write-Host ""
             Write-Host "Installing AI Companion command..." -ForegroundColor Yellow
             & python -m pip install -e . -q
             Write-Host "[OK] AI Companion installed" -ForegroundColor Green
+            Register-GatewayAutostart "python"
         }
     } finally {
         Set-Location $originalDir
