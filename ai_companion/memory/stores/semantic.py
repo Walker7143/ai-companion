@@ -162,6 +162,44 @@ class SemanticStore:
                 )
                 """
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS fact_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bot_id TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL DEFAULT 'default_user',
+                    key TEXT NOT NULL,
+                    old_value TEXT,
+                    old_category TEXT,
+                    old_confidence REAL,
+                    old_source TEXT,
+                    old_evidence_json TEXT,
+                    old_session_id TEXT,
+                    old_created_at TEXT,
+                    old_updated_at TEXT,
+                    superseded_by_value TEXT,
+                    reason TEXT,
+                    superseded_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_lifecycle_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bot_id TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL DEFAULT 'default_user',
+                    memory_type TEXT NOT NULL,
+                    memory_key TEXT,
+                    action TEXT NOT NULL,
+                    reason TEXT,
+                    before_json TEXT,
+                    after_json TEXT,
+                    evidence_json TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             cursor = await db.execute("PRAGMA table_info(user_facts)")
             columns = [row[1] async for row in cursor]
             if "id" not in columns or "bot_id" not in columns:
@@ -187,6 +225,8 @@ class SemanticStore:
             await db.execute("UPDATE user_facts SET created_at = COALESCE(created_at, updated_at, ?)", (datetime.now().isoformat(),))
             await db.execute("CREATE INDEX IF NOT EXISTS idx_facts_session ON user_facts(session_id)")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_facts_user_category ON user_facts(bot_id, user_id, category, archived)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_fact_history_key ON fact_history(bot_id, user_id, key, superseded_at)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_lifecycle_events_key ON memory_lifecycle_events(bot_id, user_id, memory_type, memory_key, created_at)")
             await db.commit()
 
     async def _migrate_user_facts_table(self, db, columns: list[str]):
@@ -386,6 +426,250 @@ class SemanticStore:
                 )
             row = await cursor.fetchone()
             return row[0] if row else None
+
+    async def get_fact_record(
+        self,
+        key: str,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        include_archived: bool = False,
+    ) -> Optional[dict]:
+        clauses = ["key = ?", "(bot_id = ? OR bot_id = '' OR bot_id IS NULL)", "user_id = ?"]
+        params: list[object] = [key, bot_id, user_id]
+        if not include_archived:
+            clauses.append("COALESCE(archived, 0) = 0")
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"""
+                SELECT id, key, value, category, confidence, source, evidence_json,
+                       session_id, created_at, updated_at, last_seen_at, last_confirmed_at,
+                       expires_at, manual_override, archived
+                FROM user_facts
+                WHERE {' AND '.join(clauses)}
+                ORDER BY manual_override DESC, confidence DESC, updated_at DESC
+                LIMIT 1
+                """,
+                params,
+            )
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "key": row[1],
+            "value": row[2],
+            "category": row[3],
+            "confidence": row[4],
+            "source": row[5],
+            "evidence": _json_list(row[6]),
+            "session_id": row[7],
+            "created_at": row[8],
+            "updated_at": row[9],
+            "last_seen_at": row[10],
+            "last_confirmed_at": row[11],
+            "expires_at": row[12],
+            "manual_override": bool(row[13]),
+            "archived": bool(row[14]),
+        }
+
+    async def record_fact_supersession(
+        self,
+        *,
+        old_fact: dict,
+        new_value: str,
+        reason: str,
+        bot_id: str = "",
+        user_id: str = "default_user",
+    ):
+        if not old_fact:
+            return
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO fact_history (
+                    bot_id, user_id, key, old_value, old_category, old_confidence,
+                    old_source, old_evidence_json, old_session_id, old_created_at,
+                    old_updated_at, superseded_by_value, reason, superseded_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    bot_id,
+                    user_id,
+                    str(old_fact.get("key") or ""),
+                    str(old_fact.get("value") or ""),
+                    str(old_fact.get("category") or ""),
+                    float(old_fact.get("confidence") or 0),
+                    str(old_fact.get("source") or ""),
+                    json.dumps(old_fact.get("evidence") or [], ensure_ascii=False),
+                    old_fact.get("session_id"),
+                    old_fact.get("created_at"),
+                    old_fact.get("updated_at"),
+                    str(new_value or ""),
+                    str(reason or ""),
+                    now,
+                ),
+            )
+            await db.commit()
+
+    async def confirm_fact(
+        self,
+        key: str,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        confidence: float = 0.95,
+        source: str = "user_confirmed",
+        evidence: Optional[list[str]] = None,
+    ):
+        now = datetime.now().isoformat()
+        evidence_list = [str(item).strip() for item in (evidence or []) if str(item).strip()]
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE user_facts
+                SET confidence = MAX(confidence, ?),
+                    source = ?,
+                    last_confirmed_at = ?,
+                    last_seen_at = ?,
+                    evidence_json = CASE
+                        WHEN ? IS NULL THEN evidence_json
+                        ELSE ?
+                    END
+                WHERE key = ? AND (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?
+                  AND COALESCE(archived, 0) = 0
+                """,
+                (
+                    float(confidence),
+                    source,
+                    now,
+                    now,
+                    json.dumps(evidence_list, ensure_ascii=False) if evidence_list else None,
+                    json.dumps(evidence_list, ensure_ascii=False) if evidence_list else None,
+                    key,
+                    bot_id,
+                    user_id,
+                ),
+            )
+            await db.commit()
+
+    async def record_lifecycle_event(
+        self,
+        *,
+        memory_type: str,
+        memory_key: str,
+        action: str,
+        reason: str = "",
+        before: Optional[dict] = None,
+        after: Optional[dict] = None,
+        evidence: Optional[list[str]] = None,
+        bot_id: str = "",
+        user_id: str = "default_user",
+    ):
+        now = datetime.now().isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO memory_lifecycle_events (
+                    bot_id, user_id, memory_type, memory_key, action, reason,
+                    before_json, after_json, evidence_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    bot_id,
+                    user_id,
+                    memory_type,
+                    memory_key,
+                    action,
+                    reason,
+                    json.dumps(before or {}, ensure_ascii=False),
+                    json.dumps(after or {}, ensure_ascii=False),
+                    json.dumps(evidence or [], ensure_ascii=False),
+                    now,
+                ),
+            )
+            await db.commit()
+
+    async def list_fact_history(
+        self,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        limit: int = 10,
+    ) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT key, old_value, old_category, old_confidence, old_source,
+                       superseded_by_value, reason, superseded_at
+                FROM fact_history
+                WHERE (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (bot_id, user_id, max(0, int(limit))),
+            )
+            rows = await cursor.fetchall()
+        return [
+            {
+                "key": row[0],
+                "old_value": row[1],
+                "old_category": row[2],
+                "old_confidence": row[3],
+                "old_source": row[4],
+                "new_value": row[5],
+                "reason": row[6],
+                "superseded_at": row[7],
+            }
+            for row in rows
+        ]
+
+    async def list_lifecycle_events(
+        self,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        memory_type: Optional[str] = None,
+        actions: Optional[set[str]] = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        clauses = ["(bot_id = ? OR bot_id = '' OR bot_id IS NULL)", "user_id = ?"]
+        params: list[object] = [bot_id, user_id]
+        if memory_type:
+            clauses.append("memory_type = ?")
+            params.append(memory_type)
+        if actions:
+            placeholders = ", ".join("?" for _ in actions)
+            clauses.append(f"action IN ({placeholders})")
+            params.extend(sorted(actions))
+        params.append(max(0, int(limit)))
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                f"""
+                SELECT memory_type, memory_key, action, reason, before_json,
+                       after_json, evidence_json, created_at
+                FROM memory_lifecycle_events
+                WHERE {' AND '.join(clauses)}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                params,
+            )
+            rows = await cursor.fetchall()
+        return [
+            {
+                "memory_type": row[0],
+                "memory_key": row[1],
+                "action": row[2],
+                "reason": row[3],
+                "before": _json_dict(row[4]),
+                "after": _json_dict(row[5]),
+                "evidence": _json_list(row[6]),
+                "created_at": row[7],
+            }
+            for row in rows
+        ]
 
     async def get_all_facts(
         self,
@@ -609,6 +893,76 @@ class SemanticStore:
                 bot_id=bot_id,
                 user_id=user_id,
             )
+
+    async def archive_fact(
+        self,
+        key: str,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        reason: str = "",
+    ) -> bool:
+        before = await self.get_fact_record(key, bot_id=bot_id, user_id=user_id, include_archived=False)
+        if not before:
+            return False
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE user_facts
+                SET archived = 1, updated_at = ?
+                WHERE key = ? AND (bot_id = ? OR bot_id = '' OR bot_id IS NULL) AND user_id = ?
+                  AND COALESCE(archived, 0) = 0
+                """,
+                (datetime.now().isoformat(), key, bot_id, user_id),
+            )
+            await db.commit()
+        if self._user_understanding:
+            await self._user_understanding.delete_auto_fact(key)
+        if self._vector_store:
+            await self._vector_store.delete(
+                source_type="semantic_fact",
+                source_id=key,
+                bot_id=bot_id,
+                user_id=user_id,
+            )
+        await self.record_lifecycle_event(
+            memory_type="semantic_fact",
+            memory_key=key,
+            action="archive",
+            reason=reason,
+            before=before,
+            bot_id=bot_id,
+            user_id=user_id,
+        )
+        return True
+
+    async def archive_facts_matching(
+        self,
+        *,
+        bot_id: str = "",
+        user_id: str = "default_user",
+        categories: Optional[set[str]] = None,
+        predicate,
+        reason: str = "",
+    ) -> list[dict]:
+        facts = await self.list_facts(
+            bot_id=bot_id,
+            user_id=user_id,
+            categories=categories,
+            include_archived=False,
+            limit=None,
+        )
+        archived: list[dict] = []
+        for fact in facts:
+            try:
+                should_archive = bool(predicate(fact))
+            except Exception:
+                should_archive = False
+            if not should_archive:
+                continue
+            if await self.archive_fact(str(fact.get("key") or ""), bot_id=bot_id, user_id=user_id, reason=reason):
+                archived.append(fact)
+        return archived
 
     async def archive_expired(self, *, now: str, bot_id: str = "", user_id: str = "default_user"):
         async with aiosqlite.connect(self.db_path) as db:
@@ -941,6 +1295,18 @@ def _json_list(value: str | None) -> list[str]:
     if not isinstance(data, list):
         return []
     return [str(item) for item in data if str(item).strip()]
+
+
+def _json_dict(value: object) -> dict:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        data = json.loads(str(value))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _float(value: object, default: float = 0.0) -> float:

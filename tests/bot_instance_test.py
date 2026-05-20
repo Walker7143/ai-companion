@@ -592,6 +592,32 @@ class PersonaEngineDefaultStyleTest(unittest.TestCase):
         self.assertIn("动作参考样例", prompt)
         self.assertIn("避免动作：夸张拥抱", prompt)
 
+    def test_turn_prompt_applies_runtime_relationship_overlay(self):
+        with TemporaryDirectory(prefix="persona-runtime-relation-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+            runtime_path = root / bot_id / "persona" / "runtime_profile.json"
+            runtime_path.write_text(
+                json.dumps(
+                    {
+                        "relationship_to_user": "恋人",
+                        "key_moments": ["已经正式确认恋人/男女朋友关系"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_embodied_expression_turn_prompt(
+                user_input="你都是我女朋友了",
+                intent="casual_chat",
+            )
+
+        self.assertIn("关系：恋人", prompt)
+        self.assertNotIn("关系：朋友", prompt)
+
 
 class ResponseStyleEmbodiedActionPolishTest(unittest.TestCase):
     def test_extracts_recent_actions_for_turn_prompt(self):

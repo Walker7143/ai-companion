@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .activation import MemoryActivationPlan
+
 
 @dataclass
 class RetrievedMemory:
@@ -18,6 +20,7 @@ class RetrievedMemory:
     semantic_items: list[dict] = field(default_factory=list)
     relationship_state: dict[str, Any] = field(default_factory=dict)
     user_understanding: dict[str, Any] = field(default_factory=dict)
+    activation_plan: MemoryActivationPlan | None = None
 
 
 class MemoryRetriever:
@@ -25,10 +28,20 @@ class MemoryRetriever:
 
     INTENT_KEYWORDS = {
         "emotional_support": ["难过", "焦虑", "压力", "失眠", "委屈", "崩溃", "烦", "累", "害怕"],
-        "recall_past": ["还记得", "上次", "之前", "那天", "以前", "我们聊过"],
+        "recall_past": [
+            "还记得", "记得吗", "记不记得", "不记得", "忘了", "忘记", "失忆",
+            "上次", "之前", "那天", "以前", "我们聊过", "聊过", "说过", "提过",
+            "刚才", "刚刚", "刚说", "刚聊", "前面", "上一句", "上一条",
+        ],
         "planning": ["计划", "继续", "明天", "待办", "安排", "目标", "作品集"],
         "relationship_repair": ["生气", "道歉", "冷淡", "吵架", "和好", "原谅"],
         "task_request": ["写代码", "总结", "翻译", "生成", "分析", "实现", "修复", "优化"],
+    }
+    RECENT_RECALL_CUES = {
+        "今天", "昨天", "最近", "刚才", "刚刚", "前面", "上次", "之前", "那会",
+    }
+    RECENT_RECALL_CONTEXT = {
+        "聊", "说", "问", "提", "记录", "聊天", "记忆", "记得", "忘", "确认", "确定",
     }
     TASK_CONTEXT_KEYWORDS = {
         "代码", "函数", "报错", "bug", "接口", "测试", "文档", "文件", "实现",
@@ -42,11 +55,14 @@ class MemoryRetriever:
 
     FACT_CATEGORIES_BY_INTENT = {
         "emotional_support": {"communication_style", "boundaries", "life_context", "important_people", "dislikes"},
-        "recall_past": {"identity", "important_people", "life_context", "goals", "dislikes"},
+        "recall_past": {
+            "identity", "important_people", "life_context", "goals", "routines",
+            "preferences", "communication_style", "boundaries", "open_threads", "dislikes",
+        },
         "planning": {"goals", "life_context", "open_threads", "routines", "dislikes"},
         "relationship_repair": {"boundaries", "communication_style", "important_people", "dislikes"},
         "task_request": {"identity", "preferences", "communication_style", "dislikes"},
-        "casual_chat": {"identity", "preferences", "communication_style", "boundaries", "dislikes"},
+        "casual_chat": {"identity", "preferences", "communication_style", "boundaries", "life_context", "important_people", "dislikes"},
         "proactive_generation": {"life_context", "goals", "open_threads", "communication_style", "dislikes"},
     }
 
@@ -102,13 +118,28 @@ class MemoryRetriever:
         relationship = await self.relationship.get_state(bot_id=bot_id, user_id=user_id)
         rollup_recall = []
         if self.rollups is not None:
-            scope = "day" if detected_intent in {"planning", "emotional_support", "proactive_generation"} else "topic"
-            rollup_recall = await self.rollups.get_recent_rollups(
-                bot_id=bot_id,
-                user_id=user_id,
-                scope=scope,
-                limit=4,
-            )
+            seen_rollups: set[tuple[str, str, str]] = set()
+            for scope in self._rollup_scopes_for_intent(detected_intent):
+                if len(rollup_recall) >= 6:
+                    break
+                items = await self.rollups.get_recent_rollups(
+                    bot_id=bot_id,
+                    user_id=user_id,
+                    scope=scope,
+                    limit=4,
+                )
+                for item in items:
+                    marker = (
+                        str(item.get("scope") or ""),
+                        str(item.get("topic_key") or ""),
+                        str(item.get("summary") or ""),
+                    )
+                    if marker in seen_rollups:
+                        continue
+                    seen_rollups.add(marker)
+                    rollup_recall.append(item)
+                    if len(rollup_recall) >= 6:
+                        break
 
         categories = self.FACT_CATEGORIES_BY_INTENT.get(detected_intent, self.FACT_CATEGORIES_BY_INTENT["casual_chat"])
         semantic_items = await self.semantic.search_facts(
@@ -174,25 +205,27 @@ class MemoryRetriever:
     def classify_intent(self, text: str) -> str:
         text = text or ""
         lowered = text.lower()
+        recall_cue = self._has_recall_cue(text, lowered)
+        explicit_memory_question = self._has_explicit_memory_question(text, lowered)
         matched: dict[str, int] = {}
         for intent, keywords in self.INTENT_KEYWORDS.items():
             count = sum(1 for keyword in keywords if keyword in text or keyword.lower() in lowered)
             if count:
                 matched[intent] = count
-        if not matched:
-            return "casual_chat"
 
         task_context = sum(1 for keyword in self.TASK_CONTEXT_KEYWORDS if keyword in text or keyword.lower() in lowered)
         relationship_context = sum(1 for keyword in self.RELATIONSHIP_CONTEXT_KEYWORDS if keyword in text)
 
-        if matched.get("task_request") and task_context:
-            return "task_request"
+        if not matched:
+            return "casual_chat"
         if matched.get("relationship_repair") and relationship_context and not task_context:
             return "relationship_repair"
         if matched.get("emotional_support") and not task_context:
             return "emotional_support"
-        if matched.get("recall_past"):
+        if explicit_memory_question or (recall_cue and not (matched.get("task_request") and task_context)):
             return "recall_past"
+        if matched.get("task_request") and task_context:
+            return "task_request"
         if matched.get("planning"):
             return "planning"
         if matched.get("task_request"):
@@ -212,3 +245,27 @@ class MemoryRetriever:
         if intent == "task_request":
             return 3
         return 5
+
+    def _rollup_scopes_for_intent(self, intent: str) -> list[str]:
+        if intent in {"planning", "emotional_support", "proactive_generation"}:
+            return ["day", "topic"]
+        if intent == "recall_past":
+            return ["day", "topic"]
+        return ["topic"]
+
+    def _has_recall_cue(self, text: str, lowered: str) -> bool:
+        if not text:
+            return False
+        explicit_cues = self.INTENT_KEYWORDS.get("recall_past", [])
+        if any(cue in text or cue.lower() in lowered for cue in explicit_cues):
+            return True
+        has_recent_time = any(cue in text for cue in self.RECENT_RECALL_CUES)
+        has_recall_context = any(cue in text for cue in self.RECENT_RECALL_CONTEXT)
+        return has_recent_time and has_recall_context
+
+    def _has_explicit_memory_question(self, text: str, lowered: str) -> bool:
+        cues = (
+            "还记得", "记得吗", "记不记得", "不记得", "忘了", "忘记", "失忆",
+            "我们聊过", "聊过", "说过", "提过", "刚说", "刚聊", "上一句", "上一条",
+        )
+        return any(cue in text or cue.lower() in lowered for cue in cues)

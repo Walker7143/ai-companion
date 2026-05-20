@@ -590,6 +590,66 @@ class EpisodicStore:
             )
             await db.commit()
 
+    async def decay_stale(
+        self,
+        *,
+        bot_id: str,
+        user_id: str = "default_user",
+        archive_after_days: int = 90,
+    ) -> dict[str, int]:
+        """Decay old episodes and archive stale low-value ones.
+
+        Important or repeatedly recalled episodes remain active.  Ordinary
+        episodes gradually lose activation weight, which keeps recall from
+        drifting toward old low-signal snippets.
+        """
+        now = datetime.now()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT id, importance, confidence, recall_count, created_at, last_recalled_at
+                FROM episodic_memory
+                WHERE (bot_id = ? OR bot_id IS NULL OR bot_id = '')
+                  AND (user_id = ? OR user_id IS NULL)
+                  AND COALESCE(archived, 0) = 0
+                """,
+                (bot_id, user_id),
+            )
+            rows = await cursor.fetchall()
+            decayed = 0
+            archived = 0
+            for row in rows:
+                created_at = _parse_datetime(row["created_at"]) or now
+                last_recalled = _parse_datetime(row["last_recalled_at"])
+                age_days = max(0, (now - created_at).days)
+                recalled_days = max(0, (now - last_recalled).days) if last_recalled else age_days
+                recall_count = int(row["recall_count"] or 0)
+                importance = float(row["importance"] or 0)
+                confidence = float(row["confidence"] or 0)
+                retention = min(0.35, recall_count * 0.04) + min(0.30, importance * 0.22) + min(0.15, confidence * 0.10)
+                decay_score = max(0.15, min(1.0, 1.0 - (age_days / 180.0) - (recalled_days / 240.0) + retention))
+                should_archive = (
+                    age_days >= archive_after_days
+                    and recall_count == 0
+                    and importance < 0.55
+                    and confidence < 0.75
+                )
+                if should_archive:
+                    await db.execute(
+                        "UPDATE episodic_memory SET archived = 1, decay_score = ? WHERE id = ?",
+                        (decay_score, row["id"]),
+                    )
+                    archived += 1
+                else:
+                    await db.execute(
+                        "UPDATE episodic_memory SET decay_score = ? WHERE id = ?",
+                        (decay_score, row["id"]),
+                    )
+                    decayed += 1
+            await db.commit()
+        return {"decayed": decayed, "archived": archived}
+
     def list_recent(self, limit: int = 20) -> list[dict]:
         """返回最近的情景记忆片段"""
         conn = sqlite3.connect(self.db_path)
@@ -638,6 +698,18 @@ def _loads_list(value: object) -> list[str]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return []
     return _clean_list(parsed) if isinstance(parsed, list) else []
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        try:
+            return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:

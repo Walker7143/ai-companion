@@ -169,6 +169,46 @@ class CLIAdapter:
                     if status.get("user_understanding_path"):
                         await self._safe_print(f"  用户理解文件: {status['user_understanding_path']}")
                         await self._safe_print(f"  自动补充事实数: {status.get('user_understanding_auto_facts', 0)}")
+                    trust = status.get("memory_trust_view") or {}
+                    if trust:
+                        relationship_anchor = trust.get("relationship_anchor") or {}
+                        if relationship_anchor.get("narrative"):
+                            await self._safe_print("[bold]━━━ 记忆信任视图 ━━━[/bold]")
+                            await self._safe_print(f"  关系锚点: {escape(str(relationship_anchor.get('narrative') or ''))}")
+                        recent = trust.get("recently_remembered") or []
+                        if recent:
+                            await self._safe_print("  最近正在记住:")
+                            for item in recent[:5]:
+                                await self._safe_print(f"    - {escape(str(item.get('key') or ''))}: {escape(str(item.get('value') or ''))}")
+                        stable = trust.get("stable_understanding") or []
+                        if stable:
+                            await self._safe_print("  稳定理解:")
+                            for item in stable[:5]:
+                                confirmed = " ✓" if item.get("confirmed") else ""
+                                await self._safe_print(f"    - {escape(str(item.get('key') or ''))}: {escape(str(item.get('value') or ''))}{confirmed}")
+                        pending = trust.get("pending_confirmation") or []
+                        if pending:
+                            await self._safe_print("  可能需要确认:")
+                            for item in pending[:5]:
+                                confidence = item.get("confidence")
+                                confidence_text = f" ({float(confidence):.2f})" if isinstance(confidence, (int, float)) else ""
+                                await self._safe_print(f"    - {escape(str(item.get('key') or ''))}: {escape(str(item.get('value') or ''))}{confidence_text}")
+                        corrected = trust.get("corrected_memories") or []
+                        if corrected:
+                            await self._safe_print("  最近已纠正:")
+                            for item in corrected[:5]:
+                                await self._safe_print(
+                                    f"    - {escape(str(item.get('key') or ''))}: "
+                                    f"{escape(str(item.get('old_value') or ''))} -> {escape(str(item.get('new_value') or ''))}"
+                                )
+                        archived = trust.get("archived_or_suppressed") or []
+                        if archived:
+                            await self._safe_print("  已归档/压制:")
+                            for item in archived[:5]:
+                                await self._safe_print(
+                                    f"    - {escape(str(item.get('key') or ''))}: "
+                                    f"{escape(str(item.get('action') or ''))} / {escape(str(item.get('reason') or ''))}"
+                                )
                     health = status.get('health', {})
                     if health.get('reason'):
                         await self._safe_print(f"  状态: {health['reason']}")

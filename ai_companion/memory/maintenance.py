@@ -25,6 +25,18 @@ class MemoryMaintenance:
             daily_context = self.daily.get_recent_context(bot_id=bot_id, user_id=user_id, intent="planning")
         await self.semantic.archive_expired(now=now, bot_id=bot_id, user_id=user_id)
         await self.episodic.archive_low_value(bot_id=bot_id, user_id=user_id)
+        if hasattr(self.episodic, "decay_stale"):
+            decay_result = await self.episodic.decay_stale(bot_id=bot_id, user_id=user_id)
+            if decay_result.get("archived") or decay_result.get("decayed"):
+                await self.semantic.record_lifecycle_event(
+                    memory_type="episodic",
+                    memory_key="stale_decay",
+                    action="decay",
+                    reason="maintenance_decay_stale_episodes",
+                    after=decay_result,
+                    bot_id=bot_id,
+                    user_id=user_id,
+                )
         facts = await self.semantic.list_facts(
             bot_id=bot_id,
             user_id=user_id,

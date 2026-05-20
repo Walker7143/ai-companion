@@ -323,6 +323,8 @@ class MemoryExtractor:
         text = user_input.strip()
         candidates: list[MemoryCandidate] = []
         candidates.extend(self._explicit_self_fact_candidates(text, session_id=session_id))
+        candidates.extend(self._explicit_correction_candidates(text, session_id=session_id))
+        candidates.extend(self._explicit_relationship_confirmation_candidates(text, bot_output, session_id=session_id))
 
         category = self._infer_category(text, text)
         if category == "identity" and not self._is_explicit_identity_statement(text):
@@ -359,6 +361,124 @@ class MemoryExtractor:
                 )
             )
         return self._merge_candidates(candidates)
+
+    def _explicit_correction_candidates(self, text: str, *, session_id: str) -> list[MemoryCandidate]:
+        normalized = re.sub(r"\s+", "", str(text or ""))
+        if not normalized:
+            return []
+        candidates: list[MemoryCandidate] = []
+
+        name_match = re.search(r"(?:我不叫|我不是叫|别叫我|不要叫我)([^，。！？,.!?]{1,16})(?:，|。|,|！|!|吧|了)?(?:我叫|叫我|以后叫我)([^，。！？,.!?]{1,16})", normalized)
+        if name_match:
+            new_name = name_match.group(2).strip()
+            candidates.append(
+                MemoryCandidate(
+                    type="user_fact",
+                    key="用户称呼",
+                    value=f"用户明确纠正自己的称呼，应叫“{new_name}”。",
+                    category="identity",
+                    confidence=0.94,
+                    importance=0.86,
+                    source="rule_explicit_correction",
+                    ttl_days=None,
+                    evidence=[session_id],
+                    reason="用户明确纠正称呼。",
+                )
+            )
+
+        city_match = re.search(r"(?:我)?(?:现在)?不在([^，。！？,.!?]{1,20})(?:，|。|,|！|!|了|啦)?(?:我)?(?:现在)?(?:在|住在)([^，。！？,.!?]{1,20})", normalized)
+        if city_match:
+            city = city_match.group(2).strip()
+            candidates.append(
+                MemoryCandidate(
+                    type="user_fact",
+                    key="当前城市",
+                    value=f"用户明确纠正当前所在城市：{city}。",
+                    category="identity",
+                    confidence=0.92,
+                    importance=0.82,
+                    source="rule_explicit_correction",
+                    ttl_days=None,
+                    evidence=[session_id],
+                    reason="用户明确纠正当前所在地。",
+                )
+            )
+
+        pet_match = re.search(r"(?:我的)?(?:猫|宠物)(?:不叫|不是)([^，。！？,.!?]{1,16})(?:，|。|,|！|!|了|啦)?(?:叫|是)([^，。！？,.!?]{1,16})", normalized)
+        if pet_match:
+            pet_name = pet_match.group(2).strip()
+            candidates.append(
+                MemoryCandidate(
+                    type="user_fact",
+                    key="宠物信息",
+                    value=f"用户明确纠正宠物信息：猫/宠物叫“{pet_name}”。",
+                    category="important_people",
+                    confidence=0.91,
+                    importance=0.8,
+                    source="rule_explicit_correction",
+                    ttl_days=None,
+                    evidence=[session_id],
+                    reason="用户明确纠正宠物名字。",
+                )
+            )
+
+        generic_match = re.search(r"(?:你记错了|不是这样|我纠正一下|纠正一下)[，。,.]?(?:不是)?([^，。！？,.!?]{1,32})(?:，|。|,|！|!|了|啦)?(?:是|应该是)([^，。！？,.!?]{1,48})", normalized)
+        if generic_match:
+            old_text = generic_match.group(1).strip()
+            new_text = generic_match.group(2).strip()
+            if old_text and new_text:
+                candidates.append(
+                    MemoryCandidate(
+                        type="temporary_context",
+                        key="user_correction",
+                        value=f"用户纠正了一条记忆：不是“{old_text}”，而是“{new_text}”。",
+                        category="open_threads",
+                        confidence=0.82,
+                        importance=0.72,
+                        source="rule_explicit_correction",
+                        ttl_days=14,
+                        evidence=[session_id],
+                        reason="用户发起了泛化纠错，需要后续确认具体记忆项。",
+                    )
+                )
+        return candidates
+
+    def _explicit_relationship_confirmation_candidates(self, text: str, bot_output: str, *, session_id: str) -> list[MemoryCandidate]:
+        normalized = re.sub(r"\s+", "", str(text or ""))
+        if not normalized:
+            return []
+        committed_cues = (
+            "我们已经确定关系",
+            "我们已经确认关系",
+            "我们已经是男女朋友",
+            "我们已经是恋人",
+            "你是我女朋友",
+            "我是你男朋友",
+            "你都是我女朋友了",
+            "我们在一起了",
+        )
+        if not any(cue in normalized for cue in committed_cues):
+            return []
+        return [
+            MemoryCandidate(
+                type="relationship_event",
+                key="relationship_state",
+                value="恋人",
+                confidence=0.92,
+                importance=0.95,
+                source="rule_explicit_correction",
+                evidence=[session_id],
+                reason="用户明确确认恋人/男女朋友关系。",
+                metadata={
+                    "label": "恋人",
+                    "intimacy_delta": 6,
+                    "trust_delta": 6,
+                    "affection_delta": 6,
+                    "attitude_delta": 4,
+                    "key_moment": "用户明确确认恋人/男女朋友关系",
+                },
+            )
+        ]
 
     def _merge_candidates(self, candidates: list[MemoryCandidate]) -> list[MemoryCandidate]:
         result: list[MemoryCandidate] = []

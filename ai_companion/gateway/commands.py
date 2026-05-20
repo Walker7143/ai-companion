@@ -11,7 +11,7 @@ from ai_companion.config.loader import Config
 from ai_companion.model.factory import ModelFactory
 
 
-SUPPORTED_GATEWAY_COMMANDS = frozenset({"new", "reset", "models", "model", "status"})
+SUPPORTED_GATEWAY_COMMANDS = frozenset({"new", "reset", "models", "model", "status", "memory"})
 _PROVIDER_ENV_KEYS = {
     "minimax": "MINIMAX_API_KEY",
     "openai": "OPENAI_API_KEY",
@@ -117,6 +117,8 @@ class GatewayCommandHandler:
             return self._handle_model(bot, command.args)
         if command.name == "status":
             return await self._handle_status(bot, event)
+        if command.name == "memory":
+            return await self._handle_memory(bot)
         return None
 
     def _handle_new(self, bot: Any) -> str:
@@ -250,3 +252,63 @@ class GatewayCommandHandler:
             pass
 
         return "\n".join(lines)
+
+    async def _handle_memory(self, bot: Any) -> str:
+        memory = getattr(bot, "memory", None)
+        if not memory:
+            return "记忆状态: 未启用"
+        try:
+            status = await memory.get_memory_status()
+        except Exception as exc:
+            return f"记忆状态: 读取失败 ({exc})"
+
+        lines = [
+            "记忆状态:",
+            f"- 工作记忆轮数: {status.get('working_turns', 0)}",
+            f"- 情景记忆条数: {status.get('episodic_count', 0)}",
+            f"- 语义记忆事实数: {status.get('fact_count', 0)}",
+        ]
+        relationship = status.get("relationship") or {}
+        if relationship:
+            lines.append(
+                f"- 关系状态: {relationship.get('relationship_label', '朋友')} "
+                f"({float(relationship.get('relationship_score') or 0):.0f}/100)"
+            )
+
+        trust = status.get("memory_trust_view") or {}
+        anchor = trust.get("relationship_anchor") or {}
+        if anchor.get("narrative"):
+            lines.append("")
+            lines.append("记忆信任视图:")
+            lines.append(f"- 关系锚点: {anchor.get('narrative')}")
+
+        for title, key, limit in [
+            ("最近正在记住", "recently_remembered", 5),
+            ("稳定理解", "stable_understanding", 5),
+            ("可能需要确认", "pending_confirmation", 5),
+            ("最近已纠正", "corrected_memories", 5),
+            ("已归档/压制", "archived_or_suppressed", 5),
+        ]:
+            items = trust.get(key) if isinstance(trust.get(key), list) else []
+            if not items:
+                continue
+            lines.append(f"- {title}:")
+            for item in items[:limit]:
+                lines.append(f"  - {_format_memory_view_item(item, key)}")
+
+        health = status.get("health") or {}
+        if health.get("reason"):
+            lines.append(f"- 健康提示: {health.get('reason')}")
+        return "\n".join(lines)
+
+
+def _format_memory_view_item(item: dict, section: str) -> str:
+    if section == "corrected_memories":
+        return f"{item.get('key')}: {item.get('old_value')} -> {item.get('new_value')}"
+    if section == "archived_or_suppressed":
+        return f"{item.get('key')}: {item.get('action')} / {item.get('reason')}"
+    value = str(item.get("value") or "")
+    confidence = item.get("confidence")
+    suffix = f" ({float(confidence):.2f})" if isinstance(confidence, (int, float)) and section == "pending_confirmation" else ""
+    confirmed = " ✓" if item.get("confirmed") else ""
+    return f"{item.get('key')}: {value}{suffix}{confirmed}"

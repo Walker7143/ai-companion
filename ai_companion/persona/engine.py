@@ -2,6 +2,11 @@ from .loader import Persona
 import json
 
 
+def _is_committed_relationship(value: object) -> bool:
+    text = str(value or "").strip()
+    return any(token in text for token in ("恋人", "情侣", "伴侣", "男朋友", "女朋友", "恋爱中"))
+
+
 EMBODIED_FREQUENCY_GUIDANCE = {
     "low": "低频：只在情绪明显、亲密关心或场景转换时使用；大约每 3-5 条回复 1 次，每次 1 个短动作。",
     "medium": "中频：日常闲聊约每 2-3 条回复 1 次；情绪陪伴、暧昧互动或关系推进时可以略高；任务型回答自动降频。",
@@ -94,6 +99,10 @@ class PersonaEngine:
         # 6. 与用户的关系（从文件实时读取，关系变化会自动反映）
         rel = profile.get("relationship_to_user", "朋友")
         lines.append(f"你和用户的关系：{rel}。")
+        if _is_committed_relationship(rel):
+            lines.append(
+                "关系连续性：你们已经确认恋人/男女朋友关系。你的性格可以害羞、嘴硬、别扭或要求仪式感，但不要否认关系本身，不要说“我还没正式答应/我什么时候答应当你女朋友了”。"
+            )
 
         # 7. 特别指示
         lines.append("")
@@ -135,6 +144,9 @@ class PersonaEngine:
         """Build per-turn guidance so body language is generated in the main response."""
         speaking_style = self._load_json(self.persona.persona_dir / "speaking_style.json")
         profile = self._load_json(self.persona.persona_dir / "profile.json")
+        backstory = self._load_json(self.persona.persona_dir / "backstory.json")
+        runtime = self._load_json(self.persona.persona_dir / "runtime_profile.json")
+        profile, _backstory = self._apply_runtime_profile(profile, backstory, runtime)
         conversation_style = self._load_json(self.persona.persona_dir / "conversation_style_rules.json")
         config = self._embodied_expression_config(speaking_style)
         if not config["enabled"]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .activation import ActivatedMemory
 from .retriever import RetrievedMemory
 
 
@@ -146,6 +147,10 @@ class ConsciousContextBuilder:
         return f"{label}；{tone}"
 
     def _active_memory_details(self, retrieved: RetrievedMemory, *, intent: str, current_input: str) -> list[ActiveMemory]:
+        planned = self._planned_active_memories(retrieved)
+        if planned:
+            return planned
+
         candidates: list[ActiveMemory] = []
         for item in retrieved.episodic_recall[:3]:
             summary = str(item.get("summary") or "").strip()
@@ -326,6 +331,39 @@ class ConsciousContextBuilder:
         limit = 5 if intent in {"recall_past", "relationship_repair", "emotional_support"} else 3
         return _dedupe_active_memories(sorted(candidates, key=lambda item: item.score, reverse=True))[:limit]
 
+    def _planned_active_memories(self, retrieved: RetrievedMemory) -> list[ActiveMemory]:
+        plan = getattr(retrieved, "activation_plan", None)
+        active_items = getattr(plan, "active_memories", None)
+        if not active_items:
+            return []
+
+        result: list[ActiveMemory] = []
+        for item in active_items[:8]:
+            if isinstance(item, ActivatedMemory):
+                result.append(
+                    ActiveMemory(
+                        text=item.text,
+                        source=item.source,
+                        score=item.score,
+                        expression_mode=item.expression_mode,
+                        reason=item.reason,
+                    )
+                )
+            elif isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+                if not text:
+                    continue
+                result.append(
+                    ActiveMemory(
+                        text=text,
+                        source=str(item.get("source") or "activation"),
+                        score=_float(item.get("score")),
+                        expression_mode=str(item.get("expression_mode") or "silent_influence"),
+                        reason=str(item.get("reason") or "统一激活计划"),
+                    )
+                )
+        return _dedupe_active_memories(result)
+
     def _avoid_rules(self, retrieved: RetrievedMemory, *, intent: str) -> list[str]:
         rules = [
             "不要生硬说“我记得你的资料里写着”。",
@@ -351,6 +389,8 @@ class ConsciousContextBuilder:
         return rules
 
     def _recall_style(self, intent: str, active_memories: list[str]) -> str:
+        if active_memories and any("最近发生" in item for item in active_memories):
+            return "把最近发生的事当作仍在心里的上下文，自然接话；不要表现得像临时检索或被提醒后才想起。"
         if not active_memories:
             return "本轮没有强相关记忆时，只让长期理解影响语气。"
         if intent == "recall_past":

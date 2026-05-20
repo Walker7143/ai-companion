@@ -33,6 +33,8 @@ class WorkingMemoryStore:
     MAX_CHARS_BEFORE_COMPRESS = 4000
     # 压缩后保留的最近轮数
     KEEP_RECENT_TURNS = 6
+    # 结构化压缩也必须保留最近几轮原文，避免刚说过的事实被摘要抹平。
+    KEEP_RECENT_TURNS_AFTER_SUMMARY = 8
     # 触发压缩的字符上限
     SOFT_LIMIT_CHARS = 3000
     # 硬上限（超过此值强制压缩）
@@ -404,9 +406,20 @@ class WorkingMemoryStore:
         if not sid:
             return False
 
-        # 标记所有未压缩消息为已压缩
         conn = sqlite3.connect(self.db_path)
-        conn.execute("UPDATE messages SET compressed = 1 WHERE session_id = ? AND compressed = 0", (sid,))
+        keep_count = self.KEEP_RECENT_TURNS_AFTER_SUMMARY * 2
+        keep_boundary = conn.execute("""
+            SELECT id FROM messages
+            WHERE session_id = ? AND compressed = 0
+            ORDER BY id DESC
+            LIMIT 1 OFFSET ?
+        """, (sid, keep_count - 1)).fetchone()
+        if keep_boundary:
+            conn.execute(
+                "UPDATE messages SET compressed = 1 WHERE session_id = ? AND compressed = 0 AND id < ?",
+                (sid, keep_boundary[0]),
+            )
+        # 消息很少时不压掉原文，只写摘要作为额外连续性线索。
 
         # 写入新摘要
         conn.execute(

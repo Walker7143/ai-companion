@@ -119,6 +119,23 @@ class MemoryPromptBuilder:
                     )
                 )
 
+        short_term_text = self._format_activation_window(retrieved)
+        if short_term_text:
+            blocks.append(
+                PromptBlock(
+                    name="short_term",
+                    title="【本轮记忆激活窗口】",
+                    body=short_term_text,
+                    usage=(
+                        "使用方式：这些是本轮自然浮起、应该默认承接的上下文。"
+                        "先让它影响理解、语气和接话方式；只有自然有帮助时才提到具体细节，"
+                        "不要表现得像被提醒后才临时检索。"
+                    ),
+                    budget=budgets["short_term"],
+                    priority=12,
+                )
+            )
+
         if anchored_fact_lines:
             blocks.append(
                 PromptBlock(
@@ -246,6 +263,7 @@ class MemoryPromptBuilder:
         if intent == "task_request":
             weights = {
                 "conscious": 0.14,
+                "short_term": 0.08,
                 "understanding": 0.24,
                 "relationship": 0.10,
                 "daily": 0.08,
@@ -257,7 +275,8 @@ class MemoryPromptBuilder:
         elif intent in {"emotional_support", "relationship_repair", "recall_past"}:
             weights = {
                 "conscious": 0.18,
-                "understanding": 0.34,
+                "short_term": 0.14,
+                "understanding": 0.30,
                 "relationship": 0.16,
                 "daily": 0.12,
                 "vector_recall": 0.12,
@@ -268,7 +287,8 @@ class MemoryPromptBuilder:
         else:
             weights = {
                 "conscious": 0.14,
-                "understanding": 0.28,
+                "short_term": 0.10,
+                "understanding": 0.26,
                 "relationship": 0.14,
                 "daily": 0.10,
                 "vector_recall": 0.10,
@@ -287,6 +307,73 @@ class MemoryPromptBuilder:
         if intent == "task_request":
             return min(900, max(500, int(self.max_chars * 0.08)))
         return min(1200, max(650, int(self.max_chars * 0.10)))
+
+    def _format_activation_window(self, retrieved: RetrievedMemory) -> str:
+        plan = getattr(retrieved, "activation_plan", None)
+        active_items = getattr(plan, "active_memories", None)
+        if active_items:
+            lines: list[str] = []
+            strategy = str(getattr(plan, "strategy", "") or "").strip()
+            if strategy:
+                lines.append(f"  - 激活策略：{strategy}")
+            for item in active_items[:7]:
+                if isinstance(item, dict):
+                    text = str(item.get("text") or "").strip()
+                    source = str(item.get("source") or "memory")
+                    mode = str(item.get("expression_mode") or "silent_influence")
+                    score = item.get("score")
+                    reason = str(item.get("reason") or "").strip()
+                else:
+                    text = str(getattr(item, "text", "") or "").strip()
+                    source = str(getattr(item, "source", "memory") or "memory")
+                    mode = str(getattr(item, "expression_mode", "silent_influence") or "silent_influence")
+                    score = getattr(item, "score", None)
+                    reason = str(getattr(item, "reason", "") or "").strip()
+                if not text:
+                    continue
+                label = _activation_source_label(source)
+                mode_label = _activation_mode_label(mode)
+                score_text = f"，激活 {score:.2f}" if isinstance(score, (int, float)) else ""
+                reason_text = f"，原因：{reason}" if reason else ""
+                lines.append(f"  - [{label}] {text}（使用：{mode_label}{score_text}{reason_text}）")
+            if lines:
+                return "\n".join(lines)
+
+        return self._format_short_term_continuity(retrieved)
+
+    def _format_short_term_continuity(self, retrieved: RetrievedMemory) -> str:
+        intent = retrieved.intent or "casual_chat"
+        working_limit = 8 if intent in {"recall_past", "emotional_support", "relationship_repair", "planning"} else 5
+        cross_limit = 4 if intent in {"recall_past", "planning", "emotional_support"} else 2
+        lines: list[str] = []
+
+        working_messages = [
+            item
+            for item in (retrieved.working_history or [])
+            if isinstance(item, dict) and item.get("role") in {"user", "assistant"}
+        ]
+        if working_messages:
+            lines.append("  - 当前会话最近几条：")
+            for item in working_messages[-working_limit:]:
+                role = "用户" if item.get("role") == "user" else "助手"
+                content = _compact_prompt_text(item.get("content"), 140)
+                if content:
+                    lines.append(f"    - {role}: {content}")
+
+        daily = retrieved.daily_context or {}
+        cross_messages = daily.get("recent_messages") if isinstance(daily.get("recent_messages"), list) else []
+        if cross_messages:
+            lines.append("  - 其他通道/会话最近几条：")
+            for item in cross_messages[-cross_limit:]:
+                if not isinstance(item, dict):
+                    continue
+                platform = item.get("platform") or "unknown"
+                role = "用户" if item.get("role") == "user" else "助手"
+                content = _compact_prompt_text(item.get("content"), 120)
+                if content:
+                    lines.append(f"    - [{platform}] {role}: {content}")
+
+        return "\n".join(lines)
 
     def _format_understanding(self, retrieved: RetrievedMemory) -> str:
         data = retrieved.user_understanding or {}
@@ -613,6 +700,10 @@ class MemoryPromptBuilder:
 
     def _format_daily_context(self, retrieved: RetrievedMemory) -> str:
         data = retrieved.daily_context or {}
+        relationship = retrieved.relationship_state if isinstance(retrieved.relationship_state, dict) else {}
+        committed_relationship = _is_committed_relationship(
+            relationship.get("relationship_label") or relationship.get("relationship_level")
+        )
         summaries = data.get("summaries") if isinstance(data.get("summaries"), list) else []
         messages = data.get("recent_messages") if isinstance(data.get("recent_messages"), list) else []
         self_memory = data.get("self_memory") if isinstance(data.get("self_memory"), list) else []
@@ -639,10 +730,15 @@ class MemoryPromptBuilder:
                 ("mood", "今天情绪线索"),
             ]:
                 values = _clean_list(today_summary.get(key))
+                if key == "open_threads" and committed_relationship:
+                    values = [item for item in values if not _is_stale_pre_commitment_thread(item)]
                 if values:
                     lines.append(f"    {title}：" + "；".join(values[:3]))
-        if data.get("open_threads"):
-            lines.append("  - 跨会话未完话题：" + "；".join(_clean_list(data.get("open_threads"))[:4]))
+        cross_threads = _clean_list(data.get("open_threads"))
+        if committed_relationship:
+            cross_threads = [item for item in cross_threads if not _is_stale_pre_commitment_thread(item)]
+        if cross_threads:
+            lines.append("  - 跨会话未完话题：" + "；".join(cross_threads[:4]))
         if data.get("commitments"):
             lines.append("  - 跨会话承诺/待办：" + "；".join(_clean_list(data.get("commitments"))[:4]))
         if data.get("mood"):
@@ -704,15 +800,19 @@ class MemoryPromptBuilder:
         narrative = str(state.get("relationship_narrative") or "").strip()
         posture = str(state.get("current_posture") or "").strip()
         guidance = str(state.get("interaction_guidance") or "").strip()
+        label = str(state.get("relationship_label") or state.get("relationship_level") or "").strip()
+        if label:
+            lines.append(f"  - 关系阶段：{label}")
+        if _is_committed_relationship(label):
+            lines.append(
+                "  - 连续性锚点：你和用户已经确认恋人/男女朋友关系；可以害羞、嘴硬或别扭，但不要否认已经确认关系本身，也不要说成还没有正式答应。"
+            )
         if narrative:
             lines.append(f"  - 关系叙事：{narrative}")
         if posture:
             lines.append(f"  - 当前姿态：{posture}")
         if guidance:
             lines.append(f"  - 互动建议：{guidance}")
-        label = state.get("relationship_label") or state.get("relationship_level")
-        if label and not narrative:
-            lines.append(f"  - 关系：{label}")
         status = str(state.get("relationship_status") or "").strip()
         if status and status != "稳定":
             lines.append(f"  - 当前状态：{status}")
@@ -874,6 +974,64 @@ def _float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _activation_source_label(source: str) -> str:
+    return {
+        "working_recent": "当前会话最近发生",
+        "daily_recent": "跨会话最近发生",
+        "daily_summary": "近日连续性",
+        "daily_commitment": "未完事项",
+        "self_memory": "Bot 自传体线索",
+        "relationship": "关系状态",
+        "semantic": "语义事实",
+        "episodic": "共同经历",
+        "rollup": "高层概括",
+        "vector": "联想背景",
+        "understanding.current": "当前用户理解",
+        "understanding.core": "稳定用户理解",
+        "understanding.deep": "深层用户理解",
+        "understanding.relationship": "关系理解",
+    }.get(source, source or "记忆")
+
+
+def _activation_mode_label(mode: str) -> str:
+    return {
+        "context_continuity": "默认当作刚发生的上下文承接",
+        "relationship_posture": "影响亲近度和分寸",
+        "silent_influence": "只影响理解和语气，不主动说破",
+        "light_reference": "自然时轻轻带一句",
+        "explicit_recall": "可以明确承接回忆",
+        "ask_before_entering": "先确认用户愿不愿意继续",
+        "avoid": "本轮不要主动触碰",
+    }.get(mode, "只影响理解和语气，不主动说破")
+
+
+def _is_committed_relationship(label: object) -> bool:
+    text = str(label or "").strip()
+    return any(token in text for token in ("恋人", "情侣", "伴侣", "男朋友", "女朋友", "恋爱中"))
+
+
+def _is_stale_pre_commitment_thread(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    stale_cues = (
+        "尚未明确回应",
+        "尚未明确答复",
+        "尚未获得明确回应",
+        "等待答案",
+        "等待助手",
+        "等助手答复",
+        "确认正式关系",
+        "关系下一步正式确认",
+        "还没正式答应",
+        "还没有正式答应",
+        "未正式答应",
+        "可能想就此确认正式关系",
+        "你们目前像恋人",
+    )
+    return any(cue in text for cue in stale_cues)
 
 
 def _vector_source_label(source_type: str) -> str:

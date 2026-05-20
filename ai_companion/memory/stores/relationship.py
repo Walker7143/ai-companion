@@ -281,6 +281,12 @@ class RelationshipStore:
         state["relationship_score"] = self._calculate_relationship_score(state)
         state["relationship_status"] = self._derive_status(state)
         state["relationship_label"] = self._choose_stable_stage(previous_label, label_hint, state, event)
+        if state["relationship_label"] == "恋人":
+            state["open_emotional_threads"] = [
+                item
+                for item in list(state.get("open_emotional_threads") or [])
+                if not _is_stale_pre_commitment_thread(item)
+            ][:10]
         state["stage_confidence"] = self._next_confidence(
             float(state.get("stage_confidence", 0.55)),
             previous_label=previous_label,
@@ -447,6 +453,8 @@ class RelationshipStore:
         score = _score(state.get("relationship_score"), self._calculate_relationship_score(state))
         key_moments = _load_json_list(json.dumps(state.get("key_moments") or [], ensure_ascii=False))
         open_threads = _load_json_list(json.dumps(state.get("open_emotional_threads") or [], ensure_ascii=False))
+        if label == "恋人":
+            open_threads = [item for item in open_threads if not _is_stale_pre_commitment_thread(item)]
 
         if tension >= 65:
             posture = "关系里有明显紧张，先放慢、承认感受，不要用玩笑压过去。"
@@ -465,10 +473,14 @@ class RelationshipStore:
             guidance = "先修复情绪，再解释或推进任务。"
         elif event and event.get("repair_signal"):
             guidance = "修复刚发生过，回应里要让用户感到被认真接住。"
-        elif label in {"暧昧中", "恋人"}:
+        elif label == "恋人":
+            guidance = "承接已经确认的恋人关系；可用少量共同记忆和亲近语气，但不要否认关系事实。"
+        elif label == "暧昧中":
             guidance = "可用少量共同记忆和亲近语气，但不要把关系状态说成报告。"
         else:
             guidance = "让关系背景影响语气即可，不主动报数值或阶段。"
+        if label == "恋人" and "不要否认关系事实" not in guidance:
+            guidance = f"{guidance} 同时承接已经确认的恋人关系，不要否认关系事实。"
 
         closeness = "还在建立"
         if score >= 75:
@@ -481,7 +493,10 @@ class RelationshipStore:
             closeness += "，但近期有紧张需要照顾"
 
         moment_text = f"最近重要时刻：{key_moments[-1]}" if key_moments else "还没有特别明确的共同关键时刻"
-        narrative = f"你们目前像{label}，关系{closeness}；{moment_text}。"
+        if label == "恋人":
+            narrative = f"你们已经确认恋人/男女朋友关系，关系{closeness}；{moment_text}。"
+        else:
+            narrative = f"你们目前像{label}，关系{closeness}；{moment_text}。"
         return {
             "relationship_narrative": _compact(narrative, 180),
             "current_posture": _compact(posture, 140),
@@ -713,6 +728,28 @@ def _load_json_list(value: str | None) -> list[str]:
     if not isinstance(data, list):
         return []
     return [str(item) for item in data if str(item).strip()]
+
+
+def _is_stale_pre_commitment_thread(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    stale_cues = (
+        "尚未明确回应",
+        "尚未明确答复",
+        "尚未获得明确回应",
+        "等待答案",
+        "等待助手",
+        "等助手答复",
+        "确认正式关系",
+        "关系下一步正式确认",
+        "还没正式答应",
+        "还没有正式答应",
+        "未正式答应",
+        "可能想就此确认正式关系",
+        "你们目前像恋人",
+    )
+    return any(cue in text for cue in stale_cues)
 
 
 def _compact(text: object, limit: int) -> str:

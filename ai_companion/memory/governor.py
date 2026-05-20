@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Iterable
 
 from .extractor import MemoryCandidate
+from .lifecycle import MemoryLifecycleManager
 
 
 @dataclass
@@ -36,11 +37,17 @@ class MemoryGovernor:
         episodic_store,
         relationship_store,
         user_understanding,
+        lifecycle_manager=None,
     ):
         self.semantic = semantic_store
         self.episodic = episodic_store
         self.relationship = relationship_store
         self.user_understanding = user_understanding
+        self.lifecycle = lifecycle_manager or MemoryLifecycleManager(
+            semantic_store=semantic_store,
+            relationship_store=relationship_store,
+            user_understanding=user_understanding,
+        )
 
     async def apply(
         self,
@@ -96,6 +103,17 @@ class MemoryGovernor:
             result.skipped.append((candidate, "manual_conflict"))
             return
 
+        decision = await self.lifecycle.prepare_user_fact(
+            candidate,
+            bot_id=bot_id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if decision.skip_reason:
+            result.skipped.append((candidate, decision.skip_reason))
+            return
+        candidate = decision.candidate
+
         expires_at = None
         if candidate.ttl_days:
             expires_at = (datetime.now() + timedelta(days=candidate.ttl_days)).isoformat()
@@ -112,6 +130,7 @@ class MemoryGovernor:
             evidence=candidate.evidence,
             expires_at=expires_at,
         )
+        await self.lifecycle.after_user_fact_written(decision, bot_id=bot_id, user_id=user_id)
         result.written.append(candidate)
         if candidate.confidence >= self.MIN_PROJECTION_CONFIDENCE:
             result.projection_refresh = True
@@ -158,12 +177,18 @@ class MemoryGovernor:
         user_id: str,
         result: GovernorResult,
     ):
+        decision = await self.lifecycle.prepare_relationship_event(
+            candidate,
+            bot_id=bot_id,
+            user_id=user_id,
+        )
+        candidate = decision.candidate
         if candidate.confidence < self.MIN_RELATIONSHIP_CONFIDENCE:
             result.skipped.append((candidate, "low_confidence"))
             return
         meta = candidate.metadata or {}
         label = self._stable_label_hint(meta.get("label") or candidate.value or "", meta)
-        await self.relationship.apply_event(
+        state = await self.relationship.apply_event(
             bot_id=bot_id,
             user_id=user_id,
             label=label,
@@ -175,6 +200,7 @@ class MemoryGovernor:
             key_moment=meta.get("key_moment") or None,
             open_thread=meta.get("open_thread") or None,
         )
+        await self.lifecycle.after_relationship_written(state, decision, bot_id=bot_id, user_id=user_id)
         result.written.append(candidate)
         result.projection_refresh = True
 

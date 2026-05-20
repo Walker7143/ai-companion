@@ -389,11 +389,13 @@ class UserUnderstandingStore:
             if confidence < 0.85:
                 self._append_unique(meta["confidence_notes"], f"{key}: {value}（置信度 {confidence:.2f}，使用时保持弹性）")
 
+        committed_relationship = False
         if relationship:
             label = str(relationship.get("relationship_label") or "").strip()
             narrative = str(relationship.get("relationship_narrative") or "").strip()
             posture = str(relationship.get("current_posture") or "").strip()
             guidance = str(relationship.get("interaction_guidance") or "").strip()
+            committed_relationship = _is_committed_relationship(label)
             if narrative:
                 self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], narrative)
             if posture:
@@ -425,6 +427,20 @@ class UserUnderstandingStore:
                 self._append_unique(auto["open_threads"], f"待办：{commitment}")
             for mood in daily_context.get("mood") or []:
                 self._append_unique(auto["emotional_patterns"], str(mood))
+
+        if committed_relationship:
+            continuity = "当前已确认恋人/男女朋友关系；后续互动应承接这个事实，不要再按“尚未答应/尚未确认”处理。"
+            self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], continuity)
+            auto["open_threads"] = [
+                item for item in self._clean_list(auto.get("open_threads"))
+                if not _is_stale_pre_commitment_thread(item)
+            ]
+            relationship_memory["what_user_seems_to_need_from_bot"] = [
+                item
+                for item in self._clean_list(relationship_memory.get("what_user_seems_to_need_from_bot"))
+                if not _is_stale_pre_commitment_thread(item)
+            ]
+            self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], continuity)
 
         auto["profile_summary"] = self._build_profile_summary(manual, auto, relationship_memory)
         auto["last_refresh_at"] = datetime.now().isoformat()
@@ -1071,6 +1087,33 @@ def _float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _is_committed_relationship(label: Any) -> bool:
+    text = str(label or "").strip()
+    return any(token in text for token in ("恋人", "情侣", "伴侣", "男朋友", "女朋友", "恋爱中"))
+
+
+def _is_stale_pre_commitment_thread(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    stale_cues = (
+        "尚未明确回应",
+        "尚未明确答复",
+        "尚未获得明确回应",
+        "等待答案",
+        "等待助手",
+        "等助手答复",
+        "确认正式关系",
+        "关系下一步正式确认",
+        "还没正式答应",
+        "还没有正式答应",
+        "未正式答应",
+        "可能想就此确认正式关系",
+        "你们目前像恋人",
+    )
+    return any(cue in text for cue in stale_cues)
 
 
 _SENSITIVE_KEYWORDS = (

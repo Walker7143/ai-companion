@@ -39,6 +39,7 @@ from .stores.daily import DailyMemoryStore, MemoryTurnContext
 from .extractor import MemoryExtractor
 from .governor import MemoryGovernor
 from .maintenance import MemoryMaintenance
+from .activation import MemoryActivationPlanner
 from .conscious import ConsciousContextBuilder
 from .prompt_builder import MemoryPromptBuilder
 from .retriever import MemoryRetriever
@@ -171,6 +172,9 @@ class MemoryEngine:
             max_summaries=self.max_summaries,
         )
         self.prompt_builder = MemoryPromptBuilder(max_chars=self.prompt_char_limit)
+        self.activation_planner = MemoryActivationPlanner(
+            self.config.get("activation", {}) if isinstance(self.config.get("activation"), dict) else {}
+        )
         self.conscious_builder = ConsciousContextBuilder()
         self.maintenance = MemoryMaintenance(
             semantic_store=self.semantic,
@@ -244,6 +248,7 @@ class MemoryEngine:
             session_id=sid,
         )
         logger.info(f"[Memory]  load_context 召回语义记忆: {retrieved.semantic_facts}")
+        retrieved.activation_plan = self.activation_planner.build(retrieved, current_input)
         conscious = self.conscious_builder.build(retrieved, current_input)
         suffix, prompt_budget_diagnostics = self.prompt_builder.build_with_diagnostics(retrieved, conscious=conscious)
         diagnostics = self._build_prompt_diagnostics(
@@ -263,6 +268,7 @@ class MemoryEngine:
             "daily_context": retrieved.daily_context,
             "memory_intent": retrieved.intent,
             "user_understanding": self.user_understanding.load(),
+            "memory_activation_plan": retrieved.activation_plan.to_dict() if retrieved.activation_plan else {},
             "conscious_context": conscious.to_dict(),
             "memory_prompt_diagnostics": diagnostics,
             "system_suffix": suffix,
@@ -425,6 +431,30 @@ class MemoryEngine:
         daily_messages = self.daily.count_messages(bot_id=self.bot_id, user_id=self.user_id)
         daily_days = self.daily.count_recent_days(bot_id=self.bot_id, user_id=self.user_id)
         daily_context = self.daily.get_recent_context(bot_id=self.bot_id, user_id=self.user_id, intent="planning")
+        facts = await self.semantic.list_facts(
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            min_confidence=0.0,
+            include_archived=False,
+            limit=80,
+        )
+        fact_history = await self.semantic.list_fact_history(
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            limit=8,
+        )
+        lifecycle_events = await self.semantic.list_lifecycle_events(
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+            limit=16,
+        )
+        trust_view = self._build_memory_trust_view(
+            facts=facts,
+            relationship=relationship,
+            daily_context=daily_context,
+            fact_history=fact_history,
+            lifecycle_events=lifecycle_events,
+        )
 
         return {
             "session_id": sid,
@@ -440,9 +470,103 @@ class MemoryEngine:
             "daily_days": daily_days,
             "daily_open_threads": daily_context.get("open_threads", []) if isinstance(daily_context, dict) else [],
             "daily_commitments": daily_context.get("commitments", []) if isinstance(daily_context, dict) else [],
+            "memory_trust_view": trust_view,
+            "recent_lifecycle_events": lifecycle_events,
+            "fact_history": fact_history,
             "user_understanding_path": str(self.user_understanding.path),
             "user_understanding_auto_facts": self.user_understanding.auto_fact_count(),
             "health": health,
+        }
+
+    def _build_memory_trust_view(
+        self,
+        *,
+        facts: list[dict],
+        relationship: dict,
+        daily_context: dict,
+        fact_history: list[dict],
+        lifecycle_events: list[dict],
+    ) -> dict:
+        recent_facts = sorted(
+            [fact for fact in facts if not fact.get("archived")],
+            key=lambda item: str(item.get("updated_at") or ""),
+            reverse=True,
+        )
+        stable_facts = [
+            fact for fact in recent_facts
+            if _float(fact.get("confidence")) >= 0.85 or fact.get("manual_override") or fact.get("last_confirmed_at")
+        ]
+        pending = [
+            fact for fact in recent_facts
+            if 0.0 < _float(fact.get("confidence")) < 0.78
+            and not fact.get("manual_override")
+            and not fact.get("last_confirmed_at")
+        ]
+        archived_events = [
+            item for item in lifecycle_events
+            if item.get("action") in {"archive", "supersede", "conflict_skip"}
+        ]
+        daily_recent = daily_context.get("recent_messages") if isinstance(daily_context.get("recent_messages"), list) else []
+        recently_remembered = [
+            _fact_view_item(fact)
+            for fact in recent_facts[:6]
+        ]
+        for item in daily_recent[-4:]:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            recently_remembered.append(
+                {
+                    "type": "recent_message",
+                    "key": f"{item.get('platform') or 'unknown'}:{item.get('role') or 'message'}",
+                    "value": content[:120],
+                    "confidence": None,
+                    "source": "daily",
+                    "updated_at": item.get("created_at"),
+                }
+            )
+
+        relationship_anchor = {}
+        if relationship:
+            relationship_anchor = {
+                "label": relationship.get("relationship_label"),
+                "status": relationship.get("relationship_status"),
+                "score": relationship.get("relationship_score"),
+                "narrative": relationship.get("relationship_narrative"),
+                "guidance": relationship.get("interaction_guidance"),
+                "key_moments": relationship.get("key_moments") or [],
+                "open_threads": relationship.get("open_emotional_threads") or [],
+            }
+
+        return {
+            "recently_remembered": _dedupe_view_items(recently_remembered)[:8],
+            "stable_understanding": [_fact_view_item(fact) for fact in stable_facts[:8]],
+            "relationship_anchor": relationship_anchor,
+            "pending_confirmation": [_fact_view_item(fact) for fact in pending[:8]],
+            "corrected_memories": [
+                {
+                    "key": item.get("key"),
+                    "old_value": item.get("old_value"),
+                    "new_value": item.get("new_value"),
+                    "reason": item.get("reason"),
+                    "superseded_at": item.get("superseded_at"),
+                }
+                for item in fact_history[:8]
+            ],
+            "archived_or_suppressed": [
+                {
+                    "type": item.get("memory_type"),
+                    "key": item.get("memory_key"),
+                    "action": item.get("action"),
+                    "reason": item.get("reason"),
+                    "created_at": item.get("created_at"),
+                }
+                for item in archived_events[:8]
+            ],
+            "open_threads": list(daily_context.get("open_threads") or [])[:6] if isinstance(daily_context, dict) else [],
+            "commitments": list(daily_context.get("commitments") or [])[:6] if isinstance(daily_context, dict) else [],
         }
 
     async def forget_fact(self, key: str):
@@ -711,6 +835,9 @@ class MemoryEngine:
             "intent": retrieved.intent,
             "system_suffix_chars": len(system_suffix or ""),
             "system_suffix_tokens_est": TokenEstimator.estimate(system_suffix or ""),
+            "activation_active_count": len(retrieved.activation_plan.active_memories) if getattr(retrieved, "activation_plan", None) else 0,
+            "activation_source_counts": retrieved.activation_plan.source_counts if getattr(retrieved, "activation_plan", None) else {},
+            "activation_strategy": retrieved.activation_plan.strategy if getattr(retrieved, "activation_plan", None) else "",
             "conscious_chars": len(conscious_text),
             "conscious_tokens_est": TokenEstimator.estimate(conscious_text),
             "working_summary_count": sum(1 for item in retrieved.working_history if isinstance(item, dict) and item.get("role") == "system"),
@@ -965,3 +1092,37 @@ def _vector_recall_top_items(items: list[dict]) -> list[dict]:
             }
         )
     return top
+
+
+def _fact_view_item(fact: dict) -> dict:
+    return {
+        "type": "semantic_fact",
+        "key": fact.get("key"),
+        "value": fact.get("value"),
+        "category": fact.get("category"),
+        "confidence": fact.get("confidence"),
+        "source": fact.get("source"),
+        "confirmed": bool(fact.get("last_confirmed_at") or fact.get("manual_override")),
+        "updated_at": fact.get("updated_at"),
+    }
+
+
+def _float(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _dedupe_view_items(items: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str]] = set()
+    result: list[dict] = []
+    for item in items:
+        key = str(item.get("key") or "").strip()
+        value = str(item.get("value") or "").strip()
+        marker = (key, value)
+        if not key or marker in seen:
+            continue
+        seen.add(marker)
+        result.append(item)
+    return result
