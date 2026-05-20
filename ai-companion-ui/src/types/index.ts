@@ -26,6 +26,53 @@ export interface MemoryStats {
   vector_size_kb?: number;
 }
 
+export interface MemoryTrustItem {
+  type?: string | null;
+  key?: string | null;
+  value?: string | null;
+  confidence?: number | null;
+  source?: string | null;
+  updated_at?: string | null;
+  reason?: string | null;
+  old_value?: string | null;
+  new_value?: string | null;
+  superseded_at?: string | null;
+  action?: string | null;
+  created_at?: string | null;
+}
+
+export interface RelationshipAnchor {
+  label?: string | null;
+  status?: string | null;
+  score?: number | null;
+  narrative?: string | null;
+  guidance?: string | null;
+  key_moments?: unknown[];
+  open_threads?: unknown[];
+}
+
+export interface MemoryTrustView {
+  recently_remembered?: MemoryTrustItem[];
+  stable_understanding?: MemoryTrustItem[];
+  relationship_anchor?: RelationshipAnchor;
+  pending_confirmation?: MemoryTrustItem[];
+  corrected_memories?: MemoryTrustItem[];
+  archived_or_suppressed?: MemoryTrustItem[];
+  open_threads?: unknown[];
+  commitments?: unknown[];
+}
+
+export interface MemoryTrustPayload {
+  bot_id: string;
+  user_id?: string;
+  memory_trust_view: MemoryTrustView;
+  recent_lifecycle_events?: MemoryTrustItem[];
+  fact_history?: MemoryTrustItem[];
+  relationship?: Record<string, unknown>;
+  daily_open_threads?: unknown[];
+  daily_commitments?: unknown[];
+}
+
 export interface VectorRebuildResult {
   enabled: boolean;
   indexed: number;

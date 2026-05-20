@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Brain, CalendarDays, Clock, Database, Filter, Heart, RefreshCw, Search, Star, Trash2, User } from 'lucide-react';
+import { Archive, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, Heart, HelpCircle, Link2, RefreshCw, Search, Star, Trash2, User } from 'lucide-react';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Modal, useToast } from '../../components/ui';
 import { memoryApi } from '../../api';
 import { useBotStore } from '../../stores';
-import type { DailyMemoryPayload, EpisodicItem, Fact, MemoryStats, Message, SemanticMemory } from '../../types';
+import type { DailyMemoryPayload, EpisodicItem, Fact, MemoryStats, MemoryTrustItem, MemoryTrustPayload, Message, SemanticMemory } from '../../types';
 
 type MemoryTab = 'stats' | 'working' | 'daily' | 'episodic' | 'semantic';
 type MemoryDeleteType = 'working' | 'daily' | 'episodic' | 'semantic';
@@ -39,6 +39,22 @@ function clipText(text: string, maxLength = 120) {
   return `${text.slice(0, maxLength).trimEnd()}...`;
 }
 
+function trustItems(items?: MemoryTrustItem[]) {
+  return Array.isArray(items) ? items.filter(Boolean) : [];
+}
+
+function trustText(value: unknown) {
+  if (value === null || value === undefined || value === '') return '暂无';
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+function trustDate(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN');
+}
+
 function RelationshipMetric({ label, value, tone }: { label: string; value: number; tone: string }) {
   const safeValue = Math.max(0, Math.min(100, value));
   return (
@@ -54,12 +70,145 @@ function RelationshipMetric({ label, value, tone }: { label: string; value: numb
   );
 }
 
+function MemoryTrustPanel({ payload }: { payload: MemoryTrustPayload | null }) {
+  const view = payload?.memory_trust_view || {};
+  const recently = trustItems(view.recently_remembered);
+  const stable = trustItems(view.stable_understanding);
+  const pending = trustItems(view.pending_confirmation);
+  const corrected = trustItems(view.corrected_memories);
+  const archived = trustItems(view.archived_or_suppressed);
+  const relationship = view.relationship_anchor || {};
+  const openThreads = Array.isArray(view.open_threads) ? view.open_threads : [];
+  const commitments = Array.isArray(view.commitments) ? view.commitments : [];
+  const hasRelationship = Boolean(relationship.label || relationship.status || relationship.narrative || relationship.guidance);
+
+  return (
+    <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+      <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
+        <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Brain style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+          记忆可信视图
+          {payload?.user_id && <Badge>{payload.user_id}</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          <TrustSummary icon={<Clock size={16} />} label="最近记住" value={recently.length} tone="var(--accent)" />
+          <TrustSummary icon={<CheckCircle2 size={16} />} label="稳定理解" value={stable.length} tone="var(--success)" />
+          <TrustSummary icon={<HelpCircle size={16} />} label="待确认" value={pending.length} tone="var(--warning)" />
+          <TrustSummary icon={<Archive size={16} />} label="已纠正/归档" value={corrected.length + archived.length} tone="var(--info)" />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+          <TrustSection title="最近会自然想起" items={recently} empty="暂无最近激活的记忆" />
+          <TrustSection title="稳定用户理解" items={stable} empty="暂无高置信用户事实" />
+          <TrustSection title="需要继续确认" items={pending} empty="暂无低置信待确认事实" />
+        </div>
+
+        {hasRelationship && (
+          <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <Heart style={{ width: 16, height: 16, color: 'var(--error)' }} />
+              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>关系锚点</span>
+              {relationship.label && <Badge variant="success">{relationship.label}</Badge>}
+              {relationship.status && <Badge>{relationship.status}</Badge>}
+              {typeof relationship.score === 'number' && <Badge variant="info">{relationship.score.toFixed(0)}</Badge>}
+            </div>
+            {relationship.narrative && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)' }}>{relationship.narrative}</p>}
+            {relationship.guidance && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{relationship.guidance}</p>}
+          </div>
+        )}
+
+        {(openThreads.length > 0 || commitments.length > 0 || corrected.length > 0 || archived.length > 0) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+            {(openThreads.length > 0 || commitments.length > 0) && (
+              <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Link2 style={{ width: 16, height: 16, color: 'var(--accent)' }} />
+                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>未完成线索</span>
+                </div>
+                {[...openThreads, ...commitments].slice(0, 6).map((item, index) => (
+                  <p key={index} style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{trustText(item)}</p>
+                ))}
+              </div>
+            )}
+            <TrustSection title="已纠正的事实" items={corrected} empty="暂无纠正记录" mode="correction" />
+            <TrustSection title="已归档或抑制" items={archived} empty="暂无归档记录" mode="event" />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TrustSummary({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: string }) {
+  return (
+    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: `${tone}18`, color: tone, display: 'grid', placeItems: 'center', flex: '0 0 auto' }}>
+        {icon}
+      </div>
+      <div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>{value}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{label}</div>
+      </div>
+    </div>
+  );
+}
+
+function TrustSection({
+  title,
+  items,
+  empty,
+  mode = 'memory',
+}: {
+  title: string;
+  items: MemoryTrustItem[];
+  empty: string;
+  mode?: 'memory' | 'correction' | 'event';
+}) {
+  return (
+    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 10, alignContent: 'start' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+        <Badge>{items.length}</Badge>
+      </div>
+      {items.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>{empty}</p>
+      ) : (
+        items.slice(0, 5).map((item, index) => <TrustItemRow key={`${item.key || item.created_at || index}-${index}`} item={item} mode={mode} />)
+      )}
+    </div>
+  );
+}
+
+function TrustItemRow({ item, mode }: { item: MemoryTrustItem; mode: 'memory' | 'correction' | 'event' }) {
+  const title = item.key || item.type || item.action || '记忆';
+  const detail =
+    mode === 'correction'
+      ? `${trustText(item.old_value)} -> ${trustText(item.new_value)}`
+      : item.value || item.reason || item.new_value || '';
+  const timestamp = item.updated_at || item.superseded_at || item.created_at;
+  return (
+    <div style={{ display: 'grid', gap: 5, paddingTop: 8, borderTop: '1px solid var(--border-subtle)' }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+        {typeof item.confidence === 'number' && <Badge variant={item.confidence >= 0.85 ? 'success' : 'warning'}>{(item.confidence * 100).toFixed(0)}%</Badge>}
+        {item.source && <Badge>{item.source}</Badge>}
+        {item.action && <Badge variant="info">{item.action}</Badge>}
+      </div>
+      {detail && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{clipText(detail, 110)}</p>}
+      {timestamp && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{trustDate(timestamp)}</span>}
+    </div>
+  );
+}
+
 export function Memory() {
   const { currentBotId } = useBotStore();
   const toast = useToast();
 
   const [activeTab, setActiveTab] = useState<MemoryTab>('stats');
   const [memoryStats, setMemoryStats] = useState<MemoryStats | null>(null);
+  const [memoryTrust, setMemoryTrust] = useState<MemoryTrustPayload | null>(null);
   const [workingMemory, setWorkingMemory] = useState<Message[]>([]);
   const [dailyMemory, setDailyMemory] = useState<DailyMemoryPayload>({ messages: [], summaries: [] });
   const [episodicMemory, setEpisodicMemory] = useState<EpisodicItem[]>([]);
@@ -84,8 +233,9 @@ export function Memory() {
         setRefreshing(true);
       }
       try {
-        const [stats, working, daily, episodic, semantic] = await Promise.all([
+        const [stats, trust, working, daily, episodic, semantic] = await Promise.all([
           memoryApi.getStats(currentBotId),
+          memoryApi.getTrust(currentBotId),
           memoryApi.getWorking(currentBotId),
           memoryApi.getDaily(currentBotId).catch((error) => {
             console.warn('Daily memory API unavailable:', error);
@@ -95,6 +245,7 @@ export function Memory() {
           memoryApi.getSemantic(currentBotId),
         ]);
         setMemoryStats(stats);
+        setMemoryTrust(trust);
         setWorkingMemory(working);
         setDailyMemory(daily);
         setEpisodicMemory(episodic);
@@ -266,6 +417,8 @@ export function Memory() {
           </Button>
         </div>
       </div>
+
+      <MemoryTrustPanel payload={memoryTrust} />
 
       <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
         <CardContent style={{ padding: 16, display: 'grid', gap: 12 }}>

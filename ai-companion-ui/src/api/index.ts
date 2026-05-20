@@ -4,6 +4,7 @@ import type {
   SessionInfo,
   SessionDetail,
   MemoryStats,
+  MemoryTrustPayload,
   Message,
   EpisodicItem,
   SemanticMemory,
@@ -69,6 +70,9 @@ export const sessionApi = {
 export const memoryApi = {
   getStats: (botId: string): Promise<MemoryStats> =>
     fetchApi<MemoryStats>(`/admin/memory/${botId}/stats`),
+
+  getTrust: (botId: string): Promise<MemoryTrustPayload> =>
+    fetchApi<MemoryTrustPayload>(`/admin/memory/${botId}/trust`),
 
   getWorking: (botId: string): Promise<Message[]> =>
     fetchApi<Message[]>(`/admin/memory/${botId}/working`),

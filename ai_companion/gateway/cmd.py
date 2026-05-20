@@ -904,6 +904,56 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
+    async def handle_memory_trust(request):
+        """GET /api/v1/admin/memory/:bot_id/trust"""
+        bot_id = request.match_info["bot_id"]
+        target = next((b for b in _discover_bots() if b.get("id") == bot_id), None)
+        if not target:
+            return web.json_response({"error": "Bot not found"}, status=404)
+
+        user_id = str(request.query.get("user_id") or "").strip()
+        running_bot = bot_manager.get_bot(bot_id)
+        bot = running_bot
+        owns_bot = False
+        old_user_id = None
+        try:
+            if not bot or not getattr(bot, "memory", None):
+                merged_skills = merge_skill_config(config.models.get("skills", {}), target.get("skills", {}))
+                instance_config = {**target, "data_dir": str(resolve_data_dir()), "skills": merged_skills}
+                bot = BotInstance(instance_config, model=None, memory_config=memory_config)
+                owns_bot = True
+                await bot.init(start_schedulers=False)
+
+            if not getattr(bot, "memory", None):
+                return web.json_response({
+                    "memory_trust_view": {},
+                    "recent_lifecycle_events": [],
+                    "fact_history": [],
+                })
+
+            if user_id:
+                old_user_id = getattr(bot.memory, "user_id", None)
+                bot.memory.user_id = user_id
+
+            status = await bot.memory.get_memory_status()
+            return web.json_response({
+                "bot_id": bot_id,
+                "user_id": getattr(bot.memory, "user_id", user_id or "default_user"),
+                "memory_trust_view": status.get("memory_trust_view") or {},
+                "recent_lifecycle_events": status.get("recent_lifecycle_events") or [],
+                "fact_history": status.get("fact_history") or [],
+                "relationship": status.get("relationship") or {},
+                "daily_open_threads": status.get("daily_open_threads") or [],
+                "daily_commitments": status.get("daily_commitments") or [],
+            })
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if old_user_id is not None and getattr(bot, "memory", None):
+                bot.memory.user_id = old_user_id
+            if owns_bot and bot:
+                await bot.close()
+
     async def handle_memory_understanding(request):
         """GET /api/v1/admin/memory/:bot_id/understanding"""
         bot_id = request.match_info["bot_id"]
@@ -1159,6 +1209,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/daily", handle_memory_daily)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/episodic", handle_memory_episodic)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/semantic", handle_memory_semantic)
+    _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/trust", handle_memory_trust)
     _admin_app.router.add_post("/api/v1/admin/memory/{bot_id}/rebuild-vector", handle_memory_rebuild_vector)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding)
     _admin_app.router.add_put("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding_update)
