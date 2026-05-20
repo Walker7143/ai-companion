@@ -199,6 +199,10 @@ def _event_date(event: Any) -> date | None:
     match = re.search(r"\d{4}-\d{2}-\d{2}", description)
     if match:
         return _parse_date(match.group(0))
+    for key in ("date", "local_date", "timestamp", "created_at", "updated_at"):
+        parsed = _parse_date(_event_field(event, key))
+        if parsed:
+            return parsed
     return None
 
 

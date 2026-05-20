@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 from .activation import MemoryActivationPlan
@@ -13,6 +14,7 @@ class RetrievedMemory:
     intent: str
     working_history: list[dict] = field(default_factory=list)
     daily_context: dict[str, Any] = field(default_factory=dict)
+    turn_constraints: list[dict[str, Any]] = field(default_factory=list)
     vector_recall: list[dict[str, Any]] = field(default_factory=list)
     rollup_recall: list[dict] = field(default_factory=list)
     episodic_recall: list[dict] = field(default_factory=list)
@@ -58,12 +60,16 @@ class MemoryRetriever:
         "recall_past": {
             "identity", "important_people", "life_context", "goals", "routines",
             "preferences", "communication_style", "boundaries", "open_threads", "dislikes",
+            "turn_constraints",
         },
-        "planning": {"goals", "life_context", "open_threads", "routines", "dislikes"},
+        "planning": {"goals", "life_context", "open_threads", "routines", "dislikes", "turn_constraints"},
         "relationship_repair": {"boundaries", "communication_style", "important_people", "dislikes"},
         "task_request": {"identity", "preferences", "communication_style", "dislikes"},
-        "casual_chat": {"identity", "preferences", "communication_style", "boundaries", "life_context", "important_people", "dislikes"},
-        "proactive_generation": {"life_context", "goals", "open_threads", "communication_style", "dislikes"},
+        "casual_chat": {
+            "identity", "preferences", "communication_style", "boundaries", "life_context",
+            "important_people", "dislikes", "turn_constraints",
+        },
+        "proactive_generation": {"life_context", "goals", "open_threads", "communication_style", "dislikes", "turn_constraints"},
     }
 
     def __init__(
@@ -116,6 +122,17 @@ class MemoryRetriever:
             )
         understanding = self.user_understanding.load()
         relationship = await self.relationship.get_state(bot_id=bot_id, user_id=user_id)
+        turn_constraints = []
+        if hasattr(self.semantic, "list_facts"):
+            turn_constraints = await self.semantic.list_facts(
+                bot_id=bot_id,
+                user_id=user_id,
+                categories={"turn_constraints"},
+                min_confidence=0.0,
+                include_archived=False,
+                limit=12,
+            )
+        turn_constraints.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
         rollup_recall = []
         if self.rollups is not None:
             seen_rollups: set[tuple[str, str, str]] = set()
@@ -169,6 +186,7 @@ class MemoryRetriever:
                 limit=self._vector_limit_for_intent(detected_intent),
                 include_archived=False,
             )
+            vector_recall = self._filter_vector_recall(vector_recall, intent=detected_intent)
         top_k = 5 if detected_intent in {"recall_past", "relationship_repair"} else 2
         episodic = []
         if detected_intent in {"recall_past", "emotional_support", "relationship_repair", "casual_chat", "planning"}:
@@ -193,6 +211,7 @@ class MemoryRetriever:
             intent=detected_intent,
             working_history=working,
             daily_context=daily_context,
+            turn_constraints=turn_constraints,
             vector_recall=vector_recall,
             rollup_recall=rollup_recall,
             episodic_recall=episodic,
@@ -253,6 +272,26 @@ class MemoryRetriever:
             return ["day", "topic"]
         return ["topic"]
 
+    def _filter_vector_recall(self, items: list[dict[str, Any]], *, intent: str) -> list[dict[str, Any]]:
+        if intent == "recall_past":
+            return items
+        today = date.today()
+        result: list[dict[str, Any]] = []
+        for item in items:
+            if str(item.get("source_type") or "") not in {"life_event"}:
+                result.append(item)
+                continue
+            event_date = _vector_item_date(item)
+            if event_date is None:
+                result.append(item)
+                continue
+            if event_date > today:
+                continue
+            if (today - event_date).days >= 3:
+                continue
+            result.append(item)
+        return result
+
     def _has_recall_cue(self, text: str, lowered: str) -> bool:
         if not text:
             return False
@@ -269,3 +308,19 @@ class MemoryRetriever:
             "我们聊过", "聊过", "说过", "提过", "刚说", "刚聊", "上一句", "上一条",
         )
         return any(cue in text or cue.lower() in lowered for cue in cues)
+
+
+def _vector_item_date(item: dict[str, Any]) -> date | None:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    for key in ("updated_at", "created_at"):
+        raw = str(metadata.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            return datetime.fromisoformat(raw[:19]).date()
+        except ValueError:
+            try:
+                return date.fromisoformat(raw[:10])
+            except ValueError:
+                continue
+    return None

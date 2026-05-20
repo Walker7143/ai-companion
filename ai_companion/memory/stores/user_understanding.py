@@ -288,6 +288,8 @@ class UserUnderstandingStore:
         manual = data.setdefault("manual", self._empty_section())
         auto = data.setdefault("auto", self._empty_section(include_refresh=True))
         category = str(category or "general")
+        if _is_auto_projection_noise(category, key, value):
+            return
 
         if category in self.SECTIONS or category in self.AUTO_DEEP_SECTIONS:
             manual_items = set(self._clean_list(manual.get(category)))
@@ -341,6 +343,8 @@ class UserUnderstandingStore:
             category = str(fact.get("category") or "general")
             confidence = _float(fact.get("confidence"), 0.7)
             if not key or not value or key in self.INTERNAL_KEYS:
+                continue
+            if _is_auto_projection_noise(category, key, value):
                 continue
             if key in manual_fact_keys:
                 meta["contradictions"].append(
@@ -670,7 +674,19 @@ class UserUnderstandingStore:
             section["facts"] = self._clean_dict(value.get("facts"))
             section["interaction_style"] = self._normalize_interaction_style(value.get("interaction_style"))
             for key in (*self.SECTIONS, "relationship_expectations", "notes", *self.AUTO_DEEP_SECTIONS):
-                section[key] = self._clean_list(value.get(key))
+                items = self._clean_list(value.get(key))
+                if include_refresh:
+                    items = [
+                        item for item in items
+                        if not _is_auto_projection_noise(key, key, item)
+                    ]
+                section[key] = items
+            if include_refresh:
+                section["facts"] = {
+                    key: fact_value
+                    for key, fact_value in section["facts"].items()
+                    if not _is_auto_projection_noise("general", key, fact_value)
+                }
             for key, raw in value.items():
                 if key not in section and (include_refresh or key != "last_refresh_at"):
                     section[key] = self._normalize_custom_value(raw)
@@ -1114,6 +1130,35 @@ def _is_stale_pre_commitment_thread(value: Any) -> bool:
         "你们目前像恋人",
     )
     return any(cue in text for cue in stale_cues)
+
+
+_NON_UNDERSTANDING_CATEGORIES = {
+    "turn_constraints",
+    "current_constraints",
+    "temporary_directive",
+}
+
+
+def _is_auto_projection_noise(category: Any, key: Any, value: Any) -> bool:
+    category_text = str(category or "").strip()
+    if category_text in _NON_UNDERSTANDING_CATEGORIES:
+        return True
+    return _looks_like_time_scoped_directive(f"{key} {value}")
+
+
+def _looks_like_time_scoped_directive(text: str) -> bool:
+    normalized = "".join(str(text or "").split())
+    if not normalized:
+        return False
+    temporal = (
+        "今天", "今晚", "明天", "现在", "马上", "等会", "等下", "待会", "一会",
+        "这次", "本轮", "刚才", "刚刚", "临时",
+    )
+    directive = (
+        "不许", "不要", "别", "不准", "别再", "记得", "提醒", "等我",
+        "换", "改", "吃点别的", "别吃",
+    )
+    return any(item in normalized for item in temporal) and any(item in normalized for item in directive)
 
 
 _SENSITIVE_KEYWORDS = (

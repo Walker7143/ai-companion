@@ -2757,6 +2757,7 @@ class LifeEngine:
         major_events = self.state.major_life_events
         real_age = self._calc_real_age()
         local_now = self._get_local_now()
+        status_date = self._parse_state_current_date() or local_now.date()
         time_of_day = self._time_of_day_label(local_now.hour)
         life_context = {
             "current_date": self.state.current_date,
@@ -2766,6 +2767,7 @@ class LifeEngine:
         visible_life_events = [
             event for event in life_events
             if is_event_visible_at_current_time(event, life_context)
+            and self._is_recent_status_event(event, status_date)
         ]
         visible_major_events = [
             event for event in major_events
@@ -2800,10 +2802,37 @@ class LifeEngine:
         }
 
     def _event_status_item(self, event: "LifeEvent") -> dict:
+        event_date = self._event_date_for_status(event)
         return {
             "timestamp": event.timestamp,
+            "date": event_date.isoformat() if event_date else "",
             "description": event.description,
             "importance": event.importance,
             "scenario_key": event.scenario_key,
             "source": event.source,
         }
+
+    def _is_recent_status_event(self, event: "LifeEvent", current_date: date) -> bool:
+        event_date = self._event_date_for_status(event)
+        if event_date is None:
+            return False
+        if event_date > current_date:
+            return False
+        window_days = max(1, int(getattr(self.config, "recent_status_window_days", 3) or 3))
+        return (current_date - event_date).days < window_days
+
+    def _event_date_for_status(self, event: "LifeEvent") -> Optional[date]:
+        description = str(getattr(event, "description", "") or "")
+        match = re.search(r"\d{4}-\d{2}-\d{2}", description)
+        if match:
+            try:
+                return date.fromisoformat(match.group(0))
+            except ValueError:
+                pass
+        timestamp = str(getattr(event, "timestamp", "") or "")
+        if timestamp:
+            try:
+                return date.fromisoformat(timestamp[:10])
+            except ValueError:
+                return None
+        return None

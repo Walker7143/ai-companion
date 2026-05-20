@@ -444,11 +444,16 @@ class PersonaEngine:
         for event in events[-5:]:
             if isinstance(event, dict):
                 description = str(event.get("description", "")).strip()
+                event_date = str(event.get("date") or event.get("timestamp") or "").strip()[:10]
             else:
                 description = str(event).strip()
+                event_date = ""
             if not description:
                 continue
-            lines.append(f"  - {description}")
+            if event_date and not description.startswith(event_date):
+                lines.append(f"  - {event_date}: {description}")
+            else:
+                lines.append(f"  - {description}")
         return lines
 
     def _load_json(self, path) -> dict:

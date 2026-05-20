@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
         "unexpected_event_probability": 0.01,
         "unexpected_event_cooldown_days": 365,
         "llm_recent_event_limit": 20,
+        "recent_status_window_days": 3,
         "llm_forbidden_scenario_limit": 12,
         "llm_daily_candidate_limit": 12,
         "disabled_scenarios": [],
@@ -76,6 +77,7 @@ class LifeConfig:
     unexpected_event_probability: float = 0.01
     unexpected_event_cooldown_days: int = 365
     llm_recent_event_limit: int = 20
+    recent_status_window_days: int = 3
     llm_forbidden_scenario_limit: int = 12
     llm_daily_candidate_limit: int = 12
     disabled_scenarios: list = field(default_factory=list)
@@ -144,6 +146,7 @@ class LifeConfig:
                 )
                 self.unexpected_event_cooldown_days = max(0, int(event_policy.get("unexpected_event_cooldown_days", 365)))
                 self.llm_recent_event_limit = max(3, int(event_policy.get("llm_recent_event_limit", 20)))
+                self.recent_status_window_days = max(1, int(event_policy.get("recent_status_window_days", 3)))
                 self.llm_forbidden_scenario_limit = max(0, int(event_policy.get("llm_forbidden_scenario_limit", 12)))
                 self.llm_daily_candidate_limit = min(20, max(3, int(event_policy.get("llm_daily_candidate_limit", 12))))
                 self.disabled_scenarios = event_policy.get("disabled_scenarios", []) or []

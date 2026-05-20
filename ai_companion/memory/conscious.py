@@ -542,6 +542,7 @@ def _mode_label(mode: str) -> str:
         "silent_influence": "只影响语气和分寸，不主动说破",
         "light_reference": "自然时轻轻带一句",
         "explicit_recall": "可以明确承接回忆",
+        "hard_constraint": "必须优先遵守",
         "ask_before_entering": "先确认用户愿不愿继续",
         "avoid": "本轮不要主动触碰",
     }

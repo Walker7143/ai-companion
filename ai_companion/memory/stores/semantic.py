@@ -373,8 +373,9 @@ class SemanticStore:
                 1 if manual_override else 0,
             ))
             await db.commit()
-        if self._user_understanding:
-            await self._user_understanding.upsert_auto_item(key=key, value=value, category=category)
+        # Semantic storage is the source of facts only. User-understanding
+        # projection is refreshed by MemoryGovernor/MemoryMaintenance so the
+        # write path has a single policy gate.
         if self._vector_store:
             await self._vector_store.upsert(
                 VectorMemoryDocument(
@@ -1091,7 +1092,15 @@ class SemanticStore:
                     continue
 
                 # 其余类型直接写入
-                await self.set_fact(key, str(value), session_id=session_id)
+                value_text = str(value)
+                await self.set_fact(
+                    key,
+                    value_text,
+                    session_id=session_id,
+                    category=self._infer_category(key, value_text),
+                    confidence=0.78,
+                    source="legacy_extract",
+                )
                 written.append(res)
                 logger.info(f"[Semantic]  写入记忆: {res}")
 

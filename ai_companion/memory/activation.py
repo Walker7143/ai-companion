@@ -57,6 +57,7 @@ class MemoryActivationPlanner:
         "daily_summary",
         "daily_commitment",
         "self_memory",
+        "turn_constraint",
     }
     SENSITIVE_ALLOWED_INTENTS = {"recall_past", "relationship_repair", "emotional_support"}
     ACTIVE_LIMITS = {
@@ -89,6 +90,7 @@ class MemoryActivationPlanner:
     def build(self, retrieved: Any, current_input: str) -> MemoryActivationPlan:
         intent = str(getattr(retrieved, "intent", "") or "casual_chat")
         candidates: list[ActivatedMemory] = []
+        candidates.extend(self._turn_constraint_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._working_recent_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._daily_recent_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._daily_summary_candidates(retrieved, current_input, intent=intent))
@@ -145,6 +147,32 @@ class MemoryActivationPlanner:
             selected.append(item)
             selected_keys.add(_memory_key(item))
         return sorted(selected, key=lambda item: item.score, reverse=True)
+
+    def _turn_constraint_candidates(self, retrieved: Any, current_input: str, *, intent: str) -> list[ActivatedMemory]:
+        candidates: list[ActivatedMemory] = []
+        for age, item in enumerate(getattr(retrieved, "turn_constraints", []) or []):
+            if not isinstance(item, dict):
+                continue
+            value = _compact(item.get("value"), 180)
+            if not value:
+                continue
+            relevance = _cue_overlap(current_input, value)
+            recency = max(0.0, 1.0 - age * 0.10)
+            score = 0.72 + recency * 0.12 + relevance * 0.10
+            candidates.append(
+                ActivatedMemory(
+                    text=f"当前临时约束：{value}",
+                    source="turn_constraint",
+                    score=_clamp_score(score),
+                    expression_mode="hard_constraint",
+                    reason="用户最近给出的当前/当日约束，优先级高于旧记忆",
+                    layer="short_term.constraint",
+                    recency=round(recency, 3),
+                    relevance=round(relevance, 3),
+                    evidence=_list(item.get("evidence")),
+                )
+            )
+        return candidates
 
     def _working_recent_candidates(self, retrieved: Any, current_input: str, *, intent: str) -> list[ActivatedMemory]:
         messages = [

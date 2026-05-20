@@ -239,6 +239,39 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(any("午饭去楼下" in item for item in descriptions))
             self.assertFalse(any("晚饭后去小区快走" in item for item in descriptions))
 
+    def test_old_daily_events_are_not_current_recent_status(self):
+        with TemporaryDirectory(prefix="life-old-recent-event-") as td:
+            state = LifeState("old_recent_bot", Path(td))
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False, recent_status_window_days=3)
+            engine = LifeEngine("old_recent_bot", cfg, state, model=EmptyLifeModel())
+            engine._get_local_now = lambda: datetime(2026, 5, 20, 12, 1).astimezone()
+            state.current_date = "2026-05-20"
+            state.day_of_week = "周三"
+            state.current_month = 5
+            state.current_season = "春"
+            state.add_event(
+                LifeEvent(
+                    timestamp="2026-05-12T11:21:24",
+                    description="核对完数据后去客栈附近那家云贵小馆，点了一份酸汤牛肉粉。",
+                    scenario_key="food_moment_11",
+                    shareable=True,
+                )
+            )
+            state.add_event(
+                LifeEvent(
+                    timestamp="2026-05-20T11:44:49",
+                    description="2026-05-20 有人约周末吃饭，她反复看日程，终于空出一段时间。",
+                    scenario_key="social_signal_09",
+                    shareable=True,
+                )
+            )
+
+            status = engine.get_status()
+
+            descriptions = [item["description"] for item in status["recent_life_events"]]
+            self.assertFalse(any("酸汤牛肉粉" in item for item in descriptions))
+            self.assertTrue(any("周末吃饭" in item for item in descriptions))
+
     def test_daily_candidates_exclude_evening_only_scenarios_at_noon(self):
         with TemporaryDirectory(prefix="life-noon-candidates-") as td:
             state = LifeState("candidate_time_bot", Path(td))

@@ -79,6 +79,7 @@ class MemoryGovernor:
         facts = await self.semantic.list_facts(
             bot_id=bot_id,
             user_id=user_id,
+            categories=PROJECTABLE_UNDERSTANDING_CATEGORIES,
             min_confidence=self.MIN_PROJECTION_CONFIDENCE,
             include_archived=False,
         )
@@ -228,22 +229,26 @@ class MemoryGovernor:
             result.skipped.append((candidate, "low_confidence"))
             return
         expires_at = None
-        if candidate.ttl_days:
-            expires_at = (datetime.now() + timedelta(days=candidate.ttl_days)).isoformat()
+        ttl_days = candidate.ttl_days
+        category = str(candidate.category or "open_threads").strip() or "open_threads"
+        if category == "turn_constraints" and not ttl_days:
+            ttl_days = 2
+        if ttl_days:
+            expires_at = (datetime.now() + timedelta(days=ttl_days)).isoformat()
         await self.semantic.set_fact(
-            candidate.value[:40] or candidate.key,
+            candidate.key or candidate.value[:40],
             candidate.value,
             session_id=session_id,
             bot_id=bot_id,
             user_id=user_id,
-            category="open_threads",
+            category=category,
             confidence=candidate.confidence,
             source=candidate.source,
             evidence=candidate.evidence,
             expires_at=expires_at,
         )
         result.written.append(candidate)
-        if candidate.confidence >= self.MIN_PROJECTION_CONFIDENCE:
+        if category in PROJECTABLE_UNDERSTANDING_CATEGORIES and candidate.confidence >= self.MIN_PROJECTION_CONFIDENCE:
             result.projection_refresh = True
 
 
@@ -302,3 +307,18 @@ def _has_friend_demotion_evidence(meta: dict) -> bool:
         + max(_float(meta.get("tension_delta")), 0)
     )
     return negative >= 2
+
+
+PROJECTABLE_UNDERSTANDING_CATEGORIES = {
+    "identity",
+    "preferences",
+    "dislikes",
+    "communication_style",
+    "boundaries",
+    "important_people",
+    "life_context",
+    "goals",
+    "routines",
+    "open_threads",
+    "general",
+}

@@ -264,6 +264,7 @@ class MemoryEngine:
             "episodic_recall": retrieved.episodic_recall,
             "vector_recall": retrieved.vector_recall,
             "semantic_facts": retrieved.semantic_facts,
+            "turn_constraints": retrieved.turn_constraints,
             "relationship_state": retrieved.relationship_state,
             "daily_context": retrieved.daily_context,
             "memory_intent": retrieved.intent,

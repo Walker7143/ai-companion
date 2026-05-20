@@ -2205,6 +2205,7 @@ class SystemTestSuite:
                 "我听见了，先不急着讲道理。",
                 session_id="new",
             )
+            await engine.governor.refresh_projection(bot_id="profile_bot", user_id="default_user")
 
             facts = await engine.semantic.get_all_facts()
             context = await engine.load_context("今天有点烦")

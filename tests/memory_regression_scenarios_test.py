@@ -41,14 +41,76 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
             ("我的猫不叫奥利奥，叫布丁", "user_fact", "宠物信息"),
             ("我们已经确认关系了，你是我女朋友", "relationship_event", "relationship_state"),
             ("我纠正一下，不是周三，是周五", "temporary_context", "user_correction"),
+            ("今天不许吃粉，吃点别的", "temporary_context", "turn_constraint_"),
         ]
         for text, expected_type, expected_key in extraction_cases:
             with self.subTest(text=text):
                 candidates = asyncio.run(extractor.extract(text, "收到", session_id="s1"))
                 self.assertTrue(
-                    any(item.type == expected_type and item.key == expected_key for item in candidates),
+                    any(
+                        item.type == expected_type
+                        and (item.key == expected_key or item.key.startswith(expected_key))
+                        for item in candidates
+                    ),
                     candidates,
                 )
+        directive_candidates = asyncio.run(extractor.extract("今天不许吃粉，吃点别的", "收到", session_id="s1"))
+        self.assertFalse(any(item.type == "user_fact" and item.category == "boundaries" for item in directive_candidates))
+
+    def test_turn_constraints_stay_out_of_stable_understanding_but_enter_prompt(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="memory-regression-turn-constraint-") as td:
+                engine = MemoryEngine("constraint_bot", Path(td), config={"embedding": "none"})
+                await engine.init()
+                candidates = await MemoryExtractor().extract("今天不许吃粉，吃点别的", "好，换一家。", session_id="s1")
+                await engine.governor.apply(
+                    candidates,
+                    bot_id="constraint_bot",
+                    user_id="default_user",
+                    session_id="s1",
+                )
+                ctx = await engine.load_context("你吃的啥，我看看")
+                understanding = engine.user_understanding.load()
+                facts = await engine.semantic.list_facts(
+                    bot_id="constraint_bot",
+                    user_id="default_user",
+                    categories={"turn_constraints"},
+                    min_confidence=0.0,
+                )
+                await engine.close()
+                return ctx, understanding, facts
+
+        ctx, understanding, facts = asyncio.run(run())
+        self.assertTrue(facts)
+        self.assertIn("本轮临时约束", ctx["system_suffix"])
+        self.assertIn("今天不许吃粉", ctx["system_suffix"])
+        rendered_understanding = str(understanding.get("layered", {}))
+        self.assertNotIn("今天不许吃粉", rendered_understanding)
+
+    def test_semantic_write_does_not_side_effect_understanding_projection(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="memory-regression-projection-") as td:
+                engine = MemoryEngine("projection_bot", Path(td), config={"embedding": "none"})
+                await engine.init()
+                await engine.semantic.set_fact(
+                    "reply_style",
+                    "prefers concise replies",
+                    bot_id="projection_bot",
+                    user_id="default_user",
+                    category="preferences",
+                    confidence=0.95,
+                    source="test",
+                    evidence=["s1"],
+                )
+                immediate = engine.user_understanding.load()
+                await engine.governor.refresh_projection(bot_id="projection_bot", user_id="default_user")
+                refreshed = engine.user_understanding.load()
+                await engine.close()
+                return immediate, refreshed
+
+        immediate, refreshed = asyncio.run(run())
+        self.assertNotIn("prefers concise replies", immediate["layered"]["core"]["preferences"])
+        self.assertIn("prefers concise replies", refreshed["layered"]["core"]["preferences"])
 
     def test_memory_trust_view_and_gateway_memory_command(self):
         async def run():

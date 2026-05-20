@@ -102,6 +102,22 @@ class MemoryPromptBuilder:
             for item in getattr(self, "_last_anchored_fact_items", [])
             if isinstance(item, dict) and item.get("key")
         }
+        turn_constraint_text = self._format_turn_constraints(retrieved)
+        if turn_constraint_text:
+            blocks.append(
+                PromptBlock(
+                    name="turn_constraints",
+                    title="【本轮临时约束】",
+                    body=turn_constraint_text,
+                    usage=(
+                        "使用方式：这些是当前日期/当前轮次内必须优先遵守的短期约束；"
+                        "优先级高于旧记忆、旧生活事件和 Bot 自己生成的经历。"
+                        "只让它影响本轮事实连续性和行动选择，不要当作用户稳定画像复述。"
+                    ),
+                    budget=budgets["turn_constraints"],
+                    priority=5,
+                )
+            )
         if conscious is not None:
             conscious_text = conscious.render(max_chars=self._conscious_char_limit(retrieved.intent))
             if conscious_text:
@@ -262,6 +278,7 @@ class MemoryPromptBuilder:
         intent = intent or "casual_chat"
         if intent == "task_request":
             weights = {
+                "turn_constraints": 0.08,
                 "conscious": 0.14,
                 "short_term": 0.08,
                 "understanding": 0.24,
@@ -274,6 +291,7 @@ class MemoryPromptBuilder:
             }
         elif intent in {"emotional_support", "relationship_repair", "recall_past"}:
             weights = {
+                "turn_constraints": 0.10,
                 "conscious": 0.18,
                 "short_term": 0.14,
                 "understanding": 0.30,
@@ -286,6 +304,7 @@ class MemoryPromptBuilder:
             }
         else:
             weights = {
+                "turn_constraints": 0.10,
                 "conscious": 0.14,
                 "short_term": 0.10,
                 "understanding": 0.26,
@@ -307,6 +326,28 @@ class MemoryPromptBuilder:
         if intent == "task_request":
             return min(900, max(500, int(self.max_chars * 0.08)))
         return min(1200, max(650, int(self.max_chars * 0.10)))
+
+    def _format_turn_constraints(self, retrieved: RetrievedMemory) -> str:
+        items = getattr(retrieved, "turn_constraints", []) or []
+        lines: list[str] = []
+        seen: set[str] = set()
+        for item in items[:8]:
+            if not isinstance(item, dict):
+                continue
+            value = _compact_prompt_text(item.get("value"), 160)
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            updated = str(item.get("updated_at") or "").strip()[:16]
+            expires = str(item.get("expires_at") or "").strip()[:10]
+            timing = []
+            if updated:
+                timing.append(f"记录于 {updated}")
+            if expires:
+                timing.append(f"有效期至 {expires}")
+            suffix = f"（{'，'.join(timing)}）" if timing else ""
+            lines.append(f"  - {value}{suffix}")
+        return "\n".join(lines)
 
     def _format_activation_window(self, retrieved: RetrievedMemory) -> str:
         plan = getattr(retrieved, "activation_plan", None)
@@ -983,6 +1024,7 @@ def _activation_source_label(source: str) -> str:
         "daily_summary": "近日连续性",
         "daily_commitment": "未完事项",
         "self_memory": "Bot 自传体线索",
+        "turn_constraint": "当前临时约束",
         "relationship": "关系状态",
         "semantic": "语义事实",
         "episodic": "共同经历",
@@ -1002,6 +1044,7 @@ def _activation_mode_label(mode: str) -> str:
         "silent_influence": "只影响理解和语气，不主动说破",
         "light_reference": "自然时轻轻带一句",
         "explicit_recall": "可以明确承接回忆",
+        "hard_constraint": "必须优先遵守",
         "ask_before_entering": "先确认用户愿不愿意继续",
         "avoid": "本轮不要主动触碰",
     }.get(mode, "只影响理解和语气，不主动说破")

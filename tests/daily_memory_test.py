@@ -271,6 +271,7 @@ class DailyMemoryTest(unittest.TestCase):
                     category="dislikes",
                     confidence=0.9,
                 )
+                await engine.governor.refresh_projection(bot_id="dislikes_bot", user_id="default_user")
                 ctx = await engine.load_context("随便聊聊")
                 loaded = engine.user_understanding.load()
                 await engine.close()

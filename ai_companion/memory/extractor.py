@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from hashlib import sha1
 from typing import Any, Optional
 
 
@@ -116,7 +117,7 @@ class MemoryExtractor:
 - 只输出 JSON，不要解释。"""
 
     CATEGORY_KEYWORDS = [
-        ("boundaries", ["不要", "别", "不想聊", "不接受", "雷区", "边界"]),
+        ("boundaries", ["不要", "不许", "不准", "别", "不想聊", "不接受", "雷区", "边界"]),
         ("communication_style", ["先共情", "少讲道理", "怎么回应", "安慰我", "别说教"]),
         ("life_context", ["压力", "失眠", "焦虑", "最近", "准备", "面试", "考试", "作品集"]),
         ("goals", ["想要", "计划", "目标", "明天", "以后", "继续"]),
@@ -278,6 +279,19 @@ class MemoryExtractor:
         key = str(item.get("key") or "").strip()
         value = str(item.get("value") or "").strip()
         category = str(item.get("category") or self._infer_category(key, value)).strip()
+        if _is_temporary_user_directive(f"{key} {value}", category=category):
+            return MemoryCandidate(
+                type="temporary_context",
+                key=_temporary_directive_key(value or key),
+                value=value or key,
+                category="turn_constraints",
+                confidence=_clamp_float(item.get("confidence"), 0.0, 1.0, 0.82),
+                importance=_clamp_float(item.get("importance"), 0.0, 1.0, 0.78),
+                source="user_directive",
+                ttl_days=item.get("ttl_days") if isinstance(item.get("ttl_days"), int) else 2,
+                evidence=[session_id],
+                reason=str(item.get("reason") or "用户给出了有时效的当前约束。").strip(),
+            )
         return MemoryCandidate(
             type="user_fact",
             key=key,
@@ -329,20 +343,23 @@ class MemoryExtractor:
         category = self._infer_category(text, text)
         if category == "identity" and not self._is_explicit_identity_statement(text):
             category = "general"
-        if category != "general" and (len(text) >= 6 or category == "identity"):
-            key = self._infer_key(category, text)
+        is_temporary_general_directive = _is_temporary_user_directive(text, category=category)
+        if (category != "general" or is_temporary_general_directive) and (len(text) >= 6 or category == "identity"):
+            is_temporary_directive = _is_temporary_user_directive(text, category=category)
+            key = _temporary_directive_key(text) if is_temporary_directive else self._infer_key(category, text)
             if not any(item.type == "user_fact" and item.key == key for item in candidates):
                 candidates.append(
                     MemoryCandidate(
-                        type="user_fact",
+                        type="temporary_context" if is_temporary_directive else "user_fact",
                         key=key,
                         value=text[:160],
-                        category=category,
-                        confidence=0.68 if category in {"life_context", "goals"} else 0.76,
-                        importance=self._default_importance(category),
-                        source="rule",
-                        ttl_days=self._default_ttl(category),
+                        category="turn_constraints" if is_temporary_directive else category,
+                        confidence=0.82 if is_temporary_directive else (0.68 if category in {"life_context", "goals"} else 0.76),
+                        importance=0.78 if is_temporary_directive else self._default_importance(category),
+                        source="rule_temporary_directive" if is_temporary_directive else "rule",
+                        ttl_days=2 if is_temporary_directive else self._default_ttl(category),
                         evidence=[session_id],
+                        reason="用户给出了有时效的当前约束。" if is_temporary_directive else "",
                     )
                 )
 
@@ -668,6 +685,46 @@ def _safe_float(value: object) -> float:
 
 def _mentions_self(text: str) -> bool:
     return any(marker in text for marker in ("我", "俺", "本人", "自己"))
+
+
+_TEMPORAL_DIRECTIVE_MARKERS = (
+    "今天", "今晚", "明天", "现在", "马上", "等会", "等下", "待会", "一会",
+    "这次", "本轮", "刚才", "刚刚", "临时", "先",
+)
+
+_DIRECTIVE_VERBS = (
+    "不许", "不要", "别", "不准", "别再", "别老", "别总", "记得", "提醒",
+    "等我", "换", "改", "吃点别的", "别吃",
+)
+
+_STABLE_SELF_FACT_MARKERS = (
+    "我不喝", "我不抽", "我不吃", "我讨厌", "我不喜欢", "我不能", "我不会",
+    "我叫", "我是", "我住", "我的", "用户",
+)
+
+
+def _is_temporary_user_directive(text: str, *, category: str = "") -> bool:
+    """Detect time-scoped directives without turning them into user identity."""
+    normalized = re.sub(r"\s+", "", str(text or ""))
+    if len(normalized) < 4:
+        return False
+    if any(marker in normalized for marker in _STABLE_SELF_FACT_MARKERS) and not any(
+        marker in normalized for marker in ("今天我", "今晚我", "明天我", "现在我")
+    ):
+        return False
+    has_temporal_scope = any(marker in normalized for marker in _TEMPORAL_DIRECTIVE_MARKERS)
+    has_directive = any(marker in normalized for marker in _DIRECTIVE_VERBS)
+    if not (has_temporal_scope and has_directive):
+        return False
+    if category and category not in {"boundaries", "communication_style", "goals", "life_context", "general", "open_threads"}:
+        return False
+    return True
+
+
+def _temporary_directive_key(value: str) -> str:
+    normalized = re.sub(r"\s+", "", str(value or ""))[:80]
+    digest = sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    return f"turn_constraint_{digest}"
 
 
 _ALCOHOL_NEGATION_MARKERS = (
