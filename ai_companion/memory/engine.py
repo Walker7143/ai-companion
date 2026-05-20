@@ -507,11 +507,10 @@ class MemoryEngine:
             if item.get("action") in {"archive", "supersede", "conflict_skip"}
         ]
         daily_recent = daily_context.get("recent_messages") if isinstance(daily_context.get("recent_messages"), list) else []
-        recently_remembered = [
-            _fact_view_item(fact)
-            for fact in recent_facts[:6]
-        ]
-        for item in daily_recent[-4:]:
+        stable_keys = {str(fact.get("key") or "") for fact in stable_facts}
+        pending_keys = {str(fact.get("key") or "") for fact in pending}
+        recently_remembered = []
+        for item in daily_recent[-6:]:
             if not isinstance(item, dict):
                 continue
             content = str(item.get("content") or "").strip()
@@ -527,6 +526,12 @@ class MemoryEngine:
                     "updated_at": item.get("created_at"),
                 }
             )
+        recently_remembered.extend(
+            _fact_view_item(fact)
+            for fact in recent_facts
+            if str(fact.get("key") or "") not in stable_keys
+            and str(fact.get("key") or "") not in pending_keys
+        )
 
         relationship_anchor = {}
         if relationship:

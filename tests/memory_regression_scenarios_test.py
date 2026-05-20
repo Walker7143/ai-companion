@@ -110,6 +110,11 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
         trust = status["memory_trust_view"]
         self.assertIn("recently_remembered", trust)
         self.assertTrue(trust["stable_understanding"])
+        recent_keys = {item.get("key") for item in trust["recently_remembered"] if item.get("type") == "semantic_fact"}
+        stable_keys = {item.get("key") for item in trust["stable_understanding"]}
+        pending_keys = {item.get("key") for item in trust["pending_confirmation"]}
+        self.assertFalse(recent_keys & stable_keys)
+        self.assertFalse(recent_keys & pending_keys)
         self.assertEqual(trust["relationship_anchor"]["label"], "恋人")
         self.assertTrue(trust["pending_confirmation"])
         self.assertIn("记忆信任视图", command_text)
