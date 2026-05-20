@@ -443,6 +443,7 @@ class MemoryEngine:
             user_id=self.user_id,
             limit=8,
         )
+        recent_episodes = self.episodic.list_recent(limit=6, bot_id=self.bot_id, user_id=self.user_id)
         lifecycle_events = await self.semantic.list_lifecycle_events(
             bot_id=self.bot_id,
             user_id=self.user_id,
@@ -452,6 +453,7 @@ class MemoryEngine:
             facts=facts,
             relationship=relationship,
             daily_context=daily_context,
+            recent_episodes=recent_episodes,
             fact_history=fact_history,
             lifecycle_events=lifecycle_events,
         )
@@ -484,6 +486,7 @@ class MemoryEngine:
         facts: list[dict],
         relationship: dict,
         daily_context: dict,
+        recent_episodes: list[dict],
         fact_history: list[dict],
         lifecycle_events: list[dict],
     ) -> dict:
@@ -532,6 +535,23 @@ class MemoryEngine:
             if str(fact.get("key") or "") not in stable_keys
             and str(fact.get("key") or "") not in pending_keys
         )
+        recently_remembered.extend(_episode_view_item(item) for item in recent_episodes[:4])
+
+        relationship_moments = relationship.get("key_moments") if isinstance(relationship.get("key_moments"), list) else []
+        for moment in relationship_moments[-4:]:
+            text = str(moment or "").strip()
+            if not text:
+                continue
+            recently_remembered.append(
+                {
+                    "type": "relationship_moment",
+                    "key": "关系关键时刻",
+                    "value": text[:160],
+                    "confidence": relationship.get("stage_confidence"),
+                    "source": "relationship",
+                    "updated_at": relationship.get("updated_at"),
+                }
+            )
 
         relationship_anchor = {}
         if relationship:
@@ -1109,6 +1129,18 @@ def _fact_view_item(fact: dict) -> dict:
         "source": fact.get("source"),
         "confirmed": bool(fact.get("last_confirmed_at") or fact.get("manual_override")),
         "updated_at": fact.get("updated_at"),
+    }
+
+
+def _episode_view_item(item: dict) -> dict:
+    value = str(item.get("summary") or item.get("content") or "").strip()
+    return {
+        "type": "episodic_memory",
+        "key": item.get("summary") or item.get("id") or "情景片段",
+        "value": value[:160],
+        "confidence": item.get("confidence"),
+        "source": "episodic",
+        "updated_at": item.get("created_at"),
     }
 
 

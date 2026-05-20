@@ -650,19 +650,29 @@ class EpisodicStore:
             await db.commit()
         return {"decayed": decayed, "archived": archived}
 
-    def list_recent(self, limit: int = 20) -> list[dict]:
+    def list_recent(self, limit: int = 20, *, bot_id: str = "", user_id: str = "default_user") -> list[dict]:
         """返回最近的情景记忆片段"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("""
+        clauses = ["COALESCE(archived, 0) = 0"]
+        params: list[object] = []
+        if bot_id:
+            clauses.append("(bot_id = ? OR bot_id = '' OR bot_id IS NULL)")
+            params.append(bot_id)
+        if user_id:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        params.append(limit)
+        rows = conn.execute(f"""
             SELECT id, session_id, summary, content, importance, created_at,
                    confidence, participants_json, topics_json, emotion_tags_json,
                    source_message_ids_json, relationship_effect, sensitivity,
                    recall_style, cue_tags_json
             FROM episodic_memory
+            WHERE {' AND '.join(clauses)}
             ORDER BY id DESC
             LIMIT ?
-        """, (limit,)).fetchall()
+        """, tuple(params)).fetchall()
         conn.close()
         return [_episode_row_to_dict(r, include_created_at=True) for r in rows]
 

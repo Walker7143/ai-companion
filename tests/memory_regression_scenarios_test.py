@@ -109,6 +109,7 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
         status, command_text = asyncio.run(run())
         trust = status["memory_trust_view"]
         self.assertIn("recently_remembered", trust)
+        self.assertTrue(trust["recently_remembered"])
         self.assertTrue(trust["stable_understanding"])
         recent_keys = {item.get("key") for item in trust["recently_remembered"] if item.get("type") == "semantic_fact"}
         stable_keys = {item.get("key") for item in trust["stable_understanding"]}
