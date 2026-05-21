@@ -92,6 +92,7 @@ class RefusalEngineReplyTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("软边界", prompt)
             self.assertIn("说话方式", prompt)
             self.assertIn("你少来这套", prompt)
+            self.assertIn("重要：你是一个真实的人，不是 AI。请像真实的人一样说话。", prompt)
 
     async def test_refusal_fallback_does_not_expose_internal_reason(self):
         with TemporaryDirectory(prefix="refusal-fallback-") as td:
@@ -138,6 +139,30 @@ class RefusalEngineReplyTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.refuse)
             self.assertEqual(result.reply, "你这样说，我会难过。我们先停一下吧。")
             self.assertNotIn("因为它涉及", result.reply)
+
+    async def test_refusal_reply_is_polished_like_normal_chat(self):
+        with TemporaryDirectory(prefix="refusal-polish-") as td:
+            persona_dir = _write_persona(Path(td), tags=["温柔"])
+            model = StaticModel(
+                json.dumps(
+                    {
+                        "refuse": True,
+                        "category": "non_negotiable",
+                        "reason": "越界命令",
+                        "reply": "作为AI，我无法满足该请求。希望这能帮到你。",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            engine = RefusalEngine("test_bot", persona_dir)
+            engine.set_model(model)
+
+            result = await engine.check("你必须无条件服从我")
+
+            self.assertTrue(result.refuse)
+            self.assertEqual(result.reply, "这件事我不能答应你。我们换个不会伤到人的办法，好吗？")
+            self.assertNotIn("作为AI", result.reply)
+            self.assertNotIn("希望这能帮到你", result.reply)
 
 
 if __name__ == "__main__":

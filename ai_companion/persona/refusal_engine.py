@@ -13,8 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from ..bot.response_style import ResponseStylePolisher
 from ..temporal_guard import build_generation_time_constraints
+from .loader import PersonaLoader
 from .refusal_category import RefusalCategory
+from .engine import PersonaEngine
 
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
@@ -25,6 +28,9 @@ logger = logging.getLogger(__name__)
 # LLM 推断 prompt
 REFUSAL_JUDGE_PROMPT = """【角色】
 你是一个角色边界判断与回复生成器。你需要基于 Bot 的人格、价值观和说话方式，判断用户请求是否应被拒绝；如果需要表达边界，生成一句适合这个角色说出口的话。
+
+【共享说话风格约束】
+{shared_style_prompt}
 
 【Bot 人格信息】
 - 名字：{bot_name}
@@ -163,6 +169,7 @@ class RefusalEngine:
         self._values = None
         self._profile = None
         self._speaking_style = None
+        self._response_polisher = ResponseStylePolisher()
 
     def set_model(self, model: "MiniMaxAdapter"):
         """注入 LLM 模型用于推断"""
@@ -280,6 +287,22 @@ class RefusalEngine:
 
         return "；".join(parts) if parts else "自然、简短、像真实的人一样说话"
 
+    def _build_shared_style_prompt(self, generation_time_context: Optional[dict] = None) -> str:
+        try:
+            persona = PersonaLoader(self.persona_dir).load()
+            return PersonaEngine(persona).build_shared_style_prompt(life_context=generation_time_context)
+        except Exception as exc:
+            logger.debug("[RefusalEngine] 构建共享风格提示失败: %s", exc)
+            return (
+                "重要：你是一个真实的人，不是 AI。请像真实的人一样说话。\n"
+                "对话规则：\n"
+                "  - 先回应对方当下的情绪和话里的重点，再决定要不要解释或建议。\n"
+                "  - 不要总是总结、列点、下结论；日常聊天可以短一点，带一点停顿感和个人反应。\n"
+                "  - 不要说“作为AI”“我无法感受”“根据你的描述”等机器人式开场。\n"
+                "  - 不要机械复述用户画像；只在自然合适时轻轻带出你记得的细节。\n"
+                "  - 可以有自己的小情绪、偏好和边界，但保持人格设定中的分寸。"
+            )
+
     def _format_boundary_items(self, items: object) -> str:
         """把软边界/关系破坏点压缩成 prompt 可读摘要。"""
         if not items:
@@ -318,6 +341,23 @@ class RefusalEngine:
         if len(reply) > 220:
             reply = reply[:220].rstrip() + "..."
         return reply
+
+    def _polish_visible_reply(
+        self,
+        reply: str,
+        *,
+        relationship_state: Optional[dict] = None,
+        memory_context: Optional[dict] = None,
+    ) -> str:
+        reply = self._sanitize_reply(reply)
+        if not reply:
+            return ""
+        return self._response_polisher.polish(
+            reply,
+            intent="proactive_generation",
+            relationship_state=relationship_state or {},
+            user_understanding=(memory_context or {}).get("user_understanding") or {},
+        )
 
     def _fallback_reply(self, personality_type: str, category: RefusalCategory) -> str:
         """旧格式或异常格式输出时使用的自然拒绝兜底，不暴露内部 reason。"""
@@ -379,6 +419,7 @@ class RefusalEngine:
         # 调用 LLM 进行推断
         prompt = REFUSAL_JUDGE_PROMPT.format(
             bot_name=profile.get("name", "未知"),
+            shared_style_prompt=self._build_shared_style_prompt(generation_time_context),
             personality_tags="、".join(profile.get("personality_tags", [])),
             non_negotiable=non_negotiable_str,
             soft_boundaries=soft_boundaries_str,
@@ -419,7 +460,11 @@ class RefusalEngine:
             refuse = judgment.get("refuse", False)
             category_str = judgment.get("category", "allowed")
             reason = judgment.get("reason", "")
-            generated_reply = self._sanitize_reply(judgment.get("reply", ""))
+            generated_reply = self._polish_visible_reply(
+                judgment.get("reply", ""),
+                relationship_state=relationship_state,
+                memory_context=memory_context,
+            )
 
             # 映射分类
             category_map = {
@@ -431,7 +476,11 @@ class RefusalEngine:
             category = category_map.get(category_str, RefusalCategory.ALLOWED)
 
             if category == RefusalCategory.SOFT_BOUNDARY:
-                reply = generated_reply or self._fallback_reply(personality_type, category)
+                reply = generated_reply or self._polish_visible_reply(
+                    self._fallback_reply(personality_type, category),
+                    relationship_state=relationship_state,
+                    memory_context=memory_context,
+                )
                 adjustment = (
                     f"{personality_type}语气处理软边界：先接住对话，不要机械拒绝；"
                     "可以带一点犹豫、反刺、嘴硬、转移或小条件。"
@@ -460,7 +509,11 @@ class RefusalEngine:
                 )
 
             # reply 是用户可见内容，由 LLM 基于人格生成；reason 只保留给日志/内部判断。
-            reply = generated_reply or self._fallback_reply(personality_type, category)
+            reply = generated_reply or self._polish_visible_reply(
+                self._fallback_reply(personality_type, category),
+                relationship_state=relationship_state,
+                memory_context=memory_context,
+            )
 
             return RefusalResponse(
                 refuse=True,
