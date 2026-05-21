@@ -199,6 +199,8 @@ class ResponseStylePolisher:
             text = self._first_sentences(text, max_sentences=2)
         if intent == "emotional_support" and len(text) > 260:
             text = self._first_sentences(text, max_sentences=3)
+        if intent == "proactive_generation" and len(text) > 120:
+            text = self._first_sentences(text, max_sentences=2)
         return text
 
     def _first_sentences(self, text: str, max_sentences: int) -> str:

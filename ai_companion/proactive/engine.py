@@ -15,6 +15,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from ..bot.response_style import ResponseStylePolisher
+from ..memory.retriever import RetrievedMemory
+from ..persona.engine import PersonaEngine
+from ..persona.loader import PersonaLoader
 from ..temporal_guard import build_generation_time_constraints, is_event_visible_at_current_time
 
 if TYPE_CHECKING:
@@ -115,6 +119,8 @@ SHOULD_CONTACT_PROMPT = """【角色】
 GENERATE_MESSAGE_PROMPT = """【角色】
 你是{bot_name}，性格：{personality_tags}
 
+{shared_style_prompt}
+
 【你的真实说话风格】
 {persona_style_context}
 
@@ -156,6 +162,8 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 你是{bot_name}，性格：{personality_tags}
 
+{shared_style_prompt}
+
 【你的真实说话风格】
 {persona_style_context}
 
@@ -195,6 +203,8 @@ GENERATE_CONTEXTUAL_MESSAGE_PROMPT = """【角色】
 
 REGENERATE_PROACTIVE_MESSAGE_PROMPT = """【角色】
 你是{bot_name}，性格：{personality_tags}
+
+{shared_style_prompt}
 
 【你的真实说话风格】
 {persona_style_context}
@@ -371,6 +381,7 @@ class ProactiveEngine:
         self.model = model
         self.memory = memory
         self.personality_type = personality_type
+        self.response_polisher = ResponseStylePolisher()
         self._scheduler_task = None
         self._platform_sender = None  # 设置为主动消息发送回调
         self._next_record_context: dict | None = None
@@ -616,6 +627,16 @@ class ProactiveEngine:
             return Path(backstory_path).parent
         return None
 
+    def _load_persona_engine(self) -> PersonaEngine | None:
+        persona_dir = self._get_persona_dir()
+        if not persona_dir or not Path(persona_dir).exists():
+            return None
+        try:
+            return PersonaEngine(PersonaLoader(Path(persona_dir)).load())
+        except Exception as exc:
+            logger.debug("[ProactiveEngine] 构建 PersonaEngine 失败: %s", exc)
+            return None
+
     def _load_persona_json(self, filename: str) -> dict:
         persona_dir = self._get_persona_dir()
         if not persona_dir:
@@ -684,6 +705,112 @@ class ProactiveEngine:
         if lines:
             return "\n".join(lines)
         return "保持具体、口语、短一点；不要用 AI/客服式开场，不要总结成说明文。"
+
+    def _build_shared_style_prompt(self) -> str:
+        engine = self._load_persona_engine()
+        if engine:
+            try:
+                return engine.build_shared_style_prompt(life_context=self._current_generation_life_context())
+            except Exception as exc:
+                logger.debug("[ProactiveEngine] 读取共享风格提示失败: %s", exc)
+        return (
+            "【共享说话风格约束】\n"
+            "重要：你是一个真实的人，不是 AI。请像真实的人一样说话。\n"
+            "对话规则：\n"
+            "  - 先回应对方当下的情绪和话里的重点，再决定要不要解释或建议。\n"
+            "  - 不要总是总结、列点、下结论；日常聊天可以短一点，带一点停顿感和个人反应。\n"
+            "  - 不要说“作为AI”“我无法感受”“根据你的描述”等机器人式开场。\n"
+            "  - 不要机械复述用户画像；只在自然合适时轻轻带出你记得的细节。\n"
+            "  - 可以有自己的小情绪、偏好和边界，但保持人格设定中的分寸。"
+        )
+
+    def _current_generation_life_context(self) -> dict:
+        life_engine = getattr(self, "life_engine", None)
+        if not life_engine:
+            return {}
+        try:
+            return life_engine.get_status()
+        except Exception:
+            return {}
+
+    async def _build_shared_memory_suffix(self, current_input: str) -> str:
+        if not self.memory:
+            return ""
+        retriever = getattr(self.memory, "retriever", None)
+        prompt_builder = getattr(self.memory, "prompt_builder", None)
+        if retriever is None or prompt_builder is None:
+            return ""
+        try:
+            retrieved = await retriever.retrieve(
+                current_input,
+                bot_id=getattr(self.memory, "bot_id", self.bot_id),
+                user_id=getattr(self.memory, "user_id", "default_user"),
+                session_id=getattr(self.memory, "_session_id", None) or getattr(getattr(self.memory, "working", None), "current_session", None),
+                intent="proactive_generation",
+            )
+            if not isinstance(retrieved, RetrievedMemory):
+                return ""
+            return str(prompt_builder.build(retrieved) or "").strip()
+        except Exception as exc:
+            logger.debug("[ProactiveEngine] 读取共享记忆 suffix 失败: %s", exc)
+            return ""
+
+    async def _build_aligned_user_memory_context(self, current_input: str, *, motive=None) -> str:
+        blocks: list[str] = []
+        base_context = await self._build_context(
+            max_chars=PROACTIVE_GENERATION_CONTEXT_CHARS if motive is None else None
+        )
+        if base_context:
+            blocks.append(base_context)
+        shared_suffix = await self._build_shared_memory_suffix(current_input)
+        if shared_suffix:
+            blocks.append(
+                "【共享记忆承接】\n"
+                f"{shared_suffix}\n"
+                "使用方式：这些内容只用来影响你的语气、承接方式和分寸，不要像翻资料或复述档案。"
+            )
+        if motive is not None:
+            proactive_context = await self._build_proactive_memory_context(motive)
+            if proactive_context:
+                blocks.append(proactive_context)
+        return "\n\n".join(block for block in blocks if block).strip()
+
+    async def _get_relationship_state(self) -> dict:
+        if not self.memory or not hasattr(self.memory, "relationship"):
+            return {}
+        try:
+            return await self.memory.relationship.get_state(
+                bot_id=getattr(self.memory, "bot_id", self.bot_id),
+                user_id=getattr(self.memory, "user_id", "default_user"),
+            )
+        except Exception:
+            return {}
+
+    def _get_user_understanding(self) -> dict:
+        if not self.memory or not hasattr(self.memory, "user_understanding"):
+            return {}
+        try:
+            data = self.memory.user_understanding.load()
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _polish_proactive_message(
+        self,
+        message: str,
+        *,
+        relationship_state: dict | None = None,
+        understanding: dict | None = None,
+    ) -> str:
+        cleaned = self._clean_message(message)
+        if not cleaned:
+            return ""
+        return self.response_polisher.polish(
+            cleaned,
+            intent="proactive_generation",
+            relationship_state=relationship_state or {},
+            user_understanding=understanding or {},
+        )
 
     def _build_current_life_anchor_context(self) -> str:
         profile = self._current_life_profile()
@@ -955,9 +1082,12 @@ class ProactiveEngine:
         personality_type = self._get_personality_type()
         feeling = self._get_mood_description()
         rel_desc = await self._get_relationship_desc()
+        relationship_state = await self._get_relationship_state()
+        understanding = self._get_user_understanding()
         persona_style_context = self._build_persona_style_context()
         current_life_context = self._build_current_life_anchor_context()
-        user_memory_context = await self._build_context(max_chars=PROACTIVE_GENERATION_CONTEXT_CHARS)
+        shared_style_prompt = self._build_shared_style_prompt()
+        user_memory_context = await self._build_aligned_user_memory_context(reason or "想和用户聊天")
 
         # 获取 Bot 可分享的生活事件
         bot_life_context = ""
@@ -976,6 +1106,7 @@ class ProactiveEngine:
         prompt = GENERATE_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
+            shared_style_prompt=shared_style_prompt,
             persona_style_context=persona_style_context,
             bot_time_context=self._build_bot_time_context(),
             current_life_context=current_life_context,
@@ -995,7 +1126,7 @@ class ProactiveEngine:
             # 尝试解析结构化输出
             message = self._parse_structured_message(response)
             if message:
-                return message
+                return self._polish_proactive_message(message, relationship_state=relationship_state, understanding=understanding)
             cleaned = self._clean_message(response)
             issue = self._classify_generated_message_issue(cleaned)
             if issue:
@@ -1009,9 +1140,9 @@ class ProactiveEngine:
                     user_memory_context=user_memory_context,
                 )
                 if regenerated:
-                    return regenerated
+                    return self._polish_proactive_message(regenerated, relationship_state=relationship_state, understanding=understanding)
                 return self._get_fallback_message(scenario)
-            return cleaned
+            return self._polish_proactive_message(cleaned, relationship_state=relationship_state, understanding=understanding)
         except Exception as e:
             logger.error(f"[ProactiveEngine] LLM 生成消息失败: {e}")
             return self._get_fallback_message(scenario)
@@ -1023,22 +1154,26 @@ class ProactiveEngine:
 
         personality_type = self._get_personality_type()
         rel_desc = await self._get_relationship_desc()
+        relationship_state = await self._get_relationship_state()
+        understanding = self._get_user_understanding()
         persona_style_context = self._build_persona_style_context()
         current_life_context = self._build_current_life_anchor_context()
-        user_memory_context = await self._build_context()
-        proactive_memory_context = await self._build_proactive_memory_context(motive)
+        shared_style_prompt = self._build_shared_style_prompt()
+        user_memory_context = await self._build_aligned_user_memory_context(
+            "\n".join(part for part in (motive.reason, motive.prompt_context) if part),
+            motive=motive,
+        )
         prompt = GENERATE_CONTEXTUAL_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=personality_type,
+            shared_style_prompt=shared_style_prompt,
             persona_style_context=persona_style_context,
             bot_time_context=self._build_bot_time_context(),
             current_life_context=current_life_context,
             motive_reason=motive.reason,
             motive_context=motive.prompt_context,
             relationship_desc=rel_desc,
-            user_memory_context="\n\n".join(
-                block for block in (user_memory_context, proactive_memory_context) if block
-            ),
+            user_memory_context=user_memory_context,
         )
 
         try:
@@ -1049,10 +1184,10 @@ class ProactiveEngine:
             )
             message = self._parse_structured_message(response)
             if message:
-                return message
+                return self._polish_proactive_message(message, relationship_state=relationship_state, understanding=understanding)
             cleaned = self._clean_message(response)
             if cleaned and not self._should_reject_generated_message(cleaned):
-                return cleaned
+                return self._polish_proactive_message(cleaned, relationship_state=relationship_state, understanding=understanding)
             issue = self._classify_generated_message_issue(cleaned)
             if issue:
                 logger.warning(f"[ProactiveEngine] 上下文主动消息不可用(issue={issue})，尝试重新生成")
@@ -1065,7 +1200,7 @@ class ProactiveEngine:
                     user_memory_context=user_memory_context,
                 )
                 if regenerated:
-                    return regenerated
+                    return self._polish_proactive_message(regenerated, relationship_state=relationship_state, understanding=understanding)
         except Exception as e:
             logger.error(f"[ProactiveEngine] 上下文主动消息生成失败: {e}")
             return self._fallback_contextual_message(motive)
@@ -1089,6 +1224,7 @@ class ProactiveEngine:
         prompt = REGENERATE_PROACTIVE_MESSAGE_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             personality_tags=self._get_personality_type(),
+            shared_style_prompt=self._build_shared_style_prompt(),
             persona_style_context=persona_style_context,
             bot_time_context=self._build_bot_time_context(),
             current_life_context=current_life_context,
@@ -1105,10 +1241,18 @@ class ProactiveEngine:
             )
             message = self._parse_structured_message(response)
             if message:
-                return message
+                return self._polish_proactive_message(
+                    message,
+                    relationship_state=await self._get_relationship_state(),
+                    understanding=self._get_user_understanding(),
+                )
             cleaned = self._clean_message(response)
             if cleaned and not self._should_reject_generated_message(cleaned):
-                return cleaned
+                return self._polish_proactive_message(
+                    cleaned,
+                    relationship_state=await self._get_relationship_state(),
+                    understanding=self._get_user_understanding(),
+                )
             issue = self._classify_generated_message_issue(cleaned)
             logger.warning(f"[ProactiveEngine] LLM 重新生成主动消息仍不可用(issue={issue})")
         except Exception as e:
@@ -1503,6 +1647,7 @@ class ProactiveEngine:
     def _clean_message(self, content: str) -> str:
         """清理 LLM 生成的消息"""
         content = content.strip()
+        content = self.response_polisher.strip_reasoning_artifacts(content)
         # 去掉可能的引号
         content = content.strip('"\'')
         # 去掉 ```json 或 ``` 等标记

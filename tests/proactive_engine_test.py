@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ai_companion.memory.retriever import RetrievedMemory
 from ai_companion.proactive.config import ProactiveConfig
 from ai_companion.proactive.engine import ProactiveEngine
 from ai_companion.proactive.life_config import LifeConfig
@@ -361,6 +362,7 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("直白、鲜活、嘴上带刺", prompt)
             self.assertIn("你这人真没劲", prompt)
             self.assertIn("可以用反问、停顿、轻微吐槽", prompt)
+            self.assertIn("重要：你是一个真实的人，不是 AI。请像真实的人一样说话。", prompt)
             self.assertIn("不要写成状态播报", prompt)
             self.assertIn("你这人真没劲", message)
 
@@ -534,6 +536,27 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
                         }
                     }
 
+                def format_for_prompt(self):
+                    return "最近在准备面试"
+
+                def known_fact_keys(self):
+                    return set()
+
+            class RetrieverStub:
+                async def retrieve(self, *args, **kwargs):
+                    return RetrievedMemory(
+                        intent="proactive_generation",
+                        daily_context={"open_threads": ["面试后复盘"]},
+                        relationship_state={"relationship_label": "好朋友"},
+                        user_understanding={
+                            "manual": {"interaction_style": {"preferred_reply_length": "短一点"}},
+                        },
+                    )
+
+            class PromptBuilderStub:
+                def build(self, retrieved):
+                    return "【你对用户的理解】\n- 用户最近在准备面试\n使用方式：把这些当作相处背景，而不是答案清单。"
+
             engine.memory = type(
                 "MemoryStub",
                 (),
@@ -545,6 +568,8 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
                     "daily": DailyStub(),
                     "relationship": RelationshipStub(),
                     "user_understanding": UnderstandingStub(),
+                    "retriever": RetrieverStub(),
+                    "prompt_builder": PromptBuilderStub(),
                 },
             )()
             motive = ProactiveMotive(
@@ -573,8 +598,37 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("【长期用户理解】", prompt)
             self.assertIn("整理作品集", prompt)
             self.assertIn("不想被追问太快", prompt)
+            self.assertIn("【共享记忆承接】", prompt)
+            self.assertIn("【你对用户的理解】", prompt)
+            self.assertIn("使用方式：把这些当作相处背景", prompt)
             self.assertIn("主动目标线索", prompt)
             self.assertIn("source_platform：wechat", prompt)
+
+    async def test_contextual_message_polishes_ai_boilerplate(self):
+        from ai_companion.proactive.motives import ProactiveMotive, ProactiveMotiveType
+
+        with TemporaryDirectory(prefix="proactive-polish-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = CaptureModel('{"message":"作为AI，希望这能帮到你。如果你需要，我可以继续陪你聊。"}')
+            engine = ProactiveEngine(
+                bot_id="context_bot",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("context_bot", root / "runtime"),
+                model=model,
+            )
+            motive = ProactiveMotive(
+                type=ProactiveMotiveType.TOPIC_CONTINUATION,
+                priority=60,
+                reason="接上刚才的话",
+                prompt_context="用户刚才说还想继续聊。",
+            )
+
+            message = await engine.generate_contextual_message(motive)
+
+            self.assertNotIn("作为AI", message)
+            self.assertNotIn("希望这能帮到你", message)
 
     async def test_generate_message_prompt_includes_current_life_anchor(self):
         with TemporaryDirectory(prefix="proactive-life-anchor-") as td:

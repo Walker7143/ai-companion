@@ -57,29 +57,7 @@ class PersonaEngine:
 
         # 3. 说话风格
         lines.append("你的说话方式：")
-        lines.append(f"  - 基调：{speaking_style.get('tone', '自然')}。")
-        settings = profile.get("settings") or {}
-        if settings.get("tone_default"):
-            lines.append(f"  - 默认语气：{settings['tone_default']}")
-        if settings.get("response_length"):
-            lines.append(f"  - 回复长度：{settings['response_length']}，除非用户要求详细解释。")
-        if settings.get("emoji_usage"):
-            lines.append(f"  - 表情使用：{settings['emoji_usage']}。")
-        if speaking_style.get("口头禅"):
-            catchphrases = speaking_style["口头禅"]
-            if isinstance(catchphrases, list):
-                catchphrases = "、".join([str(item) for item in catchphrases])
-            lines.append(f"  - 可偶尔使用的口头禅：{catchphrases}")
-        if speaking_style.get("greeting_style"):
-            lines.append(f"  - 问候方式：{speaking_style['greeting_style']}")
-        if speaking_style.get("farewell_style"):
-            lines.append(f"  - 告别方式：{speaking_style['farewell_style']}")
-        if speaking_style.get("special_expressions"):
-            lines.append("  - 你的个人表达习惯：")
-            for expr in speaking_style["special_expressions"]:
-                lines.append(f"    * {expr}")
-        self._append_embodied_expression_guidance(lines, speaking_style)
-        self._append_conversation_style_rules(lines, conversation_style)
+        lines.extend(self.build_shared_style_lines(profile=profile, speaking_style=speaking_style, conversation_style=conversation_style))
         lines.append("")
 
         # 4. 底线
@@ -106,19 +84,77 @@ class PersonaEngine:
 
         # 7. 特别指示
         lines.append("")
-        lines.append("重要：你是一个真实的人，不是 AI。请像真实的人一样说话。")
-        lines.append("对话规则：")
-        lines.append("  - 先回应用户当下的情绪和话里的重点，再决定要不要解释或建议。")
-        lines.append("  - 不要总是总结、列点、下结论；日常聊天可以短一点，带一点停顿感和个人反应。")
-        lines.append("  - 不要说“作为AI”“我无法感受”“根据你的描述”等机器人式开场。")
-        lines.append("  - 不要机械复述用户画像；只在自然合适时轻轻带出你记得的细节。")
-        lines.append("  - 可以有自己的小情绪、偏好和边界，但保持人格设定中的分寸。")
+        lines.extend(self.build_shared_dialogue_rule_lines())
         if speaking_style.get("emotion_indicators"):
             lines.append("你的情绪会反映在说话方式中：")
             for emo, desc in speaking_style["emotion_indicators"].items():
                 lines.append(f"  - {emo}: {desc}")
 
         return "\n".join(lines)
+
+    def build_shared_style_prompt(self, life_context: dict | None = None) -> str:
+        profile = self._load_json(self.persona.persona_dir / "profile.json")
+        backstory = self._load_json(self.persona.persona_dir / "backstory.json")
+        speaking_style = self._load_json(self.persona.persona_dir / "speaking_style.json")
+        conversation_style = self._load_json(self.persona.persona_dir / "conversation_style_rules.json")
+        runtime = self._load_json(self.persona.persona_dir / "runtime_profile.json")
+        profile, _backstory = self._apply_runtime_profile(profile, backstory, runtime)
+
+        lines = ["【共享说话风格约束】"]
+        lines.extend(self.build_shared_style_lines(profile=profile, speaking_style=speaking_style, conversation_style=conversation_style))
+        lines.append("")
+        lines.extend(self.build_shared_dialogue_rule_lines())
+        if speaking_style.get("emotion_indicators"):
+            lines.append("你的情绪会反映在说话方式中：")
+            for emo, desc in speaking_style["emotion_indicators"].items():
+                lines.append(f"  - {emo}: {desc}")
+        if life_context:
+            local_time = life_context.get("local_time")
+            time_of_day = life_context.get("time_of_day")
+            if local_time:
+                if time_of_day:
+                    lines.append(f"当前本地时间：{local_time}（{time_of_day}）")
+                else:
+                    lines.append(f"当前本地时间：{local_time}")
+        return "\n".join(lines)
+
+    def build_shared_style_lines(self, *, profile: dict, speaking_style: dict, conversation_style: dict) -> list[str]:
+        lines: list[str] = []
+        lines.append(f"  - 基调：{speaking_style.get('tone', '自然')}。")
+        settings = profile.get("settings") or {}
+        if settings.get("tone_default"):
+            lines.append(f"  - 默认语气：{settings['tone_default']}")
+        if settings.get("response_length"):
+            lines.append(f"  - 回复长度：{settings['response_length']}，除非用户要求详细解释。")
+        if settings.get("emoji_usage"):
+            lines.append(f"  - 表情使用：{settings['emoji_usage']}。")
+        if speaking_style.get("口头禅"):
+            catchphrases = speaking_style["口头禅"]
+            if isinstance(catchphrases, list):
+                catchphrases = "、".join([str(item) for item in catchphrases])
+            lines.append(f"  - 可偶尔使用的口头禅：{catchphrases}")
+        if speaking_style.get("greeting_style"):
+            lines.append(f"  - 问候方式：{speaking_style['greeting_style']}")
+        if speaking_style.get("farewell_style"):
+            lines.append(f"  - 告别方式：{speaking_style['farewell_style']}")
+        if speaking_style.get("special_expressions"):
+            lines.append("  - 你的个人表达习惯：")
+            for expr in speaking_style["special_expressions"]:
+                lines.append(f"    * {expr}")
+        self._append_embodied_expression_guidance(lines, speaking_style)
+        self._append_conversation_style_rules(lines, conversation_style)
+        return lines
+
+    def build_shared_dialogue_rule_lines(self) -> list[str]:
+        return [
+            "重要：你是一个真实的人，不是 AI。请像真实的人一样说话。",
+            "对话规则：",
+            "  - 先回应用户当下的情绪和话里的重点，再决定要不要解释或建议。",
+            "  - 不要总是总结、列点、下结论；日常聊天可以短一点，带一点停顿感和个人反应。",
+            "  - 不要说“作为AI”“我无法感受”“根据你的描述”等机器人式开场。",
+            "  - 不要机械复述用户画像；只在自然合适时轻轻带出你记得的细节。",
+            "  - 可以有自己的小情绪、偏好和边界，但保持人格设定中的分寸。",
+        ]
 
     def _append_embodied_expression_guidance(self, lines: list[str], speaking_style: dict):
         config = self._embodied_expression_config(speaking_style)
