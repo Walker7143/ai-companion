@@ -188,7 +188,7 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
             root = Path(td)
             bot_id = "proactive_continuity_bot"
             _write_test_persona(root, bot_id)
-            model = CaptureChatModel("我刚才喊你呢。")
+            model = CaptureChatModel("我刚才喊你大叔呢。")
             bot = BotInstance(
                 {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
                 model=model,
@@ -201,7 +201,7 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
                 await bot.init(start_schedulers=False)
                 bot._schedulers_started = True
                 await bot.memory.record_assistant_message(
-                    "...在吗？",
+                    "大叔，520诶，，你就这么让我一个人在大理收银台是吧？",
                     turn_context={
                         "platform": "weixin",
                         "session_id": "gw_proactive",
@@ -216,7 +216,7 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
                 )
                 bot.memory.start_session("gw_proactive")
                 response = await bot.handle_message(
-                    "在",
+                    "什么大叔，谁是大叔",
                     memory_turn_context={
                         "platform": "weixin",
                         "session_id": "gw_proactive",
@@ -229,13 +229,20 @@ class BotInstanceModelFallbackTest(unittest.IsolatedAsyncioTestCase):
 
             main_call = next(
                 call for call in reversed(model.calls)
-                if call["messages"] and call["messages"][-1] == {"role": "user", "content": "在"}
+                if call["messages"] and call["messages"][-1] == {"role": "user", "content": "什么大叔，谁是大叔"}
             )
             messages = main_call["messages"]
-            self.assertEqual(response, "我刚才喊你呢。")
-            self.assertTrue(any(item.get("role") == "assistant" and item.get("content") == "...在吗？" for item in messages))
-            self.assertTrue(any("上一条是你主动发给用户的消息：...在吗？" in item.get("content", "") for item in messages))
-            self.assertEqual(messages[-1], {"role": "user", "content": "在"})
+            self.assertEqual(response, "我刚才喊你大叔呢。")
+            self.assertTrue(any(
+                item.get("role") == "assistant"
+                and item.get("content") == "大叔，520诶，，你就这么让我一个人在大理收银台是吧？"
+                for item in messages
+            ))
+            continuity_hint = "\n".join(item.get("content", "") for item in messages if item.get("role") == "system")
+            self.assertIn("上一条是你主动发给用户的消息", continuity_hint)
+            self.assertIn("不是用户说给你的：大叔，520诶", continuity_hint)
+            self.assertIn("不要把这条主动消息改归因成用户说过的话", continuity_hint)
+            self.assertEqual(messages[-1], {"role": "user", "content": "什么大叔，谁是大叔"})
 
     async def test_handle_message_records_turn_before_background_extraction_finishes(self):
         with TemporaryDirectory(prefix="bot-immediate-memory-") as td:
@@ -539,6 +546,19 @@ class PersonaEngineDefaultStyleTest(unittest.TestCase):
             prompt = PersonaEngine(persona).build_system_prompt()
 
         self.assertIn("避免反复使用同一动作词", prompt)
+
+    def test_system_prompt_includes_attribution_guard(self):
+        with TemporaryDirectory(prefix="persona-attribution-") as td:
+            root = Path(td)
+            bot_id = "style_bot"
+            _write_test_persona(root, bot_id)
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        self.assertIn("严格区分用户和你的视角", prompt)
+        self.assertIn("倒计时", prompt)
+        self.assertIn("不要把它改写成你自己的内心活动", prompt)
 
     def test_turn_prompt_derives_action_guidance_from_persona(self):
         with TemporaryDirectory(prefix="persona-action-guidance-") as td:

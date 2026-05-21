@@ -972,7 +972,13 @@ class BotInstance:
                 if content:
                     cleaned.append({
                         "role": "system",
-                        "content": f"[连续性提示] 上一条是你主动发给用户的消息：{content}",
+                        "content": (
+                            "[连续性提示] 上一条是你主动发给用户的消息，"
+                            f"不是用户说给你的：{content}\n"
+                            "如果用户追问或质疑这条消息里的称呼/内容，"
+                            "要承认这是你刚才主动说的话，再解释、修正或继续互动；"
+                            "不要把这条主动消息改归因成用户说过的话。"
+                        ),
                     })
         return cleaned
 
