@@ -191,6 +191,12 @@ class DreamingRunStore:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_dreaming_runs_bot_user ON dreaming_runs(bot_id, user_id, started_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_dreaming_reports_bot_user ON dreaming_reports(bot_id, user_id, created_at DESC)")
+            columns = {
+                row[1]: row
+                for row in conn.execute("PRAGMA table_info(dreaming_state)").fetchall()
+            }
+            if "last_working_turns" not in columns:
+                conn.execute("ALTER TABLE dreaming_state ADD COLUMN last_working_turns INTEGER DEFAULT 0")
             conn.commit()
 
     async def write_state(
