@@ -95,6 +95,62 @@ class GatewayCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("状态:", status_reply)
         self.assertIn("Bot One", status_reply)
 
+    async def test_dream_commands(self):
+        class DummyDreaming:
+            def __init__(self):
+                self.enabled = False
+
+            async def set_enabled(self, enabled: bool):
+                self.enabled = enabled
+
+            async def run(self, *, trigger_source: str, trigger_reason: str = ""):
+                return {
+                    "run": {
+                        "candidate_count": 3,
+                        "promoted_count": 1,
+                        "kept_short_term_count": 1,
+                    },
+                    "report": {
+                        "user_summary": "本次记忆整理完成。\n- 用户最近在忙一个项目",
+                    },
+                }
+
+            async def doctor_status(self):
+                return {"ok": False, "issues": ["latest_run_failed"], "suggestions": ["重试一次整理"]}
+
+            async def latest_report(self):
+                return {"user_summary": "最近整理摘要"}
+
+            async def status(self):
+                return {
+                    "enabled": self.enabled,
+                    "auto_run_enabled": False,
+                    "last_status": "completed",
+                    "last_run_at": "2026-05-22T10:00:00",
+                    "latest_report": {"user_summary": "最近整理摘要"},
+                }
+
+            async def delete_latest_promotions(self):
+                return {"ok": True, "deleted": {"semantic": 1, "understanding_projection": 1}}
+
+        handler = GatewayCommandHandler(self._config())
+        bot = DummyBot()
+        bot.memory = SimpleNamespace(dreaming=DummyDreaming())
+
+        on_reply = await handler.handle("/dream on", bot)
+        status_reply = await handler.handle("/dream status", bot)
+        run_reply = await handler.handle("/dream run", bot)
+        doctor_reply = await handler.handle("/dream doctor", bot)
+        report_reply = await handler.handle("/dream report", bot)
+        delete_reply = await handler.handle("/dream delete", bot)
+
+        self.assertIn("已开启记忆整理", on_reply)
+        self.assertIn("记忆整理状态", status_reply)
+        self.assertIn("记忆整理已完成", run_reply)
+        self.assertIn("记忆整理诊断", doctor_reply)
+        self.assertIn("最近整理摘要", report_reply)
+        self.assertIn("已删除最近一次整理新增的自动记忆", delete_reply)
+
 
 if __name__ == "__main__":
     unittest.main()

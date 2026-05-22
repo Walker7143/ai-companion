@@ -3,7 +3,7 @@ import { Archive, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, He
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Modal, useToast } from '../../components/ui';
 import { memoryApi } from '../../api';
 import { useBotStore } from '../../stores';
-import type { DailyMemoryPayload, EpisodicItem, Fact, MemoryStats, MemoryTrustItem, MemoryTrustPayload, Message, SemanticMemory } from '../../types';
+import type { DailyMemoryPayload, DreamingDoctorPayload, DreamingStatusPayload, EpisodicItem, Fact, MemoryStats, MemoryTrustItem, MemoryTrustPayload, Message, SemanticMemory } from '../../types';
 
 type MemoryTab = 'stats' | 'working' | 'daily' | 'episodic' | 'semantic';
 type MemoryDeleteType = 'working' | 'daily' | 'episodic' | 'semantic';
@@ -213,12 +213,17 @@ export function Memory() {
   const [dailyMemory, setDailyMemory] = useState<DailyMemoryPayload>({ messages: [], summaries: [] });
   const [episodicMemory, setEpisodicMemory] = useState<EpisodicItem[]>([]);
   const [semanticMemory, setSemanticMemory] = useState<SemanticMemory | null>(null);
+  const [dreamingStatus, setDreamingStatus] = useState<DreamingStatusPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [rebuildingVector, setRebuildingVector] = useState(false);
+  const [runningDreaming, setRunningDreaming] = useState(false);
+  const [doctoringDreaming, setDoctoringDreaming] = useState(false);
+  const [deletingDreaming, setDeletingDreaming] = useState(false);
+  const [dreamingDoctor, setDreamingDoctor] = useState<DreamingDoctorPayload | null>(null);
   const [workingQuery, setWorkingQuery] = useState('');
   const [dailyQuery, setDailyQuery] = useState('');
   const [episodicQuery, setEpisodicQuery] = useState('');
@@ -233,7 +238,7 @@ export function Memory() {
         setRefreshing(true);
       }
       try {
-        const [stats, trust, working, daily, episodic, semantic] = await Promise.all([
+        const [stats, trust, working, daily, episodic, semantic, dreaming] = await Promise.all([
           memoryApi.getStats(currentBotId),
           memoryApi.getTrust(currentBotId),
           memoryApi.getWorking(currentBotId),
@@ -243,6 +248,7 @@ export function Memory() {
           }),
           memoryApi.getEpisodic(currentBotId),
           memoryApi.getSemantic(currentBotId),
+          memoryApi.getDreamingStatus(currentBotId).catch(() => null),
         ]);
         setMemoryStats(stats);
         setMemoryTrust(trust);
@@ -250,6 +256,7 @@ export function Memory() {
         setDailyMemory(daily);
         setEpisodicMemory(episodic);
         setSemanticMemory(semantic);
+        setDreamingStatus(dreaming);
       } catch (err) {
         toast.error(`获取记忆数据失败: ${err}`);
       } finally {
@@ -315,6 +322,48 @@ export function Memory() {
       toast.error(`向量索引重建失败: ${err}`);
     } finally {
       setRebuildingVector(false);
+    }
+  }, [currentBotId, fetchAllData, toast]);
+
+  const handleRunDreaming = useCallback(async () => {
+    if (!currentBotId) return;
+    setRunningDreaming(true);
+    try {
+      await memoryApi.runDreaming(currentBotId);
+      toast.success('记忆整理已执行');
+      await fetchAllData('refresh');
+    } catch (err) {
+      toast.error(`记忆整理执行失败: ${err}`);
+    } finally {
+      setRunningDreaming(false);
+    }
+  }, [currentBotId, fetchAllData, toast]);
+
+  const handleDoctorDreaming = useCallback(async () => {
+    if (!currentBotId) return;
+    setDoctoringDreaming(true);
+    try {
+      const result = await memoryApi.doctorDreaming(currentBotId);
+      setDreamingDoctor(result);
+      toast.success(result.ok ? '记忆整理状态正常' : '记忆整理需要关注');
+    } catch (err) {
+      toast.error(`记忆整理诊断失败: ${err}`);
+    } finally {
+      setDoctoringDreaming(false);
+    }
+  }, [currentBotId, toast]);
+
+  const handleDeleteDreaming = useCallback(async () => {
+    if (!currentBotId) return;
+    setDeletingDreaming(true);
+    try {
+      const result = await memoryApi.deleteLatestDreaming(currentBotId);
+      toast.success(result.ok ? '已删除最近一次整理新增的自动记忆' : (result.message || '没有可删除结果'));
+      await fetchAllData('refresh');
+    } catch (err) {
+      toast.error(`删除最近整理结果失败: ${err}`);
+    } finally {
+      setDeletingDreaming(false);
     }
   }, [currentBotId, fetchAllData, toast]);
 
@@ -419,6 +468,78 @@ export function Memory() {
       </div>
 
       <MemoryTrustPanel payload={memoryTrust} />
+
+      {dreamingStatus && (
+        <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+          <CardHeader style={{ paddingBottom: 8 }}>
+            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Brain style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+              记忆整理 / 梦境
+              <Badge variant={dreamingStatus.enabled ? 'success' : 'default'}>
+                {dreamingStatus.enabled ? '已开启' : '未开启'}
+              </Badge>
+              <Badge>{dreamingStatus.last_status || '暂无运行'}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent style={{ paddingTop: 0, display: 'grid', gap: 14 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Badge>候选上限 {dreamingStatus.max_candidates}</Badge>
+              <Badge>提升上限 {dreamingStatus.max_promotions}</Badge>
+              <Badge>报告保留 {dreamingStatus.report_retention}</Badge>
+              <Badge>{dreamingStatus.auto_run_enabled ? '允许自动运行' : '仅手动运行'}</Badge>
+            </div>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>最近运行时间：{dreamingStatus.last_run_at || '暂无'}</span>
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>最近错误：{dreamingStatus.last_error || '无'}</span>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6 }}>
+                {dreamingStatus.latest_report?.user_summary || dreamingStatus.last_summary || '最近还没有记忆整理报告。'}
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Button variant="secondary" size="sm" onClick={handleRunDreaming} loading={runningDreaming}>
+                <RefreshCw style={{ width: 14, height: 14, marginRight: 4 }} />
+                立即整理一次
+              </Button>
+              <Button variant="secondary" size="sm" onClick={handleDoctorDreaming} loading={doctoringDreaming}>
+                <HelpCircle style={{ width: 14, height: 14, marginRight: 4 }} />
+                诊断
+              </Button>
+              <Button variant="danger" size="sm" onClick={handleDeleteDreaming} loading={deletingDreaming}>
+                <Trash2 style={{ width: 14, height: 14, marginRight: 4 }} />
+                删除最近整理新增项
+              </Button>
+            </div>
+            {dreamingStatus.latest_report?.promoted_items?.length ? (
+              <div style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>最近一次提升到长期层的内容</span>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {dreamingStatus.latest_report.promoted_items.slice(0, 6).map((item) => (
+                    <div key={item.candidate_id} style={{ padding: 10, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
+                      <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.summary}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                        来源 {item.source_layer} · 目标 {item.target_store || 'unknown'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {dreamingDoctor && (
+              <div style={{ padding: 12, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                  诊断结果：{dreamingDoctor.ok ? '正常' : '需要关注'}
+                </span>
+                {(dreamingDoctor.issues || []).map((issue) => (
+                  <span key={issue} style={{ fontSize: 12, color: 'var(--error)' }}>问题：{issue}</span>
+                ))}
+                {(dreamingDoctor.suggestions || []).map((item) => (
+                  <span key={item} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>建议：{item}</span>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
         <CardContent style={{ padding: 16, display: 'grid', gap: 12 }}>

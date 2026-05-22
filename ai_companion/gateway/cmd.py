@@ -975,6 +975,117 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
         _write_user_understanding(path, data)
         return web.json_response({"ok": True, "data": data, "path": str(path)})
 
+    async def _load_or_create_memory_bot(bot_id: str, user_id: str = "default_user"):
+        target = next((b for b in _discover_bots() if b.get("id") == bot_id), None)
+        if not target:
+            return None, False, web.json_response({"error": "Bot not found"}, status=404)
+        running_bot = bot_manager.get_bot(bot_id)
+        bot = running_bot
+        owns_bot = False
+        if not bot or not getattr(bot, "memory", None):
+            merged_skills = merge_skill_config(config.models.get("skills", {}), target.get("skills", {}))
+            instance_config = {**target, "data_dir": str(resolve_data_dir()), "skills": merged_skills}
+            bot = BotInstance(instance_config, model=None, memory_config=memory_config)
+            owns_bot = True
+            await bot.init(start_schedulers=False)
+        if getattr(bot, "memory", None):
+            bot.memory.user_id = user_id or getattr(bot.memory, "user_id", "default_user")
+        return bot, owns_bot, None
+
+    async def handle_memory_dreaming_status(request):
+        """GET /api/v1/admin/memory/:bot_id/dreaming/status"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            dreaming = getattr(getattr(bot, "memory", None), "dreaming", None)
+            if not dreaming:
+                return web.json_response({"error": "Dreaming unavailable"}, status=400)
+            return web.json_response(await dreaming.status())
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_memory_dreaming_run(request):
+        """POST /api/v1/admin/memory/:bot_id/dreaming/run"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            dreaming = getattr(getattr(bot, "memory", None), "dreaming", None)
+            if not dreaming:
+                return web.json_response({"error": "Dreaming unavailable"}, status=400)
+            result = await dreaming.run(trigger_source="admin_api", trigger_reason="manual_admin_run")
+            return web.json_response({"ok": True, **result})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_memory_dreaming_report(request):
+        """GET /api/v1/admin/memory/:bot_id/dreaming/report"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            dreaming = getattr(getattr(bot, "memory", None), "dreaming", None)
+            if not dreaming:
+                return web.json_response({"error": "Dreaming unavailable"}, status=400)
+            report = await dreaming.latest_report()
+            return web.json_response({"report": report})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_memory_dreaming_doctor(request):
+        """POST /api/v1/admin/memory/:bot_id/dreaming/doctor"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            dreaming = getattr(getattr(bot, "memory", None), "dreaming", None)
+            if not dreaming:
+                return web.json_response({"error": "Dreaming unavailable"}, status=400)
+            doctor = await dreaming.doctor_status()
+            return web.json_response({"ok": True, **doctor})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_memory_dreaming_delete_latest(request):
+        """DELETE /api/v1/admin/memory/:bot_id/dreaming/latest"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            dreaming = getattr(getattr(bot, "memory", None), "dreaming", None)
+            if not dreaming:
+                return web.json_response({"error": "Dreaming unavailable"}, status=400)
+            deleted = await dreaming.delete_latest_promotions()
+            return web.json_response(deleted)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
     async def handle_persona_conversation_style(request):
         """GET /api/v1/admin/persona/:bot_id/conversation-style"""
         bot_id = request.match_info["bot_id"]
@@ -1213,6 +1324,11 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_post("/api/v1/admin/memory/{bot_id}/rebuild-vector", handle_memory_rebuild_vector)
     _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding)
     _admin_app.router.add_put("/api/v1/admin/memory/{bot_id}/understanding", handle_memory_understanding_update)
+    _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/dreaming/status", handle_memory_dreaming_status)
+    _admin_app.router.add_post("/api/v1/admin/memory/{bot_id}/dreaming/run", handle_memory_dreaming_run)
+    _admin_app.router.add_get("/api/v1/admin/memory/{bot_id}/dreaming/report", handle_memory_dreaming_report)
+    _admin_app.router.add_post("/api/v1/admin/memory/{bot_id}/dreaming/doctor", handle_memory_dreaming_doctor)
+    _admin_app.router.add_delete("/api/v1/admin/memory/{bot_id}/dreaming/latest", handle_memory_dreaming_delete_latest)
     _admin_app.router.add_delete("/api/v1/admin/memory/{bot_id}/all", handle_memory_clear_all)
     _admin_app.router.add_delete("/api/v1/admin/memory/{bot_id}/{memory_type}/{memory_id}", handle_memory_delete)
     _admin_app.router.add_get("/api/v1/admin/persona/{bot_id}/conversation-style", handle_persona_conversation_style)

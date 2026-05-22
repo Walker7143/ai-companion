@@ -43,6 +43,7 @@ from .activation import MemoryActivationPlanner
 from .conscious import ConsciousContextBuilder
 from .prompt_builder import MemoryPromptBuilder
 from .retriever import MemoryRetriever
+from .dreaming import DreamingOrchestrator
 from ..context.tokenizer import TokenEstimator
 
 # 上下文压缩器（可选）
@@ -184,6 +185,7 @@ class MemoryEngine:
             daily_store=self.daily,
             rollup_store=self.rollups,
         )
+        self.dreaming = DreamingOrchestrator(self, self.config.get("dreaming", {}))
 
         self._session_id: Optional[str] = None
         self._summarizer: Optional[object] = None
@@ -225,6 +227,7 @@ class MemoryEngine:
         await self.semantic.init()
         await self.relationship.init()
         await self.rollups.init()
+        await self.dreaming.init()
         await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id, summarizer=self._summarizer)
         await self.rebuild_vector_index()
 
@@ -479,6 +482,7 @@ class MemoryEngine:
             "user_understanding_path": str(self.user_understanding.path),
             "user_understanding_auto_facts": self.user_understanding.auto_fact_count(),
             "health": health,
+            "dreaming": await self.dreaming.status(),
         }
 
     def _build_memory_trust_view(

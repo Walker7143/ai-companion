@@ -229,6 +229,65 @@ class CLIAdapter:
                     await self._safe_print("[dim]记忆引擎未启用[/dim]\n")
                 continue
 
+            # /dream — 记忆整理
+            if user_input.strip().startswith("/dream"):
+                if not bot.memory or not getattr(bot.memory, "dreaming", None):
+                    await self._safe_print("[dim]记忆整理未启用[/dim]\n")
+                    continue
+                action = user_input.strip()[6:].strip().lower()
+                action = action or "status"
+                dreaming = bot.memory.dreaming
+                if action == "on":
+                    await dreaming.set_enabled(True)
+                    await self._safe_print("[dim]已开启记忆整理[/dim]\n")
+                    continue
+                if action == "off":
+                    await dreaming.set_enabled(False)
+                    await self._safe_print("[dim]已关闭记忆整理[/dim]\n")
+                    continue
+                if action == "run":
+                    result = await dreaming.run(trigger_source="cli", trigger_reason="/dream run")
+                    report = result.get("report") or {}
+                    await self._safe_print("[bold]━━━ 记忆整理结果 ━━━[/bold]")
+                    await self._safe_print(report.get("user_summary") or "本次未产出可展示摘要。")
+                    await self._safe_print("")
+                    continue
+                if action == "doctor":
+                    doctor = await dreaming.doctor_status()
+                    await self._safe_print("[bold]━━━ 记忆整理诊断 ━━━[/bold]")
+                    await self._safe_print(f"  状态: {'正常' if doctor.get('ok') else '需要关注'}")
+                    for issue in doctor.get("issues") or []:
+                        await self._safe_print(f"  问题: {escape(str(issue))}")
+                    for item in doctor.get("suggestions") or []:
+                        await self._safe_print(f"  建议: {escape(str(item))}")
+                    await self._safe_print("")
+                    continue
+                if action == "report":
+                    report = await dreaming.latest_report()
+                    await self._safe_print("[bold]━━━ 最近整理报告 ━━━[/bold]")
+                    await self._safe_print(escape(str((report or {}).get("user_summary") or "最近还没有整理报告。")))
+                    await self._safe_print("")
+                    continue
+                if action == "delete":
+                    deleted = await dreaming.delete_latest_promotions()
+                    await self._safe_print("[bold]━━━ 删除最近整理新增项 ━━━[/bold]")
+                    await self._safe_print(escape(str(deleted)))
+                    await self._safe_print("")
+                    continue
+                status = await dreaming.status()
+                await self._safe_print("[bold]━━━ 记忆整理状态 ━━━[/bold]")
+                await self._safe_print(f"  开关: {'开启' if status.get('enabled') else '关闭'}")
+                await self._safe_print(f"  自动运行: {'开启' if status.get('auto_run_enabled') else '关闭'}")
+                await self._safe_print(f"  最近状态: {status.get('last_status') or '暂无'}")
+                await self._safe_print(f"  最近运行时间: {status.get('last_run_at') or '暂无'}")
+                if status.get("last_error"):
+                    await self._safe_print(f"  最近错误: {escape(str(status.get('last_error')))}")
+                latest_report = status.get("latest_report") or {}
+                if latest_report.get("user_summary"):
+                    await self._safe_print(f"  最近摘要: {escape(str(latest_report.get('user_summary')))}")
+                await self._safe_print("")
+                continue
+
             try:
                 bot = self.bot_manager.get_bot(self.current_bot_id)
                 memory_turn_context = {

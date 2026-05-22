@@ -225,6 +225,13 @@ const defaultMemory: BotConfig['memory'] = {
     summarize_after_messages: 12,
     summarize_after_chars: 3000,
   },
+  dreaming: {
+    enabled: false,
+    auto_run_enabled: false,
+    report_retention: 10,
+    max_candidates: 24,
+    max_promotions: 6,
+  },
 };
 
 const defaultSkills: BotConfig['skills'] = {
@@ -365,6 +372,10 @@ function normalizeConfig(data: BotConfig): BotConfig {
       daily: {
         ...defaultMemory.daily,
         ...((raw.memory || {}).daily || {}),
+      },
+      dreaming: {
+        ...defaultMemory.dreaming,
+        ...((raw.memory || {}).dreaming || {}),
       },
     },
     proactive: {
@@ -854,6 +865,24 @@ export function Settings() {
           <Input label="Embedding 模型" value={draft.memory.embedding_model} onChange={(event) => patchSection('memory', { embedding_model: event.target.value })} />
         </div>
         <FieldHint text="软阈值用于后台压缩，硬阈值会同步压缩。开启本地向量会增加首次加载时间和磁盘占用。" />
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)', display: 'grid', gap: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>记忆整理 / 梦境</div>
+              <FieldHint text="在现有记忆底座上增加统一的整理、报告、诊断和纠错能力。" />
+            </div>
+            <Toggle checked={draft.memory.dreaming.enabled} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, enabled: event.target.checked } })} />
+          </div>
+          <div style={gridStyle}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>允许后台自动运行</div>
+              <Toggle checked={draft.memory.dreaming.auto_run_enabled} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, auto_run_enabled: event.target.checked } })} />
+            </div>
+            <Input label="报告保留条数" type="number" min="1" value={draft.memory.dreaming.report_retention} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, report_retention: Number(event.target.value) } })} />
+            <Input label="候选上限" type="number" min="1" value={draft.memory.dreaming.max_candidates} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, max_candidates: Number(event.target.value) } })} />
+            <Input label="长期提升上限" type="number" min="0" value={draft.memory.dreaming.max_promotions} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, max_promotions: Number(event.target.value) } })} />
+          </div>
+        </div>
       </SectionCard>
 
       <SectionCard id="proactive" title={sectionMeta.proactive?.title || '主动唤醒'} description={sectionMeta.proactive?.description} restart={sectionMeta.proactive?.restart}>

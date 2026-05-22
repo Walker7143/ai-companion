@@ -9,6 +9,8 @@ import type {
   EpisodicItem,
   SemanticMemory,
   DailyMemoryPayload,
+  DreamingDoctorPayload,
+  DreamingStatusPayload,
   UnderstandingPayload,
   DebugContextPayload,
   VectorRebuildResult,
@@ -111,6 +113,27 @@ export const memoryApi = {
 
   clearAll: (botId: string): Promise<void> =>
     fetchApi<void>(`/admin/memory/${botId}/all`, { method: 'DELETE' }),
+
+  getDreamingStatus: (botId: string): Promise<DreamingStatusPayload> =>
+    fetchApi<DreamingStatusPayload>(`/admin/memory/${botId}/dreaming/status`),
+
+  runDreaming: (botId: string): Promise<{ok: boolean; run?: Record<string, unknown>; report?: Record<string, unknown>}> =>
+    fetchApi<{ok: boolean; run?: Record<string, unknown>; report?: Record<string, unknown>}>(`/admin/memory/${botId}/dreaming/run`, {
+      method: 'POST',
+    }),
+
+  getDreamingReport: (botId: string): Promise<{report: DreamingStatusPayload['latest_report']}> =>
+    fetchApi<{report: DreamingStatusPayload['latest_report']}>(`/admin/memory/${botId}/dreaming/report`),
+
+  doctorDreaming: (botId: string): Promise<DreamingDoctorPayload & {ok: boolean}> =>
+    fetchApi<DreamingDoctorPayload & {ok: boolean}>(`/admin/memory/${botId}/dreaming/doctor`, {
+      method: 'POST',
+    }),
+
+  deleteLatestDreaming: (botId: string): Promise<{ok: boolean; deleted?: Record<string, number>; message?: string}> =>
+    fetchApi<{ok: boolean; deleted?: Record<string, number>; message?: string}>(`/admin/memory/${botId}/dreaming/latest`, {
+      method: 'DELETE',
+    }),
 };
 
 export const personaApi = {

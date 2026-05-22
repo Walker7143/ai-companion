@@ -11,7 +11,7 @@ from ai_companion.config.loader import Config
 from ai_companion.model.factory import ModelFactory
 
 
-SUPPORTED_GATEWAY_COMMANDS = frozenset({"new", "reset", "models", "model", "status", "memory"})
+SUPPORTED_GATEWAY_COMMANDS = frozenset({"new", "reset", "models", "model", "status", "memory", "dream"})
 _PROVIDER_ENV_KEYS = {
     "minimax": "MINIMAX_API_KEY",
     "openai": "OPENAI_API_KEY",
@@ -119,6 +119,8 @@ class GatewayCommandHandler:
             return await self._handle_status(bot, event)
         if command.name == "memory":
             return await self._handle_memory(bot)
+        if command.name == "dream":
+            return await self._handle_dream(bot, command.args)
         return None
 
     def _handle_new(self, bot: Any) -> str:
@@ -300,6 +302,84 @@ class GatewayCommandHandler:
         if health.get("reason"):
             lines.append(f"- 健康提示: {health.get('reason')}")
         return "\n".join(lines)
+
+    async def _handle_dream(self, bot: Any, args: str) -> str:
+        memory = getattr(bot, "memory", None)
+        dreaming = getattr(memory, "dreaming", None) if memory else None
+        if not dreaming:
+            return "记忆整理: 未启用"
+
+        action = (args or "").strip().lower()
+        if not action:
+            action = "status"
+
+        if action == "on":
+            await dreaming.set_enabled(True)
+            return "已开启记忆整理。"
+        if action == "off":
+            await dreaming.set_enabled(False)
+            return "已关闭记忆整理。"
+        if action == "run":
+            result = await dreaming.run(trigger_source="gateway_command", trigger_reason="/dream run")
+            report = result.get("report") or {}
+            return "\n".join(
+                [
+                    "记忆整理已完成。",
+                    f"- 候选数: {result.get('run', {}).get('candidate_count', 0)}",
+                    f"- 提升到长期层: {result.get('run', {}).get('promoted_count', 0)}",
+                    f"- 保留为短期连续性: {result.get('run', {}).get('kept_short_term_count', 0)}",
+                    report.get("user_summary") or "",
+                ]
+            ).strip()
+        if action == "doctor":
+            doctor = await dreaming.doctor_status()
+            lines = ["记忆整理诊断:"]
+            if doctor.get("ok"):
+                lines.append("- 状态: 正常")
+            else:
+                lines.append("- 状态: 需要关注")
+                for issue in doctor.get("issues") or []:
+                    lines.append(f"- 问题: {issue}")
+            for suggestion in doctor.get("suggestions") or []:
+                lines.append(f"- 建议: {suggestion}")
+            return "\n".join(lines)
+        if action == "report":
+            report = await dreaming.latest_report()
+            if not report:
+                return "最近还没有记忆整理报告。"
+            return report.get("user_summary") or "最近还没有可展示的整理摘要。"
+        if action == "delete":
+            deleted = await dreaming.delete_latest_promotions()
+            if not deleted.get("ok"):
+                return deleted.get("message") or "最近没有可删除的整理结果。"
+            parts = deleted.get("deleted") or {}
+            return (
+                "已删除最近一次整理新增的自动记忆："
+                f" semantic={parts.get('semantic', 0)}"
+                f" understanding={parts.get('understanding_projection', 0)}"
+            )
+
+        status = await dreaming.status()
+        latest = status.get("latest_report") or {}
+        return "\n".join(
+            [
+                "记忆整理状态:",
+                f"- 开关: {'开启' if status.get('enabled') else '关闭'}",
+                f"- 自动运行: {'开启' if status.get('auto_run_enabled') else '关闭'}",
+                f"- 最近状态: {status.get('last_status') or '暂无'}",
+                f"- 最近运行时间: {status.get('last_run_at') or '暂无'}",
+                f"- 最近摘要: {latest.get('user_summary') or status.get('last_summary') or '暂无'}",
+                "",
+                "用法:",
+                "/dream on",
+                "/dream off",
+                "/dream status",
+                "/dream run",
+                "/dream doctor",
+                "/dream report",
+                "/dream delete",
+            ]
+        )
 
 
 def _format_memory_view_item(item: dict, section: str) -> str:

@@ -355,6 +355,7 @@ export interface MemoryConfig {
   embedding: string;
   embedding_model: string;
   daily: DailyMemoryConfig;
+  dreaming: DreamingConfig;
 }
 
 export interface DailyMemoryConfig {
@@ -365,6 +366,58 @@ export interface DailyMemoryConfig {
   max_prompt_chars: number;
   summarize_after_messages: number;
   summarize_after_chars: number;
+}
+
+export interface DreamingConfig {
+  enabled: boolean;
+  auto_run_enabled: boolean;
+  report_retention: number;
+  max_candidates: number;
+  max_promotions: number;
+}
+
+export interface DreamingDecisionItem {
+  candidate_id: string;
+  summary: string;
+  source_layer: string;
+  reason_tags?: string[];
+  target_store?: string | null;
+  written_ref?: Record<string, unknown>;
+}
+
+export interface DreamingReport {
+  run_id: string;
+  created_at: string;
+  user_summary?: string | null;
+  debug_summary?: string | null;
+  promoted_items?: DreamingDecisionItem[];
+  kept_short_term_items?: DreamingDecisionItem[];
+  discarded_items?: DreamingDecisionItem[];
+  held_sensitive_items?: DreamingDecisionItem[];
+  promoted_refs?: Record<string, unknown>[];
+}
+
+export interface DreamingStatusPayload {
+  enabled: boolean;
+  auto_run_enabled: boolean;
+  report_retention: number;
+  max_candidates: number;
+  max_promotions: number;
+  updated_at?: string | null;
+  last_run_id?: string | null;
+  last_status?: string | null;
+  last_summary?: string | null;
+  last_error?: string | null;
+  last_run_at?: string | null;
+  latest_report?: DreamingReport | null;
+}
+
+export interface DreamingDoctorPayload {
+  ok: boolean;
+  issues: string[];
+  suggestions: string[];
+  state?: Record<string, unknown>;
+  latest_report?: DreamingReport | null;
 }
 
 export interface ProactiveConfig {

@@ -74,6 +74,11 @@ WEB_CONFIG_SCHEMA = {
                 "max_working_turns": "保留最近多少轮原文，越大上下文越长。",
                 "embedding": "local 会启用 sentence-transformers；none 为纯 SQLite 检索。",
                 "embedding_model": "本地向量模型名，默认 all-MiniLM-L6-v2。",
+                "dreaming.enabled": "是否开启记忆整理 / 梦境能力。",
+                "dreaming.auto_run_enabled": "是否允许后台自动触发记忆整理。",
+                "dreaming.report_retention": "保留最近多少次整理报告。",
+                "dreaming.max_candidates": "单次整理最多扫描多少候选。",
+                "dreaming.max_promotions": "单次整理最多提升多少条到长期层。",
             },
         },
         {
@@ -742,6 +747,7 @@ class ConfigAdminService:
 
     def _public_memory(self, memory: dict) -> dict:
         daily = memory.get("daily") if isinstance(memory.get("daily"), dict) else {}
+        dreaming = memory.get("dreaming") if isinstance(memory.get("dreaming"), dict) else {}
         return {
             "hard_limit_chars": _as_int(memory.get("hard_limit_chars"), 100000, 1000),
             "soft_limit_chars": _as_int(memory.get("soft_limit_chars"), 80000, 500),
@@ -758,6 +764,13 @@ class ConfigAdminService:
                 "max_prompt_chars": _as_int(daily.get("max_prompt_chars"), 1800, 200, 20000),
                 "summarize_after_messages": _as_int(daily.get("summarize_after_messages"), 12, 1, 500),
                 "summarize_after_chars": _as_int(daily.get("summarize_after_chars"), 3000, 200, 100000),
+            },
+            "dreaming": {
+                "enabled": bool(dreaming.get("enabled", False)),
+                "auto_run_enabled": bool(dreaming.get("auto_run_enabled", False)),
+                "report_retention": _as_int(dreaming.get("report_retention"), 10, 1, 100),
+                "max_candidates": _as_int(dreaming.get("max_candidates"), 24, 1, 200),
+                "max_promotions": _as_int(dreaming.get("max_promotions"), 6, 0, 50),
             },
         }
 
@@ -1054,6 +1067,16 @@ class ConfigAdminService:
             "summarize_after_chars": _as_int(daily_data.get("summarize_after_chars"), existing_daily.get("summarize_after_chars", 3000), 200, 100000),
         })
         existing["daily"] = existing_daily
+        dreaming_data = memory_data.get("dreaming") if isinstance(memory_data.get("dreaming"), dict) else {}
+        existing_dreaming = dict(existing.get("dreaming", {}) if isinstance(existing.get("dreaming"), dict) else {})
+        existing_dreaming.update({
+            "enabled": bool(dreaming_data.get("enabled", existing_dreaming.get("enabled", False))),
+            "auto_run_enabled": bool(dreaming_data.get("auto_run_enabled", existing_dreaming.get("auto_run_enabled", False))),
+            "report_retention": _as_int(dreaming_data.get("report_retention"), existing_dreaming.get("report_retention", 10), 1, 100),
+            "max_candidates": _as_int(dreaming_data.get("max_candidates"), existing_dreaming.get("max_candidates", 24), 1, 200),
+            "max_promotions": _as_int(dreaming_data.get("max_promotions"), existing_dreaming.get("max_promotions", 6), 0, 50),
+        })
+        existing["dreaming"] = existing_dreaming
         if existing["soft_limit_chars"] >= existing["hard_limit_chars"]:
             existing["soft_limit_chars"] = max(500, existing["hard_limit_chars"] - 1000)
         models_data["memory"] = existing
