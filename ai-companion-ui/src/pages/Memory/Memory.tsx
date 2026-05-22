@@ -448,7 +448,7 @@ export function Memory() {
         <div style={{ display: 'grid', gap: 6 }}>
           <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>记忆管理</h1>
           <p style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-            这里现在可以直接手动清理脏记忆了，适合删错画像、无效对话和不该长期保留的片段。
+            这里不只是“看记忆列表”，而是整个记忆系统的操作与解释中心：你可以区分当前/短期、长期/关系、索引/投影，以及整理/诊断这几类能力。
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -543,6 +543,15 @@ export function Memory() {
 
       <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
         <CardContent style={{ padding: 16, display: 'grid', gap: 12 }}>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>如何理解这一页</span>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Badge variant="info">当前与短期：工作记忆、日记忆</Badge>
+              <Badge>长期与关系：语义、情景、关系状态</Badge>
+              <Badge>索引与投影：向量索引、用户长期理解投影</Badge>
+              <Badge>整理与解释：梦境整理、记忆可信视图、诊断</Badge>
+            </div>
+          </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge variant="info">可编辑</Badge>
             <Badge>工作记忆可删</Badge>
@@ -551,7 +560,7 @@ export function Memory() {
             <Badge>语义事实可删</Badge>
           </div>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-            建议先在对应页签里搜关键词，再删单条。这样比整库清空安全得多。
+            建议先在对应页签里搜关键词，再删单条。这样比整库清空安全得多，也更符合“结构化真相源 + 派生解释层”的设计。
           </p>
         </CardContent>
       </Card>
@@ -608,10 +617,10 @@ export function Memory() {
             <CardContent style={{ padding: 16, display: 'grid', gap: 8 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Filter style={{ width: 14, height: 14, color: 'var(--text-secondary)' }} />
-                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>记忆侧重点</span>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>记忆系统分层提示</span>
               </div>
               <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-                如果你是为了“手动删脏记忆”，优先看“语义记忆”和“情景记忆”；前者影响人物画像，后者影响“她记得哪些经历”。
+                如果你是为了“手动删脏记忆”，优先看“语义记忆”和“情景记忆”；前者是结构化事实真相，后者是共同经历真相。工作记忆和日记忆更偏当前/短期连续性。
               </p>
             </CardContent>
           </Card>
@@ -621,7 +630,7 @@ export function Memory() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <Database style={{ width: 16, height: 16, color: 'var(--accent)' }} />
-                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>统一向量索引</span>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>统一向量索引（派生层）</span>
                   <Badge variant={memoryStats.embedding_enabled ? 'success' : 'default'}>
                     {memoryStats.embedding_enabled ? '已启用' : '未启用'}
                   </Badge>
@@ -637,7 +646,7 @@ export function Memory() {
                 {memoryStats.daily_summary_count !== undefined && <Badge>日摘要 {memoryStats.daily_summary_count} 条</Badge>}
               </div>
               <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-                索引来源包含语义事实、用户理解、关系脉络、日摘要和 Bot 人生轨迹；结构化数据库仍是事实源。
+                这是召回索引，不是第二份记忆库。索引来源包含语义事实、用户长期理解投影、关系脉络、日摘要和 Bot 人生轨迹；结构化数据库仍是事实源。
               </p>
             </CardContent>
           </Card>
@@ -832,12 +841,12 @@ export function Memory() {
       {activeTab === 'semantic' && semanticMemory && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
-            <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
-              <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Heart style={{ width: 18, height: 18, color: 'var(--error)' }} />
-                关系状态
-              </CardTitle>
-            </CardHeader>
+              <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
+                <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Heart style={{ width: 18, height: 18, color: 'var(--error)' }} />
+                长期关系状态
+                </CardTitle>
+              </CardHeader>
             <CardContent style={{ padding: '16px 20px' }}>
               <div style={{ display: 'grid', gap: 18 }}>
                 {(() => {
@@ -902,7 +911,7 @@ export function Memory() {
 
           <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
             <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
-              <CardTitle>用户画像</CardTitle>
+              <CardTitle>结构化用户事实</CardTitle>
             </CardHeader>
             <CardContent style={{ padding: '0 20px 20px' }}>
               {semanticFacts.length === 0 ? (
@@ -910,7 +919,11 @@ export function Memory() {
                   {semanticQuery ? '没有匹配到语义事实' : '暂无用户画像'}
                 </p>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                <div style={{ display: 'grid', gap: 12 }}>
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
+                    这里展示的是长期事实真相源，不等于“用户长期理解投影”。后者是给系统投影和给用户编辑的派生层。
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                   {semanticFacts.map((fact) => (
                     <SemanticFactCard
                       key={fact.key}
@@ -925,6 +938,7 @@ export function Memory() {
                       }
                     />
                   ))}
+                  </div>
                 </div>
               )}
             </CardContent>

@@ -49,6 +49,36 @@ class DreamingIntegrationTest(unittest.TestCase):
         self.assertIn("本次记忆整理完成", report["user_summary"])
         self.assertIn("ok", doctor)
 
+    def test_dreaming_auto_run_condition_uses_new_message_threshold(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="dreaming-auto-") as td:
+                engine = MemoryEngine(
+                    "dream_auto_bot",
+                    Path(td),
+                    config={
+                        "embedding": "none",
+                        "dreaming": {
+                            "enabled": True,
+                            "auto_run_enabled": True,
+                            "auto_check_interval_seconds": 60,
+                            "min_run_interval_minutes": 120,
+                            "min_new_messages": 2,
+                        },
+                    },
+                )
+                await engine.init()
+                engine.start_session("auto-session")
+                await engine.record_turn("你好", "你好呀")
+                first = await engine.dreaming.should_auto_run()
+                await engine.record_turn("我今天很累", "先歇一会儿")
+                second = await engine.dreaming.should_auto_run()
+                await engine.close()
+                return first, second
+
+        first, second = asyncio.run(run())
+        self.assertFalse(first)
+        self.assertTrue(second)
+
 
 if __name__ == "__main__":
     unittest.main()

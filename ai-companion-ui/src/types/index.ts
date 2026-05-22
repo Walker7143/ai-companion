@@ -371,6 +371,9 @@ export interface DailyMemoryConfig {
 export interface DreamingConfig {
   enabled: boolean;
   auto_run_enabled: boolean;
+  auto_check_interval_seconds: number;
+  min_run_interval_minutes: number;
+  min_new_messages: number;
   report_retention: number;
   max_candidates: number;
   max_promotions: number;
@@ -400,6 +403,9 @@ export interface DreamingReport {
 export interface DreamingStatusPayload {
   enabled: boolean;
   auto_run_enabled: boolean;
+  auto_check_interval_seconds: number;
+  min_run_interval_minutes: number;
+  min_new_messages: number;
   report_retention: number;
   max_candidates: number;
   max_promotions: number;

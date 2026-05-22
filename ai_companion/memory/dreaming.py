@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .dreaming_scheduler import DreamingScheduler
+
 
 def _now_iso() -> str:
     return datetime.now().isoformat()
@@ -58,6 +60,9 @@ def _int(value: Any, default: int, minimum: int | None = None, maximum: int | No
 DEFAULT_DREAMING_CONFIG: dict[str, Any] = {
     "enabled": False,
     "auto_run_enabled": False,
+    "auto_check_interval_seconds": 900,
+    "min_run_interval_minutes": 120,
+    "min_new_messages": 6,
     "report_retention": 10,
     "max_candidates": 24,
     "max_promotions": 6,
@@ -179,6 +184,7 @@ class DreamingRunStore:
                     last_summary TEXT,
                     last_error TEXT,
                     last_run_at TEXT,
+                    last_working_turns INTEGER DEFAULT 0,
                     PRIMARY KEY (bot_id, user_id)
                 )
                 """
@@ -199,6 +205,7 @@ class DreamingRunStore:
         last_summary: str | None,
         last_error: str | None,
         last_run_at: str | None,
+        last_working_turns: int = 0,
     ):
         await asyncio.to_thread(
             self._write_state_sync,
@@ -211,6 +218,7 @@ class DreamingRunStore:
             last_summary,
             last_error,
             last_run_at,
+            last_working_turns,
         )
 
     def _write_state_sync(
@@ -224,14 +232,15 @@ class DreamingRunStore:
         last_summary: str | None,
         last_error: str | None,
         last_run_at: str | None,
+        last_working_turns: int = 0,
     ):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO dreaming_state (
                     bot_id, user_id, enabled, auto_run_enabled, updated_at,
-                    last_run_id, last_status, last_summary, last_error, last_run_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_run_id, last_status, last_summary, last_error, last_run_at, last_working_turns
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(bot_id, user_id) DO UPDATE SET
                     enabled = excluded.enabled,
                     auto_run_enabled = excluded.auto_run_enabled,
@@ -240,7 +249,8 @@ class DreamingRunStore:
                     last_status = excluded.last_status,
                     last_summary = excluded.last_summary,
                     last_error = excluded.last_error,
-                    last_run_at = excluded.last_run_at
+                    last_run_at = excluded.last_run_at,
+                    last_working_turns = excluded.last_working_turns
                 """,
                 (
                     bot_id,
@@ -253,6 +263,7 @@ class DreamingRunStore:
                     last_summary,
                     last_error,
                     last_run_at,
+                    int(last_working_turns or 0),
                 ),
             )
             conn.commit()
@@ -266,7 +277,7 @@ class DreamingRunStore:
             row = conn.execute(
                 """
                 SELECT enabled, auto_run_enabled, updated_at, last_run_id, last_status,
-                       last_summary, last_error, last_run_at
+                       last_summary, last_error, last_run_at, last_working_turns
                 FROM dreaming_state
                 WHERE bot_id = ? AND user_id = ?
                 """,
@@ -283,6 +294,7 @@ class DreamingRunStore:
             "last_summary": row["last_summary"],
             "last_error": row["last_error"],
             "last_run_at": row["last_run_at"],
+            "last_working_turns": int(row["last_working_turns"] or 0),
         }
 
     async def create_run(self, record: dict[str, Any]):
@@ -829,6 +841,7 @@ class DreamingOrchestrator:
         self.persistence = DreamingPersistenceFacade(memory_engine)
         self.report_builder = DreamingReportBuilder()
         self.doctor = DreamingDoctor(memory_engine, self.run_store)
+        self.scheduler = DreamingScheduler(self)
 
     def _normalize_config(self, config: dict[str, Any]) -> dict[str, Any]:
         merged = dict(DEFAULT_DREAMING_CONFIG)
@@ -837,11 +850,18 @@ class DreamingOrchestrator:
         return {
             "enabled": _bool(merged.get("enabled"), DEFAULT_DREAMING_CONFIG["enabled"]),
             "auto_run_enabled": _bool(merged.get("auto_run_enabled"), DEFAULT_DREAMING_CONFIG["auto_run_enabled"]),
+            "auto_check_interval_seconds": _int(merged.get("auto_check_interval_seconds"), DEFAULT_DREAMING_CONFIG["auto_check_interval_seconds"], 30, 86400),
+            "min_run_interval_minutes": _int(merged.get("min_run_interval_minutes"), DEFAULT_DREAMING_CONFIG["min_run_interval_minutes"], 1, 10080),
+            "min_new_messages": _int(merged.get("min_new_messages"), DEFAULT_DREAMING_CONFIG["min_new_messages"], 1, 500),
             "report_retention": _int(merged.get("report_retention"), DEFAULT_DREAMING_CONFIG["report_retention"], 1, 100),
             "max_candidates": _int(merged.get("max_candidates"), DEFAULT_DREAMING_CONFIG["max_candidates"], 1, 200),
             "max_promotions": _int(merged.get("max_promotions"), DEFAULT_DREAMING_CONFIG["max_promotions"], 0, 50),
             "show_sensitive_reason_only": _bool(merged.get("show_sensitive_reason_only"), True),
         }
+
+    @property
+    def auto_check_interval_seconds(self) -> int:
+        return int(self.config.get("auto_check_interval_seconds") or DEFAULT_DREAMING_CONFIG["auto_check_interval_seconds"])
 
     async def init(self):
         await self.run_store.init()
@@ -855,6 +875,7 @@ class DreamingOrchestrator:
             last_summary=None,
             last_error=None,
             last_run_at=None,
+            last_working_turns=0,
         )
 
     def configure(self, config: dict[str, Any] | None):
@@ -873,6 +894,7 @@ class DreamingOrchestrator:
             last_summary=state.get("last_summary"),
             last_error=state.get("last_error"),
             last_run_at=state.get("last_run_at"),
+            last_working_turns=state.get("last_working_turns", 0),
         )
 
     async def status(self) -> dict[str, Any]:
@@ -881,9 +903,13 @@ class DreamingOrchestrator:
         return {
             "enabled": self.config["enabled"],
             "auto_run_enabled": self.config["auto_run_enabled"],
+            "auto_check_interval_seconds": self.config["auto_check_interval_seconds"],
+            "min_run_interval_minutes": self.config["min_run_interval_minutes"],
+            "min_new_messages": self.config["min_new_messages"],
             "report_retention": self.config["report_retention"],
             "max_candidates": self.config["max_candidates"],
             "max_promotions": self.config["max_promotions"],
+            "scheduler": self.scheduler.get_status(),
             **state,
             "latest_report": latest_report,
         }
@@ -891,9 +917,31 @@ class DreamingOrchestrator:
     async def latest_report(self) -> dict[str, Any] | None:
         return await self.run_store.get_latest_report(bot_id=self.memory_engine.bot_id, user_id=self.memory_engine.user_id)
 
+    async def should_auto_run(self) -> bool:
+        state = await self.run_store.get_state(bot_id=self.memory_engine.bot_id, user_id=self.memory_engine.user_id)
+        current_session = self.memory_engine._session_id or self.memory_engine.working.current_session
+        current_turns = self.memory_engine.working.get_turn_count(current_session) if current_session else 0
+        last_turns = int(state.get("last_working_turns") or 0)
+        if current_turns <= 0:
+            return False
+        if (current_turns - last_turns) < int(self.config.get("min_new_messages") or 1):
+            return False
+        last_run_at = _clean_text(state.get("last_run_at"))
+        if last_run_at:
+            try:
+                last_dt = datetime.fromisoformat(last_run_at)
+                delta_seconds = (datetime.now() - last_dt).total_seconds()
+                if delta_seconds < int(self.config.get("min_run_interval_minutes") or 0) * 60:
+                    return False
+            except Exception:
+                pass
+        return True
+
     async def run(self, *, trigger_source: str, trigger_reason: str = "") -> dict[str, Any]:
         run_id = uuid.uuid4().hex
         started_at = _now_iso()
+        current_session = self.memory_engine._session_id or self.memory_engine.working.current_session
+        current_turns = self.memory_engine.working.get_turn_count(current_session) if current_session else 0
         record = {
             "run_id": run_id,
             "bot_id": self.memory_engine.bot_id,
@@ -953,6 +1001,7 @@ class DreamingOrchestrator:
                 last_summary=report["user_summary"],
                 last_error=None,
                 last_run_at=record["finished_at"],
+                last_working_turns=current_turns,
             )
             return {
                 "run": record,
@@ -979,6 +1028,7 @@ class DreamingOrchestrator:
                 last_summary=None,
                 last_error=str(exc),
                 last_run_at=record["finished_at"],
+                last_working_turns=current_turns,
             )
             raise
 
@@ -995,3 +1045,9 @@ class DreamingOrchestrator:
             refs=latest_report.get("promoted_refs") or [],
         )
         return {"deleted": deleted, "ok": True, "run_id": latest_report.get("run_id")}
+
+    async def start_scheduler(self):
+        await self.scheduler.start()
+
+    async def stop_scheduler(self):
+        await self.scheduler.stop()

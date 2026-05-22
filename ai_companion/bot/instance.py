@@ -144,6 +144,8 @@ class BotInstance:
         self._schedulers_started = False
         self._proactive_scheduler_lock: Optional[BotSchedulerRuntimeLock] = None
         self._proactive_scheduler_lock_owner: Optional[dict] = None
+        self._dreaming_scheduler_lock: Optional[BotSchedulerRuntimeLock] = None
+        self._dreaming_scheduler_lock_owner: Optional[dict] = None
         self._life_scheduler_lock: Optional[BotSchedulerRuntimeLock] = None
         self._life_scheduler_lock_owner: Optional[dict] = None
         self._allowed_proactive_scheduler_platforms: Optional[set[str]] = None
@@ -242,6 +244,8 @@ class BotInstance:
             self.life_config.load()
             if self.life_state.birth_date:
                 self.life_config.birth_date = self.life_state.birth_date
+            if self.memory and getattr(self.memory, "dreaming", None):
+                self.memory.dreaming.configure((self.memory.config or {}).get("dreaming", {}))
         except Exception as e:
             logger.warning(f"[BotInstance] 刷新 proactive/life 配置失败，沿用当前配置: {e}")
 
@@ -465,12 +469,18 @@ class BotInstance:
 
     async def _ensure_schedulers_started(self):
         """按需启动后台调度器（只启动一次）。"""
-        if self.proactive_scheduler and self.life_scheduler:
+        dreaming_running = bool(
+            self.memory
+            and getattr(getattr(self.memory, "dreaming", None), "scheduler", None)
+            and self.memory.dreaming.scheduler.get_status().get("running")
+        )
+        if self.proactive_scheduler and self.life_scheduler and dreaming_running:
             return
 
         await self._ensure_proactive_scheduler_started()
+        await self._ensure_dreaming_scheduler_started()
         await self._ensure_life_scheduler_started()
-        self._schedulers_started = bool(self.proactive_scheduler or self.life_scheduler)
+        self._schedulers_started = bool(self.proactive_scheduler or self.life_scheduler or dreaming_running)
 
     async def _ensure_proactive_scheduler_started(self):
         if self.proactive_scheduler:
@@ -535,6 +545,35 @@ class BotInstance:
             self.life_scheduler = None
             raise
 
+    async def _ensure_dreaming_scheduler_started(self):
+        if not self.memory or not getattr(self.memory, "dreaming", None):
+            return
+
+        scheduler = getattr(self.memory.dreaming, "scheduler", None)
+        if scheduler and scheduler.get_status().get("running"):
+            return
+
+        dreaming_cfg = getattr(self.memory.dreaming, "config", {}) or {}
+        if not dreaming_cfg.get("enabled") or not dreaming_cfg.get("auto_run_enabled"):
+            return
+
+        if not self._acquire_scheduler_runtime_lock("dreaming"):
+            self._log_scheduler_lock_skip("记忆整理", self._dreaming_scheduler_lock_owner)
+            return
+
+        try:
+            await self.memory.dreaming.start_scheduler()
+            logger.info(
+                "[BotInstance] %s 的记忆整理自动调度器已启动: interval=%ss min_run_interval=%sm min_new_messages=%s",
+                self.name,
+                dreaming_cfg.get("auto_check_interval_seconds"),
+                dreaming_cfg.get("min_run_interval_minutes"),
+                dreaming_cfg.get("min_new_messages"),
+            )
+        except Exception:
+            self._release_scheduler_runtime_lock("dreaming")
+            raise
+
     def _acquire_scheduler_runtime_lock(self, kind: str) -> bool:
         attr = f"_{kind}_scheduler_lock"
         owner_attr = f"_{kind}_scheduler_lock_owner"
@@ -569,6 +608,7 @@ class BotInstance:
 
     def _release_scheduler_runtime_locks(self) -> None:
         self._release_scheduler_runtime_lock("proactive")
+        self._release_scheduler_runtime_lock("dreaming")
         self._release_scheduler_runtime_lock("life")
 
     def _log_scheduler_lock_skip(self, label: str, owner: Optional[dict]) -> None:
@@ -1822,6 +1862,10 @@ class BotInstance:
                     "held": bool(self._proactive_scheduler_lock and self._proactive_scheduler_lock.acquired),
                     "owner": self._proactive_scheduler_lock_owner,
                 },
+                "dreaming": {
+                    "held": bool(self._dreaming_scheduler_lock and self._dreaming_scheduler_lock.acquired),
+                    "owner": self._dreaming_scheduler_lock_owner,
+                },
                 "life": {
                     "held": bool(self._life_scheduler_lock and self._life_scheduler_lock.acquired),
                     "owner": self._life_scheduler_lock_owner,
@@ -1906,6 +1950,8 @@ class BotInstance:
         """关闭时清理资源"""
         if self.proactive_scheduler:
             await self.proactive_scheduler.stop()
+        if self.memory and getattr(self.memory, "dreaming", None):
+            await self.memory.dreaming.stop_scheduler()
         if self.life_scheduler:
             await self.life_scheduler.stop()
         self._schedulers_started = False

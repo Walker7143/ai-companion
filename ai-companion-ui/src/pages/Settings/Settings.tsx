@@ -228,6 +228,9 @@ const defaultMemory: BotConfig['memory'] = {
   dreaming: {
     enabled: false,
     auto_run_enabled: false,
+    auto_check_interval_seconds: 900,
+    min_run_interval_minutes: 120,
+    min_new_messages: 6,
     report_retention: 10,
     max_candidates: 24,
     max_promotions: 6,
@@ -878,6 +881,9 @@ export function Settings() {
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>允许后台自动运行</div>
               <Toggle checked={draft.memory.dreaming.auto_run_enabled} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, auto_run_enabled: event.target.checked } })} />
             </div>
+            <Input label="自动检查间隔（秒）" type="number" min="30" value={draft.memory.dreaming.auto_check_interval_seconds} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, auto_check_interval_seconds: Number(event.target.value) } })} />
+            <Input label="最短整理间隔（分钟）" type="number" min="1" value={draft.memory.dreaming.min_run_interval_minutes} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, min_run_interval_minutes: Number(event.target.value) } })} />
+            <Input label="新增消息阈值" type="number" min="1" value={draft.memory.dreaming.min_new_messages} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, min_new_messages: Number(event.target.value) } })} />
             <Input label="报告保留条数" type="number" min="1" value={draft.memory.dreaming.report_retention} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, report_retention: Number(event.target.value) } })} />
             <Input label="候选上限" type="number" min="1" value={draft.memory.dreaming.max_candidates} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, max_candidates: Number(event.target.value) } })} />
             <Input label="长期提升上限" type="number" min="0" value={draft.memory.dreaming.max_promotions} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, max_promotions: Number(event.target.value) } })} />
