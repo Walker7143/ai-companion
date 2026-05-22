@@ -95,10 +95,10 @@ export function Understanding() {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
             <Sparkles size={22} color="var(--accent)" />
-            <h1 style={{ fontSize: '26px', fontWeight: 800, color: 'var(--text-primary)' }}>用户理解</h1>
+            <h1 style={{ fontSize: '26px', fontWeight: 800, color: 'var(--text-primary)' }}>长期理解投影</h1>
           </div>
           <p style={{ fontSize: '14px', color: 'var(--text-secondary)', maxWidth: 720 }}>
-            把 Bot 对用户的理解拆成可手动校准的 manual、自动沉淀的 auto、关系记忆，以及用于聊天投影的分层画像。
+            这里展示的不是“另一份长期记忆库”，而是从结构化事实、关系状态和近期连续性投影出来的长期理解层。它负责让 Bot 更自然地使用记忆，也允许你手动校准。
           </p>
           {path && <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>{path}</p>}
         </div>
@@ -109,15 +109,15 @@ export function Understanding() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-        <Card><CardContent style={{ padding: 16 }}><Badge variant="info">Manual 优先</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>用户手动写的内容永不被 auto 覆盖。</p></CardContent></Card>
-        <Card><CardContent style={{ padding: 16 }}><Badge variant="success">Auto 沉淀</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>系统会从对话和关系状态中持续整理理解。</p></CardContent></Card>
-        <Card><CardContent style={{ padding: 16 }}><Badge variant="info">Layered 投影</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>聊天时优先使用 core、current、deep、sensitive 四层小画像。</p></CardContent></Card>
-        <Card><CardContent style={{ padding: 16 }}><Badge variant="warning">冲突可见</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>自动理解和手动理解冲突时会进入 meta。</p></CardContent></Card>
+        <Card><CardContent style={{ padding: 16 }}><Badge variant="info">Manual 优先</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>你手动写的长期理解始终优先，不会被自动沉淀覆盖。</p></CardContent></Card>
+        <Card><CardContent style={{ padding: 16 }}><Badge variant="success">Auto 沉淀</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>系统会从结构化事实、关系状态和近期上下文里持续投影出自动理解。</p></CardContent></Card>
+        <Card><CardContent style={{ padding: 16 }}><Badge variant="info">Layered 投影</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>聊天时优先使用 core、current、deep、sensitive 四层小画像，而不是把整份档案全塞进 prompt。</p></CardContent></Card>
+        <Card><CardContent style={{ padding: 16 }}><Badge variant="warning">冲突可见</Badge><p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>自动理解和手动理解冲突时会进入 meta，方便你判断哪些内容该信、该删、该改。</p></CardContent></Card>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.05fr) minmax(0, 0.95fr)', gap: '16px' }}>
         <Card variant="elevated">
-          <CardHeader><CardTitle>Manual 手动理解</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Manual 手动长期理解</CardTitle></CardHeader>
           <CardContent>
             <textarea
               value={manualText}
@@ -140,13 +140,13 @@ export function Understanding() {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <Card variant="elevated">
-            <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Brain size={18} />Auto 自动理解</CardTitle></CardHeader>
+            <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><Brain size={18} />Auto 自动长期理解</CardTitle></CardHeader>
             <CardContent>
               <CodeBlock>{stringify(auto)}</CodeBlock>
             </CardContent>
           </Card>
           <Card variant="elevated">
-            <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><HeartHandshake size={18} />Relationship Memory</CardTitle></CardHeader>
+            <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><HeartHandshake size={18} />Relationship Projection</CardTitle></CardHeader>
             <CardContent>
               <CodeBlock maxHeight={260}>{stringify(relationship)}</CodeBlock>
             </CardContent>

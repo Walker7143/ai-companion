@@ -407,12 +407,16 @@ class LifeEngine:
         self.persona_dir = persona_dir
         self._persona_loader = None
         self._personality_type = "默认"
+        self._latest_relationship_state: dict[str, Any] = {}
 
     def set_model(self, model: "MiniMaxAdapter"):
         self.model = model
 
     def set_memory(self, memory: "MemoryEngine"):
         self.memory = memory
+
+    def set_relationship_state(self, relationship_state: dict[str, Any] | None):
+        self._latest_relationship_state = dict(relationship_state or {})
 
     async def _index_life_state_memory(self):
         if not self.memory or not hasattr(self.memory, "index_life_state"):
@@ -2773,8 +2777,11 @@ class LifeEngine:
             event for event in major_events
             if is_event_visible_at_current_time(event, life_context)
         ]
+        interaction_mood = self._interaction_mood_from_recent_context(visible_life_events, visible_major_events)
         return {
             "bot_mood": self.state.bot_mood,
+            "bot_life_mood": self.state.bot_mood,
+            "interaction_mood": interaction_mood,
             "bot_current_activity": self._current_activity_for_prompt(),
             "bot_age_days": self.state.bot_age_days,
             "bot_real_age": real_age,
@@ -2800,6 +2807,28 @@ class LifeEngine:
             "last_daily_tick": self.state.last_daily_tick.isoformat() if self.state.last_daily_tick else None,
             "last_major_tick": self.state.last_major_tick.isoformat() if self.state.last_major_tick else None,
         }
+
+    def _interaction_mood_from_recent_context(self, visible_life_events: list, visible_major_events: list) -> str:
+        relationship = self._latest_relationship_state if isinstance(self._latest_relationship_state, dict) else {}
+
+        tension = float(relationship.get("tension_score") or 0) if isinstance(relationship, dict) else 0.0
+        intimacy = float(relationship.get("intimacy_score") or 0) if isinstance(relationship, dict) else 0.0
+        trust = float(relationship.get("trust_score") or 0) if isinstance(relationship, dict) else 0.0
+        open_threads = relationship.get("open_emotional_threads") or [] if isinstance(relationship, dict) else []
+
+        if open_threads and tension >= 45:
+            return "有点绷着，像在等一个没说完的话题落地"
+        if tension >= 60:
+            return "有些防备和紧绷"
+        if intimacy >= 55 or trust >= 60:
+            return "比较亲近，也更容易被你牵动情绪"
+
+        recent = list(visible_life_events[-2:]) + list(visible_major_events[-1:])
+        for event in reversed(recent):
+            mood_after = str(getattr(event, "mood_after", "") or "").strip()
+            if mood_after:
+                return mood_after
+        return "平稳，没有明显波动"
 
     def _event_status_item(self, event: "LifeEvent") -> dict:
         event_date = self._event_date_for_status(event)

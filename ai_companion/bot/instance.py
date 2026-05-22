@@ -831,6 +831,8 @@ class BotInstance:
                 bot_id=self.id,
                 user_id=getattr(self.memory, "user_id", "default_user"),
             )
+        if self.life_engine:
+            self.life_engine.set_relationship_state(relationship_state)
 
         refusal_response = await self.refusal_engine.check(
             user_request=effective_user_input,

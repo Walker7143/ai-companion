@@ -15,6 +15,30 @@ interface DeleteTarget {
   detail?: string;
 }
 
+function LayerHint({
+  title,
+  description,
+  badges,
+}: {
+  title: string;
+  description: string;
+  badges?: string[];
+}) {
+  return (
+    <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+      <CardContent style={{ padding: 14, display: 'grid', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+          {(badges || []).map((item) => (
+            <Badge key={item}>{item}</Badge>
+          ))}
+        </div>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{description}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function parseList(value?: string | null): string[] {
   if (!value) return [];
   try {
@@ -590,6 +614,29 @@ export function Memory() {
 
       {activeTab === 'stats' && memoryStats && (
         <div style={{ display: 'grid', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+            <LayerHint
+              title="当前与短期"
+              badges={['Working', 'Daily']}
+              description="这一层负责当前会话和最近连续性。它决定 Bot 能不能接住你刚才说的话，不等于长期记忆。"
+            />
+            <LayerHint
+              title="长期与关系"
+              badges={['Semantic', 'Episodic', 'Relationship']}
+              description="这一层是长期真相源，保存稳定事实、共同经历和关系状态。删这里，才是在真正改 Bot 的长期记忆。"
+            />
+            <LayerHint
+              title="索引与投影"
+              badges={['Vector Index', 'Understanding Projection']}
+              description="这一层是派生层：帮助系统召回和表达，不是第二份真相源。索引可重建，长期理解投影可手动校准。"
+            />
+            <LayerHint
+              title="整理与解释"
+              badges={['Dreaming', 'Trust View', 'Doctor']}
+              description="这一层不负责存真相，而是负责整理、解释、诊断和纠错，让系统行为更可见。"
+            />
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
             {[
               { label: '工作记忆', value: memoryStats.working_count, icon: Clock, color: 'var(--accent)', size: memoryStats.working_size_kb },
@@ -655,6 +702,11 @@ export function Memory() {
 
       {activeTab === 'working' && (
         <div style={{ display: 'grid', gap: 16 }}>
+          <LayerHint
+            title="当前与短期：Working"
+            badges={['当前会话', '短期上下文']}
+            description="这里是当前会话的原始对话和压缩摘要，只影响最近几轮的承接，不是长期记忆真相。"
+          />
           <SearchBar
             value={workingQuery}
             onChange={setWorkingQuery}
@@ -687,6 +739,11 @@ export function Memory() {
 
       {activeTab === 'daily' && (
         <div style={{ display: 'grid', gap: 16 }}>
+          <LayerHint
+            title="当前与短期：Daily"
+            badges={['跨通道短期连续性', '今日上下文']}
+            description="这里是最近几天的连续性和未完成线索，用来让 Bot 在不同会话和通道之间不至于立刻失忆。"
+          />
           <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
             <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
               <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -761,6 +818,11 @@ export function Memory() {
 
       {activeTab === 'episodic' && (
         <div style={{ display: 'grid', gap: 16 }}>
+          <LayerHint
+            title="长期与关系：Episodic"
+            badges={['共同经历真相源', '长期情景记忆']}
+            description="这里保存的是值得长期记住的共同经历、冲突和和解、承诺与关键时刻。它属于长期真相源，不是临时投影。"
+          />
           <SearchBar
             value={episodicQuery}
             onChange={setEpisodicQuery}
@@ -840,8 +902,13 @@ export function Memory() {
 
       {activeTab === 'semantic' && semanticMemory && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <LayerHint
+            title="长期与关系：Semantic / Relationship"
+            badges={['结构化真相源', '长期事实', '关系状态']}
+            description="这里包含结构化用户事实和长期关系状态。它们是长期真相源；而“长期理解投影”是从这些真相里整理出来的派生表达层。"
+          />
           <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
-              <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
+            <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
                 <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Heart style={{ width: 18, height: 18, color: 'var(--error)' }} />
                 长期关系状态

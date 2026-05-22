@@ -56,7 +56,7 @@ export function Operations() {
             <Zap size={22} color="var(--success)" />
             <h1 style={{ fontSize: 26, fontWeight: 800, color: 'var(--text-primary)' }}>主动唤醒与人生轨迹</h1>
           </div>
-          <p style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 720 }}>观察主动消息频率、冷却策略、Bot 当前日期、心情和人生阶段。</p>
+          <p style={{ fontSize: 14, color: 'var(--text-secondary)', maxWidth: 720 }}>观察主动消息频率、冷却策略、Bot 当前日期、生活状态和互动态。这里的“生活状态”来自人生轨迹，“互动态”会更受最近互动影响。</p>
         </div>
         <Button variant="secondary" onClick={load}><RefreshCw size={14} style={{ marginRight: 4 }} />刷新</Button>
       </div>
@@ -65,7 +65,8 @@ export function Operations() {
         {metricBox('今日主动消息', metrics?.proactive_messages_today ?? 0, <Zap size={14} />)}
         {metricBox('空闲阈值', `${proactive?.idle_threshold_hours ?? '--'}h`, <Clock size={14} />)}
         {metricBox('当前日期', String(lifeStatus.current_date || '--'), <CalendarDays size={14} />)}
-        {metricBox('当前心情', String(lifeStatus.bot_mood || '--'), <HeartPulse size={14} />)}
+        {metricBox('当前生活状态', String(lifeStatus.bot_life_mood || lifeStatus.bot_mood || '--'), <HeartPulse size={14} />)}
+        {metricBox('当前互动态', String(lifeStatus.interaction_mood || '--'), <HeartPulse size={14} />)}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
@@ -89,7 +90,8 @@ export function Operations() {
             <div>大事间隔：{life?.major_interval_seconds ?? '--'} 秒</div>
             <div>当前日期：{String(lifeStatus.current_date || '--')}</div>
             <div>当前年龄：{String(lifeStatus.bot_real_age || '--')}</div>
-            <div>当前心情：{String(lifeStatus.bot_mood || '--')}</div>
+            <div>当前生活状态：{String(lifeStatus.bot_life_mood || lifeStatus.bot_mood || '--')}</div>
+            <div>当前互动态：{String(lifeStatus.interaction_mood || '--')}</div>
           </CardContent>
         </Card>
       </div>
