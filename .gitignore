@@ -69,3 +69,7 @@ tests/data/
 # Frontend build
 node_modules/
 ai-companion-ui/.vite/
+
+# Xiaohongshu marketing assets
+xhs-assets/
+docs/XHS_OPERATION_PLAN.md
