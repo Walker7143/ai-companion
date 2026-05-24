@@ -164,7 +164,12 @@ class WorkingMemoryStore:
         conn.close()
         return [_message_row(r[0], r[1], r[2], created_at=r[3]) for r in rows]
 
-    def get_recent(self, session_id: Optional[str] = None, turns: int = 20) -> list[dict]:
+    def get_recent(
+        self,
+        session_id: Optional[str] = None,
+        turns: int = 20,
+        include_proactive: bool = True,
+    ) -> list[dict]:
         """获取最近 N 轮原始消息"""
         sid = session_id or self.current_session
         if not sid:
@@ -178,7 +183,14 @@ class WorkingMemoryStore:
         """, (sid, turns * 2))
         rows = cursor.fetchall()
         conn.close()
-        return [_message_row(r[0], r[1], r[2], created_at=r[3]) for r in rows]
+        messages = [_message_row(r[0], r[1], r[2], created_at=r[3]) for r in rows]
+        if include_proactive:
+            return messages
+        return [
+            item
+            for item in messages
+            if not _is_proactive_metadata(item.get("metadata"))
+        ]
 
     def load_context(self, session_id: Optional[str] = None,
                      max_working_turns: int = 20,
@@ -480,3 +492,9 @@ def _decode_metadata(metadata_json: Optional[str]) -> dict:
     except (TypeError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _is_proactive_metadata(metadata: object) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    return bool(metadata.get("proactive") or metadata.get("assistant_initiated"))

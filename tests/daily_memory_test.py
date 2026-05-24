@@ -602,6 +602,93 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertTrue(sent)
         self.assertEqual(daily_ctx["self_memory"][0]["kind"], "deferred_reply")
 
+    def test_contextual_proactive_prompt_prefers_latest_task_session_context(self):
+        class CaptureModel:
+            def __init__(self):
+                self.prompt = ""
+
+            async def chat(self, messages, system_prompt=None, **kwargs):
+                self.prompt = messages[0]["content"]
+                return '{"message":"我接着刚才的话说。"}'
+
+        async def run():
+            from datetime import datetime, timedelta
+            from ai_companion.proactive.motives import (
+                ConversationTask,
+                ConversationTaskStatus,
+                ConversationTaskType,
+                ProactiveMotive,
+                ProactiveMotiveType,
+            )
+
+            root = Path(tempfile.mkdtemp(prefix="daily-memory-task-session-anchor-"))
+            persona_dir = root / "persona"
+            persona_dir.mkdir(parents=True, exist_ok=True)
+            (persona_dir / "proactive.json").write_text(
+                '{"enabled": true, "mode": "active"}',
+                encoding="utf-8",
+            )
+            memory = MemoryEngine("proactive_task_anchor_bot", root, config={"embedding": "none"})
+            await memory.init()
+            try:
+                memory.start_session("gw-anchor")
+                await memory.record_turn(
+                    "你晚点把那件事接着说完。",
+                    "好，我过一会儿回来接着说。",
+                    turn_context={"session_id": "gw-anchor", "user_id": "default_user", "platform": "weixin"},
+                )
+                await memory.record_turn(
+                    "不是那件旧事，我现在是说租房那个预算。",
+                    "行，那我就按你刚说的租房预算来想。",
+                    turn_context={"session_id": "gw-anchor", "user_id": "default_user", "platform": "weixin"},
+                )
+
+                model = CaptureModel()
+                engine = ProactiveEngine(
+                    bot_id="proactive_task_anchor_bot",
+                    config=ProactiveConfig(persona_dir),
+                    state=ProactiveState("proactive_task_anchor_bot", root),
+                    memory=memory,
+                )
+                engine.set_model(model)
+
+                now = datetime.now()
+                task = ConversationTask(
+                    id="task-anchor",
+                    bot_id="proactive_task_anchor_bot",
+                    type=ConversationTaskType.DEFERRED_REPLY,
+                    status=ConversationTaskStatus.PENDING,
+                    session_id="gw-anchor",
+                    user_id="default_user",
+                    platform="weixin",
+                    target={"platform": "weixin"},
+                    created_at=now,
+                    due_at=now + timedelta(minutes=8),
+                    expires_at=now + timedelta(hours=2),
+                    source_user_message="你晚点把那件事接着说完。",
+                    source_bot_message="好，我过一会儿回来接着说。",
+                    topic_summary="稍后回来继续用户提过的话题",
+                    priority=100,
+                )
+                motive = ProactiveMotive(
+                    type=ProactiveMotiveType.DEFERRED_REPLY,
+                    priority=100,
+                    reason="继续刚才承诺的稍后回复",
+                    prompt_context="用户在等你回来把刚才的话说完。",
+                    task=task,
+                    target={"platform": "weixin"},
+                )
+                await engine.generate_contextual_message(motive)
+                return model.prompt
+            finally:
+                await memory.close()
+
+        prompt = asyncio.run(run())
+        self.assertIn("本次主动消息必须承接的最近现场", prompt)
+        self.assertIn("租房那个预算", prompt)
+        self.assertIn("按你刚说的租房预算来想", prompt)
+        self.assertIn("不要另起炉灶", prompt)
+
     def test_proactive_generation_prompt_includes_recent_name_correction_guard(self):
         class CaptureModel:
             def __init__(self):
@@ -645,6 +732,46 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertIn("我不是米高", prompt)
         self.assertIn("不要继续使用那个被否定的称呼", prompt)
         self.assertIn("条件式旧称呼", prompt)
+
+    def test_working_recent_can_exclude_proactive_messages(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="daily-memory-working-recent-filter-") as tmp:
+                root = Path(tmp)
+                persona_dir = root / "persona"
+                persona_dir.mkdir(parents=True, exist_ok=True)
+                (persona_dir / "proactive.json").write_text(
+                    '{"enabled": true, "mode": "active"}',
+                    encoding="utf-8",
+                )
+                memory = MemoryEngine("recent_filter_bot", root, config={"embedding": "none"})
+                await memory.init()
+                try:
+                    memory.start_session("gw-filter")
+                    await memory.record_turn(
+                        "晚上我去陪妹妹过生日",
+                        "行，那你先去陪她。",
+                        turn_context={"session_id": "gw-filter", "user_id": "default_user", "platform": "weixin"},
+                    )
+                    await memory.record_assistant_message(
+                        "都八点多了，你还没吃饭吧？",
+                        turn_context={
+                            "session_id": "gw-filter",
+                            "user_id": "default_user",
+                            "platform": "weixin",
+                            "metadata": {"proactive": True, "assistant_initiated": True, "proactive_kind": "idle_reminder"},
+                        },
+                    )
+                    with_proactive = memory.working.get_recent("gw-filter", turns=3)
+                    without_proactive = memory.working.get_recent("gw-filter", turns=3, include_proactive=False)
+                    return with_proactive, without_proactive
+                finally:
+                    await memory.close()
+
+        with_proactive, without_proactive = asyncio.run(run())
+        self.assertEqual(with_proactive[0]["content"], "都八点多了，你还没吃饭吧？")
+        self.assertTrue(with_proactive[0]["metadata"]["proactive"])
+        self.assertEqual(without_proactive[0]["content"], "行，那你先去陪她。")
+        self.assertFalse(any(item.get("metadata", {}).get("proactive") for item in without_proactive))
 
     def test_proactive_engine_records_successful_sends(self):
         async def run():

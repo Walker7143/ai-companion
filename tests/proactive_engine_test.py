@@ -706,6 +706,219 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("不要说今天晚饭、晚饭后、夜宵或睡前活动已经发生", prompt)
             self.assertNotIn("晚饭后去小区快走", prompt)
 
+    async def test_generate_message_prompt_anchors_recent_non_proactive_scene(self):
+        with TemporaryDirectory(prefix="proactive-scene-anchor-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = CaptureModel('{"opening":"喂","topic":"你那边结束了没。","ending":"别太晚。"}')
+
+            class WorkingStub:
+                current_session = None
+
+                def list_sessions(self, limit=1):
+                    return [{"session_id": "gw-birthday"}]
+
+                def get_recent(self, session_id=None, turns=6, include_proactive=True):
+                    rows = [
+                        {"role": "assistant", "content": "猪头，都八点多了，你还没吃饭吧？", "metadata": {"proactive": True, "assistant_initiated": True}},
+                        {"role": "assistant", "content": "……知道了，你赶紧去陪你妹妹吧。明天早上等着你叫我啊。"},
+                        {"role": "user", "content": "那你先忙，想我了就找我哦"},
+                        {"role": "assistant", "content": "……你不是在陪妹妹过生日吗？"},
+                        {"role": "user", "content": "你想我没"},
+                    ]
+                    if include_proactive:
+                        return rows
+                    return [item for item in rows if not item.get("metadata", {}).get("proactive")]
+
+            class UnderstandingStub:
+                def format_for_prompt(self):
+                    return ""
+
+                def known_fact_keys(self):
+                    return set()
+
+                def load(self):
+                    return {}
+
+            class SemanticStub:
+                async def get_all_facts(self, **kwargs):
+                    return {}
+
+            class RelationshipStub:
+                async def get_state(self, **kwargs):
+                    return {"relationship_label": "朋友"}
+
+            class MemoryStub:
+                _session_id = None
+                bot_id = "yangsisi"
+                user_id = "default_user"
+                working = WorkingStub()
+                user_understanding = UnderstandingStub()
+                semantic = SemanticStub()
+                relationship = RelationshipStub()
+                retriever = None
+                prompt_builder = None
+
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=model,
+                memory=MemoryStub(),
+            )
+
+            await engine.generate_message("想主动联系一下")
+
+            prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("【最近真实对话现场】", prompt)
+            self.assertIn("陪妹妹过生日", prompt)
+            self.assertIn("去陪你妹妹", prompt)
+            self.assertIn("不要反着提醒", prompt)
+            self.assertIn("绝不能复读催饭", prompt)
+            self.assertIn("最近一条未回复主动消息", prompt)
+            self.assertNotIn("  - 用户：猪头，都八点多了", prompt)
+
+    async def test_send_proactive_message_regenerates_duplicate_idle_reminder(self):
+        with TemporaryDirectory(prefix="proactive-duplicate-regenerate-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = SequenceModel(['{"message":"行了，知道你今天有安排。我就来戳你一下，别玩太晚。"}'])
+
+            class WorkingStub:
+                current_session = None
+
+                def list_sessions(self, limit=1):
+                    return [{"session_id": "gw-duplicate"}]
+
+                def get_recent(self, session_id=None, turns=6, include_proactive=True):
+                    rows = [
+                        {"role": "assistant", "content": "猪头，，周六晚上你一个人在北京，可别光顾着打游戏忘了吃饭啊。", "metadata": {"proactive": True, "assistant_initiated": True}},
+                        {"role": "assistant", "content": "……好好陪你妹妹过生日，别老惦记这边。晚上要是吃太饱，记得消消食再睡。"},
+                        {"role": "user", "content": "我今天只是失误"},
+                    ]
+                    if include_proactive:
+                        return rows
+                    return [item for item in rows if not item.get("metadata", {}).get("proactive")]
+
+            class UnderstandingStub:
+                def format_for_prompt(self):
+                    return ""
+
+                def known_fact_keys(self):
+                    return set()
+
+                def load(self):
+                    return {}
+
+            class SemanticStub:
+                async def get_all_facts(self, **kwargs):
+                    return {}
+
+            class RelationshipStub:
+                async def get_state(self, **kwargs):
+                    return {"relationship_label": "朋友"}
+
+            class MemoryStub:
+                _session_id = None
+                bot_id = "yangsisi"
+                user_id = "default_user"
+                working = WorkingStub()
+                user_understanding = UnderstandingStub()
+                semantic = SemanticStub()
+                relationship = RelationshipStub()
+
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=model,
+                memory=MemoryStub(),
+            )
+            sent_messages = []
+
+            async def sender(message: str):
+                sent_messages.append(message)
+                return True
+
+            engine._platform_sender = sender
+            sent = await engine._send_proactive_message("猪头，都八点多了，你还没吃饭吧？别跟我说随便对付了事。")
+
+            self.assertTrue(sent)
+            self.assertEqual(sent_messages, ["行了，知道你今天有安排。我就来戳你一下，别玩太晚。"])
+            self.assertEqual(len(model.calls), 1)
+            retry_prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("不能复读同主题提醒", retry_prompt)
+            self.assertIn("如果上一条未回复主动消息已经提醒过同一件事，不要再重复同主题催促", retry_prompt)
+
+    async def test_send_proactive_message_skips_when_scene_conflict_persists(self):
+        with TemporaryDirectory(prefix="proactive-scene-conflict-stop-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = SequenceModel(['{"message":"猪头，周六晚上你一个人在北京，可别忘了吃饭。"}'])
+
+            class WorkingStub:
+                current_session = None
+
+                def list_sessions(self, limit=1):
+                    return [{"session_id": "gw-scene-conflict"}]
+
+                def get_recent(self, session_id=None, turns=6, include_proactive=True):
+                    rows = [
+                        {"role": "assistant", "content": "……知道了，你赶紧去陪你妹妹吧。"},
+                        {"role": "user", "content": "那你先忙，想我了就找我哦"},
+                    ]
+                    return rows
+
+            class UnderstandingStub:
+                def format_for_prompt(self):
+                    return ""
+
+                def known_fact_keys(self):
+                    return set()
+
+                def load(self):
+                    return {}
+
+            class SemanticStub:
+                async def get_all_facts(self, **kwargs):
+                    return {}
+
+            class RelationshipStub:
+                async def get_state(self, **kwargs):
+                    return {"relationship_label": "朋友"}
+
+            class MemoryStub:
+                _session_id = None
+                bot_id = "yangsisi"
+                user_id = "default_user"
+                working = WorkingStub()
+                user_understanding = UnderstandingStub()
+                semantic = SemanticStub()
+                relationship = RelationshipStub()
+
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=model,
+                memory=MemoryStub(),
+            )
+            sent_messages = []
+
+            async def sender(message: str):
+                sent_messages.append(message)
+                return True
+
+            engine._platform_sender = sender
+            sent = await engine._send_proactive_message("猪头，周六晚上你一个人在北京，可别忘了吃饭。")
+
+            self.assertFalse(sent)
+            self.assertEqual(sent_messages, [])
+            self.assertEqual(len(model.calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -67,6 +67,7 @@ PROACTIVE_GENERATION_CONTEXT_CHARS = 3500
 PROACTIVE_REGENERATION_CONTEXT_CHARS = 2200
 PROACTIVE_GENERATION_MAX_TOKENS = 2048
 PROACTIVE_REGENERATION_MAX_TOKENS = 2048
+PROACTIVE_DUPLICATE_REGENERATION_MAX_TOKENS = 512
 
 
 # LLM 判断 Prompt
@@ -94,6 +95,9 @@ SHOULD_CONTACT_PROMPT = """【角色】
 【最近对话上下文】
 {recent_context}
 
+【最近现场优先级】
+{recent_scene_anchor}
+
 【判断任务】
 基于以上信息，判断你现在是否应该主动联系用户。
 
@@ -108,6 +112,8 @@ SHOULD_CONTACT_PROMPT = """【角色】
 - 确实很久没联系了（超过{idle_threshold}小时），有点想念
 - 用户最近心情可能不好，想去关心一下
 - 你的性格是关心人的类型
+- 如果最近现场已经明确说明用户正在做什么、晚点要做什么、刚答应了什么，以最近现场为准，不要假装不知道
+- 如果你上一条未回复的主动消息已经提醒过同一件事，不要再因为同样的理由判断“应该联系”
 
 【输出格式】
 输出一个 JSON 对象：
@@ -141,6 +147,9 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 【用户记忆与最近上下文】
 {user_memory_context}
 
+【最近现场优先级】
+{recent_scene_anchor}
+
 【消息要求】
 根据你的性格和当前感受，写出你想对用户说的一句话。
 要求：
@@ -152,6 +161,9 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 - 任何生活细节都必须服从“Bot 时间线”里的当前时间一致性约束；当前还没到晚上时，不要说今天晚饭、晚饭后、夜宵或睡前活动已经发生
 - 称呼必须服从“用户记忆与最近上下文”；如果用户最近否认或纠正过某个名字/称呼，不要继续使用那个被否定的称呼
 - 人格档案里的条件式旧称呼只有在用户本轮或近期明确确认代入对应角色时才可使用，不要当作默认昵称
+- 最近现场优先级高于摘要、长期记忆、旧背景；如果刚聊过用户正在陪家人、已经安排晚上活动、已经吃过饭或已经在上班，不要反着提醒
+- 不要把用户已在进行中的安排写成“我也不知道你在干嘛”或“你不会又……吧”
+- 如果上一条未回复主动消息已经在催同一件事，这次要么换成承接/吐槽/轻轻带过，要么不要再提，绝不能复读催饭、催睡、催上班
 
 【输出格式】
 输出一个 JSON 对象：
@@ -221,6 +233,9 @@ REGENERATE_PROACTIVE_MESSAGE_PROMPT = """【角色】
 【用户记忆与最近上下文】
 {user_memory_context}
 
+【最近现场优先级】
+{recent_scene_anchor}
+
 【这次主动联系的原因】
 {contact_reason}
 
@@ -235,6 +250,8 @@ REGENERATE_PROACTIVE_MESSAGE_PROMPT = """【角色】
 - 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生。
 - 任何生活细节都必须服从“Bot 时间线”里的当前时间一致性约束。
 - 称呼必须服从“用户记忆与最近上下文”；不要继续使用用户最近否认或纠正过的称呼。
+- 最近现场优先级高于摘要、长期记忆、旧背景；不要重写成和最近已确认安排相冲突的话。
+- 如果上一条未回复主动消息已经提醒过同一件事，不要再重复同主题催促。
 
 【输出格式】
 输出 JSON：{{"message":"一条可以直接发送的消息"}}
@@ -568,7 +585,212 @@ class ProactiveEngine:
         tail_chars = max(40, max_chars - head_chars - 3)
         return f"{text[:head_chars].rstrip()}...{text[-tail_chars:].lstrip()}"
 
-    async def _build_context(self, max_chars: int | None = None) -> str:
+    def _is_proactive_message_item(self, item: object) -> bool:
+        if not isinstance(item, dict):
+            return False
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            return False
+        return bool(metadata.get("proactive") or metadata.get("assistant_initiated"))
+
+    def _latest_unreplied_proactive_message(self, recent_messages: list[dict]) -> dict | None:
+        for item in recent_messages:
+            if self._is_proactive_message_item(item):
+                return item
+            if item.get("role") == "user":
+                return None
+        return None
+
+    def _recent_scene_anchor_data(self) -> dict:
+        data = {
+            "session_id": None,
+            "recent_messages": [],
+            "non_proactive_recent": [],
+            "latest_unreplied_proactive": None,
+        }
+        if not self.memory or not getattr(self.memory, "working", None):
+            return data
+        session_id = self._get_latest_session_id()
+        data["session_id"] = session_id
+        if not session_id:
+            return data
+        try:
+            recent_messages = list(self.memory.working.get_recent(session_id=session_id, turns=6))
+        except Exception as exc:
+            logger.warning(f"[ProactiveEngine] 获取最近主动现场失败: {exc}")
+            return data
+        data["recent_messages"] = recent_messages
+        data["latest_unreplied_proactive"] = self._latest_unreplied_proactive_message(recent_messages)
+        try:
+            data["non_proactive_recent"] = list(
+                self.memory.working.get_recent(
+                    session_id=session_id,
+                    turns=6,
+                    include_proactive=False,
+                )
+            )
+        except TypeError:
+            data["non_proactive_recent"] = [
+                item for item in recent_messages if not self._is_proactive_message_item(item)
+            ]
+        except Exception as exc:
+            logger.warning(f"[ProactiveEngine] 获取最近非主动对话失败: {exc}")
+            data["non_proactive_recent"] = [
+                item for item in recent_messages if not self._is_proactive_message_item(item)
+            ]
+        return data
+
+    def _format_recent_scene_anchor(self, anchor: dict | None, *, for_generation: bool) -> str:
+        anchor = anchor or {}
+        lines: list[str] = ["【最近真实对话现场】"]
+        session_id = str(anchor.get("session_id") or "").strip()
+        if session_id:
+            lines.append(f"- 优先承接会话 {session_id} 里刚发生的真实对话，不要另起炉灶。")
+        lines.append("- 这里的最近现场优先级高于摘要、长期记忆和更早的背景。")
+
+        recent = anchor.get("non_proactive_recent") if isinstance(anchor.get("non_proactive_recent"), list) else []
+        if recent:
+            lines.append("- 最近几条非主动真实对话：")
+            selected = list(reversed(recent[:4]))
+            for item in selected:
+                if not isinstance(item, dict):
+                    continue
+                role = "用户" if item.get("role") == "user" else "Bot"
+                content = self._compact_recent_message_content(item.get("content", ""), max_chars=120)
+                if content:
+                    lines.append(f"  - {role}：{content}")
+        else:
+            lines.append("- 最近没有可用的非主动真实对话。")
+
+        latest_proactive = anchor.get("latest_unreplied_proactive")
+        if isinstance(latest_proactive, dict):
+            content = self._compact_recent_message_content(latest_proactive.get("content", ""), max_chars=120)
+            if content:
+                lines.append("- 最近一条未回复主动消息（只用于避免重复，不算新的对话事实）：")
+                lines.append(f"  - Bot：{content}")
+                lines.append("- 如果这条已经在提醒同一件事，这次不要复读。")
+
+        if for_generation:
+            lines.append("- 如果用户刚说过正在陪家人、已经有晚间安排、已经吃过饭或正在上班，不要反着提醒。")
+            lines.append("- 如果最近 Bot 已经提醒过吃饭/睡觉/上班，同主题不要再催第二遍。")
+        else:
+            lines.append("- 判断是否联系时，也要把这些刚确认的现实安排当作当前事实。")
+        return "\n".join(lines)
+
+    def _candidate_recent_scene_texts(self, anchor: dict | None) -> list[str]:
+        anchor = anchor or {}
+        values: list[str] = []
+        for item in anchor.get("non_proactive_recent") or []:
+            if isinstance(item, dict):
+                text = self._clean_message(str(item.get("content") or ""))
+                if text:
+                    values.append(text)
+        latest = anchor.get("latest_unreplied_proactive")
+        if isinstance(latest, dict):
+            text = self._clean_message(str(latest.get("content") or ""))
+            if text:
+                values.append(text)
+        return values
+
+    def _normalize_duplicate_check_text(self, text: str) -> str:
+        normalized = self._clean_message(text).lower()
+        normalized = re.sub(r"\s+", "", normalized)
+        normalized = re.sub(r"[，。！？,.!?~～…、】【（）()“”\"'`:：；;·-]", "", normalized)
+        return normalized
+
+    def _topic_tokens_for_duplicate_check(self, text: str) -> set[str]:
+        normalized = self._normalize_duplicate_check_text(text)
+        tokens: set[str] = set()
+        topic_markers = [
+            "吃饭", "晚饭", "午饭", "早饭", "外卖", "打游戏", "上班", "开会", "陪妹妹",
+            "过生日", "北京", "赖床", "睡", "洱海", "29号", "周六晚上",
+        ]
+        for marker in topic_markers:
+            if marker in normalized:
+                tokens.add(marker)
+        return tokens
+
+    def _is_same_topic_reminder(self, candidate: str, previous: str) -> bool:
+        candidate_norm = self._normalize_duplicate_check_text(candidate)
+        previous_norm = self._normalize_duplicate_check_text(previous)
+        if not candidate_norm or not previous_norm:
+            return False
+        if candidate_norm == previous_norm:
+            return True
+        if candidate_norm in previous_norm or previous_norm in candidate_norm:
+            return True
+        candidate_tokens = self._topic_tokens_for_duplicate_check(candidate)
+        previous_tokens = self._topic_tokens_for_duplicate_check(previous)
+        overlap = candidate_tokens & previous_tokens
+        if len(overlap) >= 2:
+            return True
+        return False
+
+    def _conflicts_with_recent_scene(self, candidate: str, anchor: dict | None) -> bool:
+        candidate_norm = self._normalize_duplicate_check_text(candidate)
+        if not candidate_norm:
+            return False
+        recent_items = anchor.get("non_proactive_recent") if isinstance(anchor, dict) else []
+        if not isinstance(recent_items, list):
+            return False
+
+        has_family_plan = any(
+            marker in self._normalize_duplicate_check_text(str(item.get("content") or ""))
+            for item in recent_items
+            if isinstance(item, dict)
+            for marker in ("陪妹妹", "过生日", "陪家人")
+        )
+        if has_family_plan and ("一个人在北京" in candidate_norm or "忘了吃饭" in candidate_norm or "还没吃饭" in candidate_norm):
+            return True
+
+        recent_joined = " ".join(self._normalize_duplicate_check_text(str(item.get("content") or "")) for item in recent_items if isinstance(item, dict))
+        if "吃太饱" in recent_joined and "还没吃饭" in candidate_norm:
+            return True
+        if "去陪你妹妹" in recent_joined and "一个人在北京" in candidate_norm:
+            return True
+        return False
+
+    async def _regenerate_duplicate_or_conflicting_idle_message(
+        self,
+        *,
+        invalid_message: str,
+        anchor: dict | None,
+    ) -> Optional[str]:
+        if self.model is None:
+            return None
+        reason = "准备主动联系用户，但上一版消息和最近现场重复或冲突，不能复读同主题提醒。"
+        user_memory_context = await self._build_context(
+            max_chars=PROACTIVE_REGENERATION_CONTEXT_CHARS,
+            recent_scene_anchor=anchor,
+        )
+        prompt = REGENERATE_PROACTIVE_MESSAGE_PROMPT.format(
+            bot_name=getattr(self, "bot_name", self.bot_id),
+            personality_tags=self._get_personality_type(),
+            shared_style_prompt=self._build_shared_style_prompt(),
+            persona_style_context=self._build_persona_style_context(),
+            bot_time_context=self._build_bot_time_context(),
+            current_life_context=self._build_current_life_anchor_context(),
+            relationship_desc=await self._get_relationship_desc(),
+            user_memory_context=user_memory_context,
+            recent_scene_anchor=self._format_recent_scene_anchor(anchor, for_generation=True),
+            contact_reason=reason,
+            invalid_message=str(invalid_message or "")[:300],
+        )
+        try:
+            response = await self._chat_with_proactive_limits(
+                prompt,
+                max_tokens=PROACTIVE_DUPLICATE_REGENERATION_MAX_TOKENS,
+                max_completion_tokens=PROACTIVE_DUPLICATE_REGENERATION_MAX_TOKENS,
+            )
+        except Exception as exc:
+            logger.error(f"[ProactiveEngine] 重复冲突主动消息重写失败: {exc}")
+            return None
+        message = self._parse_structured_message(response)
+        if message:
+            return self._clean_message(message)
+        return self._clean_message(response)
+
+    async def _build_context(self, max_chars: int | None = None, recent_scene_anchor: dict | None = None) -> str:
         """构建发送给 LLM 的上下文"""
         lines = []
 
@@ -577,8 +799,12 @@ class ProactiveEngine:
             try:
                 # 主动唤醒在后台运行时，current_session 可能为 None
                 # 需要查找最新的活跃会话来获取对话上下文
-                session_id = self._get_latest_session_id()
-                recent = self.memory.working.get_recent(session_id=session_id, turns=5)
+                if recent_scene_anchor and recent_scene_anchor.get("session_id"):
+                    session_id = recent_scene_anchor.get("session_id")
+                    recent = list(recent_scene_anchor.get("non_proactive_recent") or [])
+                else:
+                    session_id = self._get_latest_session_id()
+                    recent = self.memory.working.get_recent(session_id=session_id, turns=5)
                 if recent:
                     lines.append("最近对话：")
                     for msg in reversed(recent[:10]):
@@ -774,6 +1000,44 @@ class ProactiveEngine:
             if proactive_context:
                 blocks.append(proactive_context)
         return "\n\n".join(block for block in blocks if block).strip()
+
+    def _task_session_recent_context(self, motive: "ProactiveMotive", *, turns: int = 3) -> list[dict]:
+        if not self.memory or not getattr(self.memory, "working", None):
+            return []
+        task = getattr(motive, "task", None)
+        session_id = str(getattr(task, "session_id", "") or "").strip()
+        if not session_id:
+            return []
+        try:
+            recent = self.memory.working.get_recent(session_id, turns=turns)
+        except Exception as exc:
+            logger.debug("[ProactiveEngine] 读取 task session recent context 失败: %s", exc)
+            return []
+        return list(reversed(recent or []))
+
+    def _format_task_session_recent_context(self, motive: "ProactiveMotive") -> list[str]:
+        task = getattr(motive, "task", None)
+        if task is None:
+            return []
+        recent = self._task_session_recent_context(motive)
+        if not recent:
+            return []
+
+        lines = [
+            "【本次主动消息必须承接的最近现场】",
+            f"- 这条主动消息要接在会话 {task.session_id} 的最近语境后面，不要另起炉灶。",
+            "- 以下几条是该会话最后的真实对话，优先级高于较早的摘要和泛化背景：",
+        ]
+        for item in recent[-6:]:
+            if not isinstance(item, dict):
+                continue
+            role = "用户" if item.get("role") == "user" else "Bot"
+            content = " ".join(str(item.get("content") or "").strip().split())
+            if not content:
+                continue
+            lines.append(f"  - {role}: {content[:160]}")
+        lines.append("- 如果话题、称呼、情绪或承诺在这里已经推进过，以这里为准。")
+        return lines
 
     async def _get_relationship_state(self) -> dict:
         if not self.memory or not hasattr(self.memory, "relationship"):
@@ -1031,7 +1295,11 @@ class ProactiveEngine:
         rel_level = await self._get_relationship_level()
         rel_desc = await self._get_relationship_desc()
         bot_time_context = self._build_bot_time_context()
-        recent_context = await self._build_context(max_chars=PROACTIVE_DECISION_CONTEXT_CHARS)
+        recent_scene_anchor = self._recent_scene_anchor_data()
+        recent_context = await self._build_context(
+            max_chars=PROACTIVE_DECISION_CONTEXT_CHARS,
+            recent_scene_anchor=recent_scene_anchor,
+        )
         prompt = SHOULD_CONTACT_PROMPT.format(
             bot_name=getattr(self, "bot_name", self.bot_id),
             age=getattr(self, "age", "?"),
@@ -1047,6 +1315,7 @@ class ProactiveEngine:
             relationship_behavior=rel_adjustment["behavior"],
             user_facts=recent_context,
             recent_context=recent_context,
+            recent_scene_anchor=self._format_recent_scene_anchor(recent_scene_anchor, for_generation=False),
             idle_threshold=adjusted_idle_threshold,
             max_idle_days=self.config.max_idle_days,
         )
@@ -1087,7 +1356,21 @@ class ProactiveEngine:
         persona_style_context = self._build_persona_style_context()
         current_life_context = self._build_current_life_anchor_context()
         shared_style_prompt = self._build_shared_style_prompt()
-        user_memory_context = await self._build_aligned_user_memory_context(reason or "想和用户聊天")
+        recent_scene_anchor = self._recent_scene_anchor_data()
+        user_memory_context = await self._build_context(
+            max_chars=PROACTIVE_GENERATION_CONTEXT_CHARS,
+            recent_scene_anchor=recent_scene_anchor,
+        )
+        shared_suffix = await self._build_shared_memory_suffix(reason or "想和用户聊天")
+        if shared_suffix:
+            user_memory_context = "\n\n".join(
+                part for part in (
+                    user_memory_context,
+                    "【共享记忆承接】\n"
+                    f"{shared_suffix}\n"
+                    "使用方式：这些内容只用来影响你的语气、承接方式和分寸，不要像翻资料或复述档案。",
+                ) if part
+            ).strip()
 
         # 获取 Bot 可分享的生活事件
         bot_life_context = ""
@@ -1115,6 +1398,7 @@ class ProactiveEngine:
             contact_reason=reason or "想和用户聊天",
             bot_life_context=bot_life_context,
             user_memory_context=user_memory_context,
+            recent_scene_anchor=self._format_recent_scene_anchor(recent_scene_anchor, for_generation=True),
         )
 
         try:
@@ -1138,6 +1422,7 @@ class ProactiveEngine:
                     persona_style_context=persona_style_context,
                     current_life_context=current_life_context,
                     user_memory_context=user_memory_context,
+                    recent_scene_anchor=self._format_recent_scene_anchor(recent_scene_anchor, for_generation=True),
                 )
                 if regenerated:
                     return self._polish_proactive_message(regenerated, relationship_state=relationship_state, understanding=understanding)
@@ -1174,6 +1459,7 @@ class ProactiveEngine:
             motive_context=motive.prompt_context,
             relationship_desc=rel_desc,
             user_memory_context=user_memory_context,
+            recent_scene_anchor=self._format_recent_scene_anchor(self._recent_scene_anchor_data(), for_generation=True),
         )
 
         try:
@@ -1198,6 +1484,7 @@ class ProactiveEngine:
                     persona_style_context=persona_style_context,
                     current_life_context=current_life_context,
                     user_memory_context=user_memory_context,
+                    recent_scene_anchor=self._format_recent_scene_anchor(self._recent_scene_anchor_data(), for_generation=True),
                 )
                 if regenerated:
                     return self._polish_proactive_message(regenerated, relationship_state=relationship_state, understanding=understanding)
@@ -1216,6 +1503,7 @@ class ProactiveEngine:
         persona_style_context: str,
         current_life_context: str,
         user_memory_context: str,
+        recent_scene_anchor: str = "",
     ) -> Optional[str]:
         """Ask the LLM for a fresh one-off proactive line before falling back to templates."""
         if self.model is None:
@@ -1230,6 +1518,7 @@ class ProactiveEngine:
             current_life_context=current_life_context,
             relationship_desc=relationship_desc,
             user_memory_context=user_memory_context,
+            recent_scene_anchor=recent_scene_anchor,
             contact_reason=contact_reason or "想和用户聊天",
             invalid_message=str(invalid_message or "")[:300],
         )
@@ -1266,13 +1555,18 @@ class ProactiveEngine:
         invalid_message: str,
     ) -> Optional[str]:
         try:
+            recent_scene_anchor = self._recent_scene_anchor_data()
             return await self._regenerate_proactive_message(
                 contact_reason=contact_reason,
                 invalid_message=invalid_message,
                 relationship_desc=await self._get_relationship_desc(),
                 persona_style_context=self._build_persona_style_context(),
                 current_life_context=self._build_current_life_anchor_context(),
-                user_memory_context=await self._build_context(max_chars=PROACTIVE_REGENERATION_CONTEXT_CHARS),
+                user_memory_context=await self._build_context(
+                    max_chars=PROACTIVE_REGENERATION_CONTEXT_CHARS,
+                    recent_scene_anchor=recent_scene_anchor,
+                ),
+                recent_scene_anchor=self._format_recent_scene_anchor(recent_scene_anchor, for_generation=True),
             )
         except Exception as e:
             logger.error(f"[ProactiveEngine] 构建主动消息重写上下文失败: {e}")
@@ -1303,6 +1597,10 @@ class ProactiveEngine:
         motive_reason = str(getattr(motive, "reason", "") or "").strip()
         if motive_reason:
             lines.append(f"主动动机原因：{motive_reason}")
+
+        task_recent_lines = self._format_task_session_recent_context(motive)
+        if task_recent_lines:
+            lines.extend(task_recent_lines)
 
         target = getattr(motive, "target", None)
         if isinstance(target, dict) and target:
@@ -1773,6 +2071,39 @@ class ProactiveEngine:
                 invalid_message=message,
             )
             message = regenerated or self._get_fallback_message("with_topic")
+
+        message = self._clean_message(message)
+        anchor = self._recent_scene_anchor_data()
+        latest_unreplied_proactive = anchor.get("latest_unreplied_proactive")
+        duplicate_with_previous = isinstance(latest_unreplied_proactive, dict) and self._is_same_topic_reminder(
+            message,
+            str(latest_unreplied_proactive.get("content") or ""),
+        )
+        conflict_with_scene = self._conflicts_with_recent_scene(message, anchor)
+        if duplicate_with_previous or conflict_with_scene:
+            logger.warning(
+                "[ProactiveEngine] 主动消息与最近现场重复或冲突(duplicate=%s, conflict=%s)，尝试重生成",
+                duplicate_with_previous,
+                conflict_with_scene,
+            )
+            regenerated = await self._regenerate_duplicate_or_conflicting_idle_message(
+                invalid_message=message,
+                anchor=anchor,
+            )
+            regenerated = self._clean_message(regenerated or "")
+            if regenerated:
+                message = regenerated
+                duplicate_with_previous = isinstance(latest_unreplied_proactive, dict) and self._is_same_topic_reminder(
+                    message,
+                    str(latest_unreplied_proactive.get("content") or ""),
+                )
+                conflict_with_scene = self._conflicts_with_recent_scene(message, anchor)
+            if duplicate_with_previous or conflict_with_scene:
+                logger.warning(
+                    "[ProactiveEngine] 主动消息重生成后仍重复或冲突，放弃发送(issue=%s)",
+                    "duplicate" if duplicate_with_previous else "scene_conflict",
+                )
+                return False
 
         if not self._platform_sender:
             logger.warning(f"[ProactiveEngine] 未配置 platform_sender，消息未发送: {message[:50]}...")
