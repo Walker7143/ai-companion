@@ -15,6 +15,7 @@ from .adapters import (
     OpenAIAdapter,
     ClaudeAdapter,
     MimoAdapter,
+    DeepSeekAdapter,
     TeleAdapter,
     OllamaAdapter,
     CustomAdapter,
@@ -42,6 +43,7 @@ class ModelFactory:
         "openai": OpenAIAdapter,
         "claude": ClaudeAdapter,
         "mimo": MimoAdapter,
+        "deepseek": DeepSeekAdapter,
         "tele": TeleAdapter,
         "ollama": OllamaAdapter,
         "custom": CustomAdapter,
@@ -52,6 +54,7 @@ class ModelFactory:
         "openai": {"api_key", "base_url", "model", "timeout"},
         "claude": {"api_key", "base_url", "model", "timeout"},
         "mimo": {"api_key", "base_url", "model", "timeout", "auth_type"},
+        "deepseek": {"api_key", "base_url", "model", "timeout"},
         "tele": {"api_key", "base_url", "model", "auth_state_file", "timeout"},
         "ollama": {"base_url", "model", "timeout"},
         "custom": {

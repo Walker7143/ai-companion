@@ -20,6 +20,7 @@ PROVIDER_DEFAULTS = {
     "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
     "claude": {"base_url": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-20250514"},
     "mimo": {"base_url": "https://token-plan-cn.xiaomimimo.com/v1", "model": "mimo-v2.5-pro"},
+    "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-v4-pro"},
     "tele": {
         "base_url": "https://agent.teleai.com.cn/superCowork/sapi/api/v1",
         "model": "glm-5-turbo",
@@ -39,7 +40,7 @@ WEB_CONFIG_SCHEMA = {
             "description": "控制所有 Bot 默认使用的模型 provider、模型名和采样参数。",
             "restart": "保存后新请求生效；运行中 Gateway 不需要重启。",
             "fields": {
-                "provider": "选择 MiniMax、OpenAI、Claude、MiMo、TeleClaw、Ollama 或自定义兼容接口。",
+                "provider": "选择 MiniMax、OpenAI、Claude、MiMo、DeepSeek、TeleClaw、Ollama 或自定义兼容接口。",
                 "api_key": "敏感字段。留空或保留掩码表示继续使用旧值。",
                 "base_url": "Provider API 基础地址；Ollama 通常是 http://localhost:11434/v1。",
                 "model": "具体模型名称，例如 gpt-4o、qwen2.5-14b。",
@@ -1045,7 +1046,7 @@ class ConfigAdminService:
         })
         models_data["model"] = existing_global
         _write_yaml(self.models_path, models_data)
-        if provider in {"minimax", "openai", "claude", "mimo"} and not incoming_api_key:
+        if provider in {"minimax", "openai", "claude", "mimo", "deepseek"} and not incoming_api_key:
             warnings.append(f"{provider} 需要 API Key，当前保存后可能无法启动模型。")
         return warnings
 

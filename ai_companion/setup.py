@@ -858,7 +858,8 @@ async def run_setup():
     console.print("  3. Claude       - Anthropic Claude 模型")
     console.print("  4. MiMo          - 小米 MiMo 大模型")
     console.print("  5. Ollama        - 本地运行的大模型（如 qwen2.5）")
-    console.print("  6. 自定义        - 接入其他 API")
+    console.print("  6. DeepSeek      - DeepSeek 大模型（deepseek-v4-pro 等）")
+    console.print("  7. 自定义        - 接入其他 API")
 
     provider_choice_map = {
         "minimax": "1",
@@ -866,14 +867,15 @@ async def run_setup():
         "claude": "3",
         "mimo": "4",
         "ollama": "5",
-        "custom": "6",
+        "deepseek": "6",
+        "custom": "7",
     }
     if existing_config:
         console.print("[dim]发现现有模型配置；本步骤只会合并更新所选 provider，其他 provider/memory 配置会保留[/dim]")
 
     model_choice = Prompt.ask(
         "\n请选择模型来源",
-        choices=["1", "2", "3", "4", "5", "6"],
+        choices=["1", "2", "3", "4", "5", "6", "7"],
         default=provider_choice_map.get(existing_provider, "1")
     )
 
@@ -883,7 +885,8 @@ async def run_setup():
         "3": ("claude", "Claude", "claude-3-opus-20240229", "https://api.anthropic.com/v1", 20000),
         "4": ("mimo", "MiMo", "mimo-v2.5-pro", "https://token-plan-cn.xiaomimimo.com/v1", 1048576),
         "5": ("ollama", "Ollama (本地)", "qwen2.5-14b", "http://localhost:11434/v1", 20000),
-        "6": ("custom", "自定义", "", "", 20000),
+        "6": ("deepseek", "DeepSeek", "deepseek-v4-pro", "https://api.deepseek.com/v1", 65536),
+        "7": ("custom", "自定义", "", "", 20000),
     }
 
     provider_key, provider_name, default_model, default_url, default_context_tokens = model_map[model_choice]
@@ -909,7 +912,7 @@ async def run_setup():
     else:
         console.print("[dim]Ollama 默认不需要 API Key[/dim]")
 
-    if model_choice == "6":
+    if model_choice == "7":
         custom_url = Prompt.ask("请输入 API URL", default=existing_base_url or "https://api.example.com/v1")
         custom_model = Prompt.ask("请输入模型名称", default=existing_model or "custom-model")
     else:

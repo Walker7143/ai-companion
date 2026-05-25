@@ -6,6 +6,7 @@
 - openai: OpenAI GPT 系列
 - claude: Anthropic Claude 系列
 - mimo: Xiaomi MiMo 大模型
+- deepseek: DeepSeek 大模型
 - tele: TeleClaw GLM-5 Turbo
 - ollama: Ollama 本地模型
 - custom: 自定义 HTTP API
@@ -16,6 +17,7 @@ from .minimax_adapter import MiniMaxAdapter
 from .openai_adapter import OpenAIAdapter
 from .claude_adapter import ClaudeAdapter
 from .mimo_adapter import MimoAdapter
+from .deepseek_adapter import DeepSeekAdapter
 from .tele_adapter import TeleAdapter
 from .ollama_adapter import OllamaAdapter
 from .custom_adapter import CustomAdapter
@@ -26,6 +28,7 @@ __all__ = [
     "OpenAIAdapter",
     "ClaudeAdapter",
     "MimoAdapter",
+    "DeepSeekAdapter",
     "TeleAdapter",
     "OllamaAdapter",
     "CustomAdapter",

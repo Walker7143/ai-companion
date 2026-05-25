@@ -11,6 +11,7 @@ from .adapters import (
     OpenAIAdapter,
     ClaudeAdapter,
     MimoAdapter,
+    DeepSeekAdapter,
     OllamaAdapter,
     CustomAdapter,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "OpenAIAdapter",
     "ClaudeAdapter",
     "MimoAdapter",
+    "DeepSeekAdapter",
     "OllamaAdapter",
     "CustomAdapter",
 ]

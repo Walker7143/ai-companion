@@ -17,6 +17,7 @@ _PROVIDER_ENV_KEYS = {
     "openai": "OPENAI_API_KEY",
     "claude": "ANTHROPIC_API_KEY",
     "mimo": "MIMO_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
 }
 
 
