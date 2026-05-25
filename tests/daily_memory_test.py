@@ -773,6 +773,27 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertEqual(without_proactive[0]["content"], "行，那你先去陪她。")
         self.assertFalse(any(item.get("metadata", {}).get("proactive") for item in without_proactive))
 
+    def test_simple_summary_extracts_open_threads_commitments_and_mood(self):
+        from ai_companion.memory.stores.daily import DailyMemoryStore
+
+        store = DailyMemoryStore(":memory:")
+        payload = store._simple_summary(
+            existing=None,
+            messages=[
+                {"role": "user", "content": "我刚醒，下午还得上班，先点个外卖。"},
+                {"role": "assistant", "content": "行，那你赶紧吃点东西，晚点记得去上班。"},
+                {"role": "user", "content": "今天有点烦，开会开麻了。"},
+                {"role": "assistant", "content": "等你忙完我拍几张照片给你看。"},
+            ],
+        )
+
+        self.assertTrue(payload["open_threads"])
+        self.assertTrue(payload["commitments"])
+        self.assertTrue(payload["mood"])
+        self.assertIn("我刚醒", payload["open_threads"][0])
+        self.assertTrue(any("拍几张照片给你看" in item for item in payload["commitments"]))
+        self.assertTrue(any("有点烦" in item for item in payload["mood"]))
+
     def test_proactive_engine_records_successful_sends(self):
         async def run():
             with tempfile.TemporaryDirectory(prefix="daily-memory-proactive-") as tmp:

@@ -742,6 +742,7 @@ class MemoryPromptBuilder:
     def _format_daily_context(self, retrieved: RetrievedMemory) -> str:
         data = retrieved.daily_context or {}
         relationship = retrieved.relationship_state if isinstance(retrieved.relationship_state, dict) else {}
+        intent = retrieved.intent or "casual_chat"
         committed_relationship = _is_committed_relationship(
             relationship.get("relationship_label") or relationship.get("relationship_level")
         )
@@ -806,11 +807,14 @@ class MemoryPromptBuilder:
 
         if self_memory:
             lines.append("  - Bot 自己最近主动做过的事：")
-            for item in self_memory[:5]:
+            limit = 2 if intent == "proactive_generation" else 5
+            for item in self_memory[:limit]:
                 if not isinstance(item, dict):
                     continue
                 content = str(item.get("content") or "").strip()
                 if not content:
+                    continue
+                if intent == "proactive_generation" and any(marker in content for marker in ("你今天怎么一点动静都没有", "吃饭", "睡觉", "上班")):
                     continue
                 kind = item.get("kind") or "assistant_initiated"
                 date = item.get("local_date") or "最近"
@@ -823,6 +827,7 @@ class MemoryPromptBuilder:
         if not rollups:
             return ""
         lines: list[str] = []
+        intent = retrieved.intent or "casual_chat"
         for item in rollups[:4]:
             if not isinstance(item, dict):
                 continue
@@ -830,6 +835,12 @@ class MemoryPromptBuilder:
             topic_key = str(item.get("topic_key") or "").strip()
             summary = str(item.get("summary") or "").strip()
             if not summary:
+                continue
+            if intent == "proactive_generation" and (
+                summary in {"2026-05-24", "2026-05-25"}
+                or "明天上班" in summary
+                or "29号" in summary
+            ):
                 continue
             prefix = "/".join(part for part in (scope, topic_key) if part) or "rollup"
             lines.append(f"  - {prefix}：{summary[:180]}")

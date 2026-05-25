@@ -542,20 +542,57 @@ class DailyMemoryStore:
 
     def _simple_summary(self, *, existing: dict[str, Any] | None, messages: list[dict[str, Any]]) -> dict[str, Any]:
         snippets = []
+        open_threads: list[str] = []
+        commitments: list[str] = []
+        mood: list[str] = []
         for item in messages:
             content = str(item.get("content") or "").strip()
             if content:
                 snippets.append(f"{item.get('role')}: {content[:80]}")
+                self._collect_simple_summary_signals(
+                    role=str(item.get("role") or ""),
+                    content=content,
+                    open_threads=open_threads,
+                    commitments=commitments,
+                    mood=mood,
+                )
         base = str((existing or {}).get("summary") or "").strip()
         new_summary = "；".join(snippets[-8:])
         summary = f"{base}；{new_summary}" if base and new_summary else (base or new_summary)
         return {
             "summary": summary[:700],
             "topics": [],
-            "open_threads": [],
-            "mood": [],
-            "commitments": [],
+            "open_threads": open_threads[:4],
+            "mood": mood[:4],
+            "commitments": commitments[:4],
         }
+
+    def _collect_simple_summary_signals(
+        self,
+        *,
+        role: str,
+        content: str,
+        open_threads: list[str],
+        commitments: list[str],
+        mood: list[str],
+    ) -> None:
+        compact = " ".join(str(content or "").split())
+        if not compact:
+            return
+
+        def add_unique(target: list[str], value: str):
+            value = value.strip()
+            if value and value not in target:
+                target.append(value)
+
+        if role == "user":
+            if any(marker in compact for marker in ("上班", "开会", "外卖", "盖饭", "休息", "刚醒", "陪", "过生日", "打游戏", "睡")):
+                add_unique(open_threads, compact[:90])
+            if any(marker in compact for marker in ("累", "烦", "生气", "开心", "气死我了", "难过", "崩")):
+                add_unique(mood, compact[:70])
+        elif role == "assistant":
+            if any(marker in compact for marker in ("等你", "明天", "晚点", "回头", "我叫你", "拍几张照片给你看", "记得")):
+                add_unique(commitments, compact[:90])
 
     def _summary_limit_for_intent(self, intent: str) -> int:
         if intent in {"recall_past", "emotional_support"}:

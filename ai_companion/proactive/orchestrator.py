@@ -39,6 +39,12 @@ class ProactiveOrchestrator:
         life = self._life_event_motive(now)
         if life:
             candidates.append(life)
+        idle_ping = self._idle_ping_motive(now)
+        if idle_ping:
+            candidates.append(idle_ping)
+        idle_reminder = self._idle_reminder_motive(now)
+        if idle_reminder:
+            candidates.append(idle_reminder)
         if not candidates:
             return None
         return sorted(candidates, key=lambda m: (-m.priority, m.task.due_at if m.task else now))[0]
@@ -240,6 +246,48 @@ class ProactiveOrchestrator:
             prompt_context=prompt_context,
             metadata={"life_event_id": event.id},
         )
+
+    def _idle_ping_motive(self, now: datetime) -> ProactiveMotive | None:
+        if not getattr(self.config, "idle_ping_enabled", False):
+            return None
+        if not self._idle_hours_reached():
+            return None
+        scene_anchor_checker = getattr(self.engine, "has_scene_anchor_for_idle_ping", None)
+        has_scene_anchor = bool(scene_anchor_checker()) if callable(scene_anchor_checker) else False
+        if not has_scene_anchor and getattr(self.config, "idle_ping_requires_scene_anchor", True):
+            return None
+        if not getattr(self.engine, "can_send_idle_ping_now", lambda _now: True)(now):
+            return None
+        return ProactiveMotive(
+            type=ProactiveMotiveType.IDLE_PING,
+            priority=20,
+            reason="想轻轻冒个泡，顺着最近的关系温度和现场发一句",
+            prompt_context="这是一条轻量陪伴型主动消息。像熟人顺手发来的一句话，不催生活安排，不强行盘问状态。",
+        )
+
+    def _idle_reminder_motive(self, now: datetime) -> ProactiveMotive | None:
+        if not getattr(self.config, "idle_reminder_enabled", True):
+            return None
+        if not self._idle_hours_reached():
+            return None
+        if not getattr(self.engine, "has_grounded_idle_reminder_scene", lambda: False)():
+            return None
+        return ProactiveMotive(
+            type=ProactiveMotiveType.IDLE_REMINDER,
+            priority=10,
+            reason="最近现场里有明确的作息/安排线索，可以做一条低频兜底提醒",
+            prompt_context="这是一条最后兜底的提醒型主动消息。只有在最近现场已经明确出现作息、吃饭、上班、休息等线索时，才允许轻轻提醒一次。",
+        )
+
+    def _idle_hours_reached(self) -> bool:
+        calc = getattr(self.engine, "_calc_idle_hours", None)
+        if calc is None:
+            return False
+        try:
+            idle_hours = float(calc())
+        except Exception:
+            return False
+        return idle_hours >= float(getattr(self.config, "idle_threshold_hours", 24))
 
     def _context_for_life_event(self, event) -> str:
         lines = [

@@ -919,6 +919,73 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sent_messages, [])
             self.assertEqual(len(model.calls), 1)
 
+    async def test_send_proactive_message_skips_generic_probe_after_regeneration(self):
+        with TemporaryDirectory(prefix="proactive-generic-probe-stop-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = SequenceModel(['{"message":"你今天怎么一点动静都没有？你那边忙不忙？"}'])
+
+            class WorkingStub:
+                current_session = None
+
+                def list_sessions(self, limit=1):
+                    return [{"session_id": "gw-generic"}]
+
+                def get_recent(self, session_id=None, turns=6, include_proactive=True):
+                    rows = [
+                        {"role": "assistant", "content": "点个正经点的，你不是在减肥吗，也别太亏待自己。"},
+                        {"role": "user", "content": "点份盖饭"},
+                    ]
+                    return rows
+
+            class UnderstandingStub:
+                def format_for_prompt(self):
+                    return ""
+
+                def known_fact_keys(self):
+                    return set()
+
+                def load(self):
+                    return {}
+
+            class SemanticStub:
+                async def get_all_facts(self, **kwargs):
+                    return {}
+
+            class RelationshipStub:
+                async def get_state(self, **kwargs):
+                    return {"relationship_label": "朋友"}
+
+            class MemoryStub:
+                _session_id = None
+                bot_id = "yangsisi"
+                user_id = "default_user"
+                working = WorkingStub()
+                user_understanding = UnderstandingStub()
+                semantic = SemanticStub()
+                relationship = RelationshipStub()
+
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=model,
+                memory=MemoryStub(),
+            )
+            sent_messages = []
+
+            async def sender(message: str):
+                sent_messages.append(message)
+                return True
+
+            engine._platform_sender = sender
+            sent = await engine._send_proactive_message("你今天怎么一点动静都没有？你那边忙不忙？")
+
+            self.assertFalse(sent)
+            self.assertEqual(sent_messages, [])
+            self.assertEqual(len(model.calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

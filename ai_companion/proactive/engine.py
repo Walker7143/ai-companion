@@ -68,6 +68,7 @@ PROACTIVE_REGENERATION_CONTEXT_CHARS = 2200
 PROACTIVE_GENERATION_MAX_TOKENS = 2048
 PROACTIVE_REGENERATION_MAX_TOKENS = 2048
 PROACTIVE_DUPLICATE_REGENERATION_MAX_TOKENS = 512
+PROACTIVE_IDLE_PING_MAX_TOKENS = 1024
 
 
 # LLM 判断 Prompt
@@ -255,6 +256,43 @@ REGENERATE_PROACTIVE_MESSAGE_PROMPT = """【角色】
 
 【输出格式】
 输出 JSON：{{"message":"一条可以直接发送的消息"}}
+只输出 JSON，不要其他内容。"""
+
+GENERATE_IDLE_PING_PROMPT = """【角色】
+你是{bot_name}，性格：{personality_tags}
+
+{shared_style_prompt}
+
+【你的真实说话风格】
+{persona_style_context}
+
+【Bot 时间线】
+{bot_time_context}
+
+【当前生活锚点】
+{current_life_context}
+
+【当前关系】
+{relationship_desc}
+
+【用户记忆与最近上下文】
+{user_memory_context}
+
+【最近现场优先级】
+{recent_scene_anchor}
+
+【这次主动联系的定位】
+- 这是一条轻量陪伴型主动消息，不是提醒，不是追问，不是查岗。
+- 目标是像真人顺手发来的一句话：有存在感、有情绪、有点生活气，但不打扰。
+- 优先写成承接、轻吐槽、顺手分享或软乎乎的一句挂念。
+- 不要用“你今天怎么一点动静都没有”“在吗”“忙不忙”“吃饭没”“睡没”“下班没”这种泛问。
+- 不要复述用户刚才的原话，不要把用户对 Bot 的抱怨、指令、运维话术说回去。
+- 如果最近现场已经在聊吃饭、上班、睡觉，只能轻轻承接，不能再催第二遍。
+- 如果最近现场不足以支撑一条自然消息，就不要硬编大场景。
+- {'可以用自然问句收尾，但不能是盘问式。' if allow_question else '尽量不要用问句收尾，保持像顺手冒泡。'}
+
+【输出格式】
+输出 JSON：{{"message":"一条适合直接发送的轻量陪伴消息"}}
 只输出 JSON，不要其他内容。"""
 
 # 性格消息模板（fallback 用）
@@ -607,6 +645,7 @@ class ProactiveEngine:
             "recent_messages": [],
             "non_proactive_recent": [],
             "latest_unreplied_proactive": None,
+            "scene_signals": {},
         }
         if not self.memory or not getattr(self.memory, "working", None):
             return data
@@ -638,7 +677,76 @@ class ProactiveEngine:
             data["non_proactive_recent"] = [
                 item for item in recent_messages if not self._is_proactive_message_item(item)
             ]
+        data["scene_signals"] = self._extract_scene_signals(
+            data.get("non_proactive_recent") or [],
+            latest_unreplied_proactive=data.get("latest_unreplied_proactive"),
+        )
         return data
+
+    def _extract_scene_signals(self, recent_messages: list[dict], *, latest_unreplied_proactive: dict | None = None) -> dict:
+        signals = {
+            "user_messages": [],
+            "assistant_messages": [],
+            "current_arrangements": [],
+            "commitments": [],
+            "corrections": [],
+            "bot_recent_topics": [],
+        }
+        for item in list(reversed(recent_messages[-6:])):
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "")
+            content = " ".join(str(item.get("content") or "").split())
+            if not content:
+                continue
+            if role == "user":
+                signals["user_messages"].append(content[:160])
+                if any(marker in content for marker in ("上班", "开会", "外卖", "盖饭", "休息", "刚醒", "刚在忙工作", "陪", "过生日", "打游戏", "睡")):
+                    signals["current_arrangements"].append(content[:160])
+                if any(marker in content for marker in ("不是", "明明", "别这么叫", "别叫", "我没有", "我哪有")):
+                    signals["corrections"].append(content[:160])
+            elif role == "assistant":
+                signals["assistant_messages"].append(content[:160])
+                if any(marker in content for marker in ("等你", "明天", "回头", "晚点", "我叫你", "拍几张照片给你看")):
+                    signals["commitments"].append(content[:160])
+        if isinstance(latest_unreplied_proactive, dict):
+            content = " ".join(str(latest_unreplied_proactive.get("content") or "").split())
+            if content:
+                signals["bot_recent_topics"].append(content[:160])
+        return signals
+
+    def has_scene_anchor_for_idle_ping(self) -> bool:
+        anchor = self._recent_scene_anchor_data()
+        signals = anchor.get("scene_signals") if isinstance(anchor.get("scene_signals"), dict) else {}
+        return bool(
+            anchor.get("non_proactive_recent")
+            and (
+                signals.get("user_messages")
+                or signals.get("assistant_messages")
+                or signals.get("current_arrangements")
+                or signals.get("commitments")
+            )
+        )
+
+    def has_grounded_idle_reminder_scene(self) -> bool:
+        anchor = self._recent_scene_anchor_data()
+        signals = anchor.get("scene_signals") if isinstance(anchor.get("scene_signals"), dict) else {}
+        arrangements = signals.get("current_arrangements") if isinstance(signals.get("current_arrangements"), list) else []
+        return bool(arrangements)
+
+    def can_send_idle_ping_now(self, now: datetime) -> bool:
+        state = getattr(self, "state", None)
+        if state is None:
+            return True
+        max_daily = int(getattr(self.config, "idle_ping_max_daily", 2) or 0)
+        today_count = int(getattr(state, "today_proactive_count", 0) or 0)
+        if max_daily >= 0 and today_count >= max_daily:
+            return False
+        cooldown_minutes = int(getattr(self.config, "idle_ping_cooldown_minutes", 180) or 0)
+        last_proactive_time = getattr(state, "last_proactive_time", None)
+        if cooldown_minutes > 0 and isinstance(last_proactive_time, datetime):
+            return (now - last_proactive_time) >= timedelta(minutes=cooldown_minutes)
+        return True
 
     def _format_recent_scene_anchor(self, anchor: dict | None, *, for_generation: bool) -> str:
         anchor = anchor or {}
@@ -749,6 +857,58 @@ class ProactiveEngine:
         if "去陪你妹妹" in recent_joined and "一个人在北京" in candidate_norm:
             return True
         return False
+
+    def _looks_like_generic_probe(self, message: str) -> bool:
+        text = self._clean_message(message)
+        generic_markers = (
+            "你今天怎么一点动静都没有",
+            "忙不忙",
+            "下班来着",
+            "吃饭没",
+            "睡没",
+            "在吗",
+            "最近怎么样",
+        )
+        return any(marker in text for marker in generic_markers)
+
+    def _looks_like_parrot_user(self, message: str, anchor: dict | None) -> bool:
+        text = self._normalize_duplicate_check_text(message)
+        signals = anchor.get("scene_signals") if isinstance(anchor, dict) else {}
+        user_messages = signals.get("user_messages") if isinstance(signals, dict) else []
+        for item in user_messages or []:
+            normalized = self._normalize_duplicate_check_text(item)
+            if normalized and (normalized in text or text in normalized):
+                return True
+        return False
+
+    def _looks_like_topic_jump(self, message: str, anchor: dict | None) -> bool:
+        text = self._clean_message(message)
+        if not text:
+            return False
+        signals = anchor.get("scene_signals") if isinstance(anchor, dict) else {}
+        if not isinstance(signals, dict):
+            return False
+        has_arrangements = bool(signals.get("current_arrangements"))
+        if has_arrangements and ("29号见" in text or "别让我等太久" in text) and "29号" not in " ".join(signals.get("current_arrangements", [])):
+            return True
+        return False
+
+    def _classify_quality_gate_issue(self, message: str, anchor: dict | None) -> str | None:
+        latest_unreplied_proactive = anchor.get("latest_unreplied_proactive") if isinstance(anchor, dict) else None
+        if isinstance(latest_unreplied_proactive, dict) and self._is_same_topic_reminder(
+            message,
+            str(latest_unreplied_proactive.get("content") or ""),
+        ):
+            return "duplicate_proactive"
+        if self._conflicts_with_recent_scene(message, anchor):
+            return "scene_conflict"
+        if self._looks_like_generic_probe(message):
+            return "generic_probe"
+        if self._looks_like_parrot_user(message, anchor):
+            return "parrot_user"
+        if self._looks_like_topic_jump(message, anchor):
+            return "topic_jump"
+        return None
 
     async def _regenerate_duplicate_or_conflicting_idle_message(
         self,
@@ -976,10 +1136,32 @@ class ProactiveEngine:
             )
             if not isinstance(retrieved, RetrievedMemory):
                 return ""
-            return str(prompt_builder.build(retrieved) or "").strip()
+            rendered = str(prompt_builder.build(retrieved) or "").strip()
+            return self._filter_proactive_shared_memory_suffix(rendered)
         except Exception as exc:
             logger.debug("[ProactiveEngine] 读取共享记忆 suffix 失败: %s", exc)
             return ""
+
+    def _filter_proactive_shared_memory_suffix(self, suffix: str) -> str:
+        text = str(suffix or "").strip()
+        if not text:
+            return ""
+        banned_markers = (
+            "主动唤醒", "莫名其妙", "效果一直不好", "运维", "修复", "实现", "优化",
+            "看下最近的主动唤醒消息", "Bot 质量", "管理员", "日志", "代码",
+        )
+        filtered_lines = []
+        for line in text.splitlines():
+            compact = line.strip()
+            if not compact:
+                filtered_lines.append(line)
+                continue
+            if any(marker in compact for marker in banned_markers):
+                continue
+            if "记忆 rollup" in compact and ("明天上班" in compact or "29号" in compact):
+                continue
+            filtered_lines.append(line)
+        return "\n".join(filtered_lines).strip()
 
     async def _build_aligned_user_memory_context(self, current_input: str, *, motive=None) -> str:
         blocks: list[str] = []
@@ -1331,7 +1513,7 @@ class ProactiveEngine:
             logger.error(f"[ProactiveEngine] LLM 判断失败: {e}")
             return ProactiveDecision(False, f"LLM错误: {e}")
 
-    async def generate_message(self, reason: str = "") -> str:
+    async def generate_message(self, reason: str = "", *, motive_type: str = "idle_reminder") -> str:
         """让 LLM 生成主动消息"""
         # 判断场景
         has_topic = False
@@ -1386,26 +1568,41 @@ class ProactiveEngine:
                 if event.topic_prompt:
                     bot_life_context += f"\n可以这样提起：{event.topic_prompt}"
 
-        prompt = GENERATE_MESSAGE_PROMPT.format(
-            bot_name=getattr(self, "bot_name", self.bot_id),
-            personality_tags=personality_type,
-            shared_style_prompt=shared_style_prompt,
-            persona_style_context=persona_style_context,
-            bot_time_context=self._build_bot_time_context(),
-            current_life_context=current_life_context,
-            relationship_desc=rel_desc,
-            feeling_description=feeling,
-            contact_reason=reason or "想和用户聊天",
-            bot_life_context=bot_life_context,
-            user_memory_context=user_memory_context,
-            recent_scene_anchor=self._format_recent_scene_anchor(recent_scene_anchor, for_generation=True),
-        )
+        scene_anchor_text = self._format_recent_scene_anchor(recent_scene_anchor, for_generation=True)
+        if motive_type == "idle_ping":
+            prompt = GENERATE_IDLE_PING_PROMPT.format(
+                bot_name=getattr(self, "bot_name", self.bot_id),
+                personality_tags=personality_type,
+                shared_style_prompt=shared_style_prompt,
+                persona_style_context=persona_style_context,
+                bot_time_context=self._build_bot_time_context(),
+                current_life_context=current_life_context,
+                relationship_desc=rel_desc,
+                user_memory_context=user_memory_context,
+                recent_scene_anchor=scene_anchor_text,
+                allow_question="是" if getattr(self.config, "idle_ping_allow_question", True) else "否",
+            )
+        else:
+            prompt = GENERATE_MESSAGE_PROMPT.format(
+                bot_name=getattr(self, "bot_name", self.bot_id),
+                personality_tags=personality_type,
+                shared_style_prompt=shared_style_prompt,
+                persona_style_context=persona_style_context,
+                bot_time_context=self._build_bot_time_context(),
+                current_life_context=current_life_context,
+                relationship_desc=rel_desc,
+                feeling_description=feeling,
+                contact_reason=reason or "想和用户聊天",
+                bot_life_context=bot_life_context,
+                user_memory_context=user_memory_context,
+                recent_scene_anchor=scene_anchor_text,
+            )
 
         try:
             response = await self._chat_with_proactive_limits(
                 prompt,
-                max_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
-                max_completion_tokens=PROACTIVE_GENERATION_MAX_TOKENS,
+                max_tokens=PROACTIVE_IDLE_PING_MAX_TOKENS if motive_type == "idle_ping" else PROACTIVE_GENERATION_MAX_TOKENS,
+                max_completion_tokens=PROACTIVE_IDLE_PING_MAX_TOKENS if motive_type == "idle_ping" else PROACTIVE_GENERATION_MAX_TOKENS,
             )
             # 尝试解析结构化输出
             message = self._parse_structured_message(response)
@@ -1659,7 +1856,11 @@ class ProactiveEngine:
         return visible[-limit:]
 
     async def send_contextual_proactive_message(self, motive: "ProactiveMotive") -> bool:
-        message = await self.generate_contextual_message(motive)
+        motive_type = getattr(getattr(motive, "type", None), "value", str(getattr(motive, "type", "")))
+        if motive_type in {"idle_ping", "idle_reminder"}:
+            message = await self.generate_message(motive.reason, motive_type=motive_type)
+        else:
+            message = await self.generate_contextual_message(motive)
         target = self._target_with_motive_metadata(motive)
         return await self._send_proactive_message(message, target=target)
 
@@ -1671,6 +1872,10 @@ class ProactiveEngine:
             return "刚才那个话题我还在想，想接着跟你聊聊。"
         if motive_type == "emotion_followup":
             return "我刚才还是有点放心不下你，想问问你现在好些了吗？"
+        if motive_type == "idle_ping":
+            return "刚才路过窗边的时候想起你了，就冒个泡。"
+        if motive_type == "idle_reminder":
+            return "想起你今天还有事要忙，就顺手戳你一下。"
         return self._get_fallback_message("with_topic")
 
     def _target_with_motive_metadata(self, motive: "ProactiveMotive") -> dict | None:
@@ -2037,7 +2242,7 @@ class ProactiveEngine:
             return None
 
         # 生成消息
-        message = await self.generate_message(decision.reason)
+        message = await self.generate_message(decision.reason, motive_type="idle_reminder")
 
         # 发送并更新状态
         sent = await self._send_proactive_message(message)
@@ -2074,17 +2279,16 @@ class ProactiveEngine:
 
         message = self._clean_message(message)
         anchor = self._recent_scene_anchor_data()
-        latest_unreplied_proactive = anchor.get("latest_unreplied_proactive")
-        duplicate_with_previous = isinstance(latest_unreplied_proactive, dict) and self._is_same_topic_reminder(
-            message,
-            str(latest_unreplied_proactive.get("content") or ""),
-        )
-        conflict_with_scene = self._conflicts_with_recent_scene(message, anchor)
-        if duplicate_with_previous or conflict_with_scene:
+        issue = self._classify_quality_gate_issue(message, anchor)
+        motive_kind = None
+        target_meta = target.get("metadata") if isinstance(target, dict) and isinstance(target.get("metadata"), dict) else {}
+        if isinstance(target_meta, dict):
+            motive_kind = str(target_meta.get("proactive_kind") or "").strip()
+        if issue:
             logger.warning(
-                "[ProactiveEngine] 主动消息与最近现场重复或冲突(duplicate=%s, conflict=%s)，尝试重生成",
-                duplicate_with_previous,
-                conflict_with_scene,
+                "[ProactiveEngine] 主动消息触发质量门控(issue=%s, motive=%s)，尝试重生成",
+                issue,
+                motive_kind or "idle_reminder",
             )
             regenerated = await self._regenerate_duplicate_or_conflicting_idle_message(
                 invalid_message=message,
@@ -2093,15 +2297,12 @@ class ProactiveEngine:
             regenerated = self._clean_message(regenerated or "")
             if regenerated:
                 message = regenerated
-                duplicate_with_previous = isinstance(latest_unreplied_proactive, dict) and self._is_same_topic_reminder(
-                    message,
-                    str(latest_unreplied_proactive.get("content") or ""),
-                )
-                conflict_with_scene = self._conflicts_with_recent_scene(message, anchor)
-            if duplicate_with_previous or conflict_with_scene:
+                issue = self._classify_quality_gate_issue(message, anchor)
+            if issue:
                 logger.warning(
-                    "[ProactiveEngine] 主动消息重生成后仍重复或冲突，放弃发送(issue=%s)",
-                    "duplicate" if duplicate_with_previous else "scene_conflict",
+                    "[ProactiveEngine] 主动消息重生成后仍未通过质量门控，放弃发送(issue=%s, motive=%s)",
+                    issue,
+                    motive_kind or "idle_reminder",
                 )
                 return False
 

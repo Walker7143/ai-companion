@@ -68,6 +68,10 @@ class ProactiveConfig:
             },
             "idle_ping": {
                 "enabled": True,
+                "cooldown_minutes": 180,
+                "max_daily": 2,
+                "requires_scene_anchor": True,
+                "allow_question": True,
             },
             "closeout_analyzer": {
                 "enabled": True,
@@ -323,6 +327,22 @@ class ProactiveConfig:
     @property
     def idle_ping_enabled(self) -> bool:
         return bool(self._continuity_section("idle_ping").get("enabled", True))
+
+    @property
+    def idle_ping_cooldown_minutes(self) -> int:
+        return int(self._continuity_section("idle_ping").get("cooldown_minutes", 180))
+
+    @property
+    def idle_ping_max_daily(self) -> int:
+        return int(self._continuity_section("idle_ping").get("max_daily", 2))
+
+    @property
+    def idle_ping_requires_scene_anchor(self) -> bool:
+        return bool(self._continuity_section("idle_ping").get("requires_scene_anchor", True))
+
+    @property
+    def idle_ping_allow_question(self) -> bool:
+        return bool(self._continuity_section("idle_ping").get("allow_question", True))
 
     @property
     def closeout_analyzer_enabled(self) -> bool:

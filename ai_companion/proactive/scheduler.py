@@ -88,7 +88,7 @@ class ProactiveScheduler:
                 logger.info("[ProactiveScheduler] 已通过 motive orchestrator 发送主动消息")
                 return
 
-        # 检查空闲触发（主动消息发送受黄金时段限制）
+        # 老 idle_reminder 只保留为向后兼容兜底；默认风格由 motive 层统一控制。
         if self.config.idle_reminder_enabled and self.config.is_active:
             if self._is_golden_hour():
                 logger.info("[ProactiveScheduler] 黄金时段，检查是否需要发送主动消息")

@@ -111,7 +111,11 @@ WEB_CONFIG_SCHEMA = {
                 "emotion_followup_delay_minutes": "情绪回访默认等待分钟数。",
                 "emotion_followup_expires_hours": "情绪回访动机过期小时数。",
                 "life_event_motive_enabled": "是否允许生活事件分享作为主动动机。",
-                "idle_ping_enabled": "是否允许没有更高质量动机时发送普通陪伴问候。",
+            "idle_ping_enabled": "是否允许没有更高质量动机时发送普通陪伴问候。",
+            "idle_ping_cooldown_minutes": "轻量陪伴型主动消息的最小冷却分钟数。",
+            "idle_ping_max_daily": "轻量陪伴型主动消息每天最多发送次数。",
+            "idle_ping_requires_scene_anchor": "是否要求最近真实对话现场足够明确时才允许发送轻量陪伴型主动消息。",
+            "idle_ping_allow_question": "轻量陪伴型主动消息是否允许以自然问句收尾。",
             },
         },
         {
@@ -852,6 +856,10 @@ class ConfigAdminService:
             "emotion_followup_expires_hours": _as_int(emotion_followup.get("expires_hours"), 24, 1),
             "life_event_motive_enabled": _as_bool(life_event.get("enabled"), True),
             "idle_ping_enabled": _as_bool(idle_ping.get("enabled"), True),
+            "idle_ping_cooldown_minutes": _as_int(idle_ping.get("cooldown_minutes"), 180, 1),
+            "idle_ping_max_daily": _as_int(idle_ping.get("max_daily"), 2, 0, 20),
+            "idle_ping_requires_scene_anchor": _as_bool(idle_ping.get("requires_scene_anchor"), True),
+            "idle_ping_allow_question": _as_bool(idle_ping.get("allow_question"), True),
             "closeout_analyzer_enabled": _as_bool(closeout.get("enabled"), True),
             "closeout_analyzer_max_tokens": _as_int(closeout.get("max_tokens"), 200, 1),
             "closeout_analyzer_fallback_to_regex": _as_bool(closeout.get("fallback_to_regex"), True),
@@ -1221,6 +1229,25 @@ class ConfigAdminService:
 
         life_event["enabled"] = _as_bool(proactive_data.get("life_event_motive_enabled"), _as_bool(life_event.get("enabled"), True))
         idle_ping["enabled"] = _as_bool(proactive_data.get("idle_ping_enabled"), _as_bool(idle_ping.get("enabled"), True))
+        idle_ping["cooldown_minutes"] = _as_int(
+            proactive_data.get("idle_ping_cooldown_minutes"),
+            idle_ping.get("cooldown_minutes", 180),
+            1,
+        )
+        idle_ping["max_daily"] = _as_int(
+            proactive_data.get("idle_ping_max_daily"),
+            idle_ping.get("max_daily", 2),
+            0,
+            20,
+        )
+        idle_ping["requires_scene_anchor"] = _as_bool(
+            proactive_data.get("idle_ping_requires_scene_anchor"),
+            _as_bool(idle_ping.get("requires_scene_anchor"), True),
+        )
+        idle_ping["allow_question"] = _as_bool(
+            proactive_data.get("idle_ping_allow_question"),
+            _as_bool(idle_ping.get("allow_question"), True),
+        )
 
         closeout = _continuity_child("closeout_analyzer")
         closeout["enabled"] = _as_bool(proactive_data.get("closeout_analyzer_enabled"), _as_bool(closeout.get("enabled"), True))
