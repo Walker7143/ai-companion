@@ -101,6 +101,15 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNone(engine._classify_generated_message_issue("今天风有点大，突然想起你了。"))
 
+    def test_quality_gate_flags_thin_content(self):
+        with TemporaryDirectory(prefix="proactive-thin-quality-") as td:
+            engine = _build_engine(Path(td), "")
+            self.assertEqual(engine._classify_quality_gate_issue("想起个事。", anchor=None), "thin_content")
+            self.assertEqual(engine._classify_quality_gate_issue("有件事。", anchor=None), "thin_content")
+            self.assertIsNone(
+                engine._classify_quality_gate_issue("刚才想到你了，就顺手来一句。", anchor=None)
+            )
+
     def test_classify_partial_structured_parse_failure(self):
         with TemporaryDirectory(prefix="proactive-placeholder-") as td:
             engine = _build_engine(Path(td), "")
@@ -181,6 +190,89 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(message, "对了，我刚才突然想起一件小事，想顺手跟你说一下。")
             self.assertNotEqual(message, "对了，我突然想起...")
 
+    def test_fallback_message_avoids_reply_tone_for_proactive_opening(self):
+        with TemporaryDirectory(prefix="proactive-fallback-reply-tone-") as td:
+            engine = _build_engine(Path(td), "")
+            engine.personality_type = "傲娇"
+
+            default_message = engine._get_fallback_message("default")
+            long_gap_message = engine._get_fallback_message("long_no_reply")
+            short_gap_message = engine._get_fallback_message("short_no_reply")
+
+            for message in (default_message, long_gap_message, short_gap_message):
+                self.assertNotIn("忘了我", message)
+                self.assertNotIn("不理我", message)
+                self.assertNotIn("总算想起我了", message)
+                self.assertNotIn("终于想起我了", message)
+
+    def test_high_cold_fallback_message_avoids_thin_content(self):
+        with TemporaryDirectory(prefix="proactive-fallback-thin-content-") as td:
+            engine = _build_engine(Path(td), "")
+            engine.personality_type = "高冷"
+
+            default_message = engine._get_fallback_message("default")
+            topic_message = engine._get_fallback_message("with_topic")
+
+            for message in (default_message, topic_message):
+                self.assertNotEqual(message, "想起个事。")
+                self.assertNotEqual(message, "有件事。")
+                self.assertNotEqual(message, "跟你说下。")
+                self.assertNotEqual(message, "听好了。")
+
+    def test_fallback_prefers_recent_scene_when_available(self):
+        class WorkingStub:
+            current_session = None
+
+            def list_sessions(self, limit=1):
+                return [{"session_id": "gw-scene"}]
+
+            def get_recent(self, session_id=None, turns=6, include_proactive=True):
+                rows = [
+                    {"role": "assistant", "content": "你先去吃饭，别又拖到太晚。"},
+                    {"role": "user", "content": "我刚点了盖饭，等会就吃。"},
+                ]
+                if include_proactive:
+                    return rows
+                return rows
+
+        class UnderstandingStub:
+            def format_for_prompt(self):
+                return ""
+
+            def known_fact_keys(self):
+                return set()
+
+        class SemanticStub:
+            async def get_all_facts(self, **kwargs):
+                return {}
+
+        class MemoryStub:
+            _session_id = None
+            bot_id = "test_bot"
+            user_id = "default_user"
+            working = WorkingStub()
+            user_understanding = UnderstandingStub()
+            semantic = SemanticStub()
+
+        with TemporaryDirectory(prefix="proactive-fallback-scene-") as td:
+            root = Path(td)
+            persona_dir = root / "persona"
+            persona_dir.mkdir(parents=True, exist_ok=True)
+            engine = ProactiveEngine(
+                bot_id="test_bot",
+                config=ProactiveConfig(persona_dir),
+                state=ProactiveState("test_bot", root / "runtime"),
+                model=None,
+                memory=MemoryStub(),
+                personality_type="温柔",
+            )
+
+            message = engine._get_fallback_message("default")
+
+            self.assertIn("冒个泡", message)
+            self.assertTrue("等那份盖饭" in message or "忙这个" in message or "刚才看你还在" in message)
+            self.assertNotEqual(message, "刚刚想起你，来问一声。")
+
     async def test_send_proactive_message_regenerates_invalid_message_before_send(self):
         with TemporaryDirectory(prefix="proactive-send-regenerate-") as td:
             root = Path(td)
@@ -245,6 +337,8 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             retry_prompt = model.calls[-1]["messages"][-1]["content"]
             self.assertIn("重新写一条全新的主动消息", retry_prompt)
             self.assertIn("不要使用固定模板", retry_prompt)
+            self.assertIn("这是你主动发起的一条消息", retry_prompt)
+            self.assertIn("不要重写成“总算想起我了”", retry_prompt)
 
     async def test_generate_message_falls_back_when_model_returns_unparsed_structured_payload(self):
         with TemporaryDirectory(prefix="proactive-structured-fallback-") as td:
@@ -257,6 +351,46 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('"opening"', message)
             self.assertNotIn('"topic"', message)
             self.assertNotIn('"ending"', message)
+
+    async def test_generate_message_prompt_marks_proactive_opening_not_reply(self):
+        with TemporaryDirectory(prefix="proactive-origin-guard-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = CaptureModel('{"message":"刚才想到你了，就顺手来找你。"}')
+            engine = ProactiveEngine(
+                bot_id="test_bot",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("test_bot", root / "runtime"),
+                model=model,
+                personality_type="温柔",
+            )
+
+            await engine.generate_message("想主动联系一下")
+
+            prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("这是你主动发起的一条消息", prompt)
+            self.assertIn("不要写成“总算想起我了”", prompt)
+
+    async def test_idle_ping_prompt_formats_question_rule(self):
+        with TemporaryDirectory(prefix="proactive-idle-ping-prompt-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = CaptureModel('{"message":"刚才想到你了，就来冒个泡。"}')
+            engine = ProactiveEngine(
+                bot_id="test_bot",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("test_bot", root / "runtime"),
+                model=model,
+                personality_type="温柔",
+            )
+
+            await engine.generate_message("想轻轻冒个泡", motive_type="idle_ping")
+
+            prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("可以用自然问句收尾，但不能是盘问式。", prompt)
+            self.assertNotIn("if allow_question else", prompt)
 
     def test_fallback_rotation_persists_across_state_reload(self):
         with TemporaryDirectory(prefix="proactive-fallback-rotation-") as td:
@@ -287,7 +421,10 @@ class ProactiveEnginePlaceholderTest(unittest.IsolatedAsyncioTestCase):
             second = reloaded_engine._get_fallback_message("default")
 
             self.assertEqual(first, "刚刚想起你，来问一声。")
-            self.assertEqual(second, "在忙什么呀？")
+            self.assertNotEqual(second, first)
+            self.assertNotIn("在吗", second)
+            self.assertNotIn("最近怎么样", second)
+            self.assertNotIn("总算想起我了", second)
             self.assertEqual(reloaded_state.last_opening_style, second)
 
     async def test_generate_contextual_message_falls_back_when_model_returns_schema_text(self):
@@ -981,6 +1118,73 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
 
             engine._platform_sender = sender
             sent = await engine._send_proactive_message("你今天怎么一点动静都没有？你那边忙不忙？")
+
+            self.assertFalse(sent)
+            self.assertEqual(sent_messages, [])
+            self.assertEqual(len(model.calls), 1)
+
+    async def test_send_proactive_message_skips_reply_tone_after_regeneration(self):
+        with TemporaryDirectory(prefix="proactive-reply-tone-stop-") as td:
+            root = Path(td)
+            persona = root / "persona"
+            persona.mkdir()
+            model = SequenceModel(['{"message":"哼，总算想起我了？现在知道来找我了？"}'])
+
+            class WorkingStub:
+                current_session = None
+
+                def list_sessions(self, limit=1):
+                    return [{"session_id": "gw-reply-tone"}]
+
+                def get_recent(self, session_id=None, turns=6, include_proactive=True):
+                    rows = [
+                        {"role": "assistant", "content": "刚才路过便利店，看到个很奇怪的新口味。"},
+                        {"role": "user", "content": "什么口味？"},
+                    ]
+                    return rows
+
+            class UnderstandingStub:
+                def format_for_prompt(self):
+                    return ""
+
+                def known_fact_keys(self):
+                    return set()
+
+                def load(self):
+                    return {}
+
+            class SemanticStub:
+                async def get_all_facts(self, **kwargs):
+                    return {}
+
+            class RelationshipStub:
+                async def get_state(self, **kwargs):
+                    return {"relationship_label": "朋友"}
+
+            class MemoryStub:
+                _session_id = None
+                bot_id = "yangsisi"
+                user_id = "default_user"
+                working = WorkingStub()
+                user_understanding = UnderstandingStub()
+                semantic = SemanticStub()
+                relationship = RelationshipStub()
+
+            engine = ProactiveEngine(
+                bot_id="yangsisi",
+                config=ProactiveConfig(persona),
+                state=ProactiveState("yangsisi", root / "runtime"),
+                model=model,
+                memory=MemoryStub(),
+            )
+            sent_messages = []
+
+            async def sender(message: str):
+                sent_messages.append(message)
+                return True
+
+            engine._platform_sender = sender
+            sent = await engine._send_proactive_message("哼，总算想起我了？")
 
             self.assertFalse(sent)
             self.assertEqual(sent_messages, [])

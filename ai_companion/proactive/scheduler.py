@@ -86,7 +86,9 @@ class ProactiveScheduler:
             sent = await orchestrator.tick()
             if sent:
                 logger.info("[ProactiveScheduler] 已通过 motive orchestrator 发送主动消息")
-                return
+            else:
+                logger.debug("[ProactiveScheduler] 已启用 motive orchestrator，本轮不再回退到旧 idle_reminder 路径")
+            return
 
         # 老 idle_reminder 只保留为向后兼容兜底；默认风格由 motive 层统一控制。
         if self.config.idle_reminder_enabled and self.config.is_active:

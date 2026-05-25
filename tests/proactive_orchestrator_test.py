@@ -1001,5 +1001,54 @@ class DeferredDetectorNegationTest(unittest.TestCase):
         self.assertIsNotNone(result)
 
 
+class ProactiveSchedulerFallbackGuardTest(unittest.IsolatedAsyncioTestCase):
+    async def test_scheduler_does_not_fallback_to_legacy_idle_path_when_orchestrator_exists(self):
+        from ai_companion.proactive.scheduler import ProactiveScheduler
+
+        class Config:
+            is_active = True
+            idle_reminder_enabled = True
+            check_interval = 60
+            preferred_contact_times = ["00:00-23:59"]
+            timezone = "Asia/Shanghai"
+
+        class State:
+            def __init__(self):
+                self._state = {}
+
+            def save(self):
+                return None
+
+        class Orchestrator:
+            def __init__(self):
+                self.calls = 0
+
+            async def tick(self):
+                self.calls += 1
+                return False
+
+        class Engine:
+            bot_id = "bot-a"
+            config = Config()
+
+            def __init__(self):
+                self.state = State()
+                self.orchestrator = Orchestrator()
+                self.legacy_calls = 0
+
+            async def check_and_maybe_remind(self):
+                self.legacy_calls += 1
+                return "legacy message"
+
+        engine = Engine()
+        scheduler = ProactiveScheduler(engine)
+        scheduler._is_golden_hour = lambda: True
+
+        await scheduler._tick()
+
+        self.assertEqual(engine.orchestrator.calls, 1)
+        self.assertEqual(engine.legacy_calls, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

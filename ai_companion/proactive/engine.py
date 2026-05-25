@@ -154,6 +154,7 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 【消息要求】
 根据你的性格和当前感受，写出你想对用户说的一句话。
 要求：
+- 这是你主动发起的一条消息，不是用户刚发来消息后你立刻回复；不要写成“总算想起我了”“终于舍得回我了”“怎么才来找我”这种等对方回头的语气
 - 符合你的性格（傲娇/温柔/活泼/高冷）
 - 自然、口语化，不要太正式
 - 如果有话题，可以自然地带入
@@ -246,6 +247,7 @@ REGENERATE_PROACTIVE_MESSAGE_PROMPT = """【角色】
 【重写要求】
 - 重新写一条全新的主动消息，不要复述或改写失败内容。
 - 不要使用固定模板、示例句、占位符、JSON 字段名或“在吗”“最近怎么样”这类泛泛开场。
+- 这是你主动发起的一条消息，不是用户刚发来消息后你立刻回复；不要重写成“总算想起我了”“终于舍得回我了”“怎么才来找我”这种等对方回头的语气。
 - 每次都根据性格、关系、当前情绪、生活锚点和上下文自然生成，像本人临时想到后随手发出。
 - 只写一条适合直接发送的短消息，允许短句、停顿、吐槽、反问。
 - 地点、工作、人物和当前生活状态必须服从“当前生活锚点”；没有明确依据时，不要把背景经历或通用职场场景写成正在发生。
@@ -289,7 +291,7 @@ GENERATE_IDLE_PING_PROMPT = """【角色】
 - 不要复述用户刚才的原话，不要把用户对 Bot 的抱怨、指令、运维话术说回去。
 - 如果最近现场已经在聊吃饭、上班、睡觉，只能轻轻承接，不能再催第二遍。
 - 如果最近现场不足以支撑一条自然消息，就不要硬编大场景。
-- {'可以用自然问句收尾，但不能是盘问式。' if allow_question else '尽量不要用问句收尾，保持像顺手冒泡。'}
+- {question_rule}
 
 【输出格式】
 输出 JSON：{{"message":"一条适合直接发送的轻量陪伴消息"}}
@@ -299,19 +301,19 @@ GENERATE_IDLE_PING_PROMPT = """【角色】
 PERSONALITY_MESSAGES = {
     "傲娇": {
         "default": [
-            "你是不是把我忘了？",
-            "哼，这么久不联系我。",
-            "...算了，没什么。",
+            "刚才看到个小动静，莫名就想戳你一下。",
+            "路过窗边的时候想起你了，我就顺手冒个泡。",
+            "本来没想找你，结果还是顺手点开你了。",
         ],
-        "long_no_reply": [  # 很久没回复
-            "你该不会把我忘了吧？",
-            "...我也不想主动的。",
-            "算了，反正你也不在意。",
+        "long_no_reply": [  # 很久没联系
+            "隔了几天又想起你，顺手来晃一下。",
+            "这几天没逮你说话，刚好想到你，就来一下。",
+            "今天忽然想起前两天那个话头，就过来碰你一下。",
         ],
-        "short_no_reply": [  # 短时间没回复
-            "在干嘛呀？",
-            "怎么不理我...",
-            "诶，有空吗？",
+        "short_no_reply": [  # 短时间没联系
+            "刚才脑子里闪过你一下，就来冒个泡。",
+            "我刚空下来一会儿，顺手来戳你一下。",
+            "喂，我就露个脸，别紧张。",
         ],
         "with_topic": [  # 有话题时
             "对了，我刚才突然想起一件小事，想顺手跟你说一下。",
@@ -322,19 +324,19 @@ PERSONALITY_MESSAGES = {
     "温柔": {
         "default": [
             "刚刚想起你，来问一声。",
-            "在忙什么呀？",
-            "想你了～",
-            "今天过得顺利吗？",
+            "刚刚路过窗边，忽然想到你了。",
+            "刚才脑子里飘过你一下，就来打个招呼。",
+            "今天有个小瞬间，忽然想跟你说句话。",
         ],
         "long_no_reply": [
-            "你是不是很忙呀？",
-            "好久没聊了，有点想你...",
-            "最近还好吗？",
+            "隔了几天没和你说话，刚刚又想起你了。",
+            "这两天安静了点，但我还是会突然想到你。",
+            "刚才想起前阵子那点小事，就想来碰碰你。",
         ],
         "short_no_reply": [
             "刚刚又想起你了～",
             "刚刚在想你～",
-            "嗨～",
+            "刚空下来，就顺手来冒个泡～",
         ],
         "with_topic": [
             "对了，刚才有件小事想跟你分享。",
@@ -346,18 +348,18 @@ PERSONALITY_MESSAGES = {
         "default": [
             "喂喂，我突然冒出来一下！",
             "想你了～！",
-            "在干嘛呢～",
-            "诶嘿～有没有想我呀～",
+            "我刚想到个小事，第一反应就想来找你！",
+            "诶嘿，我路过一下你的窗口！",
         ],
         "long_no_reply": [
-            "你干嘛去了啦！",
-            "好久不见！想我了吗！",
-            "喂喂喂！！别装消失啦！！",
+            "隔了几天没冒头，我先来刷个存在感！",
+            "好久没来戳你，我先蹦一下！",
+            "这几天安静归安静，我还是会突然想起你啦！",
         ],
         "short_no_reply": [
-            "诶～怎么啦～",
             "冒个泡冒个泡！",
             "哈喽哈喽！！",
+            "我刚空下来，先来蹦你一下！",
         ],
         "with_topic": [
             "诶诶诶！告诉你个事！",
@@ -367,41 +369,41 @@ PERSONALITY_MESSAGES = {
     },
     "高冷": {
         "default": [
-            "想起个事。",
-            "有事找你。",
-            "刚才想到你了。",
-            "你忙完了没。",
+            "刚才想到你了，就顺手来一句。",
+            "想起个小事，过来找你。",
+            "刚空下来，顺手敲你一下。",
+            "有句话掠过去了，顺手丢给你。",
         ],
         "long_no_reply": [
-            "你是不是很忙。",
-            "算了。",
-            "随你。",
+            "隔了几天，顺手来找你一下。",
+            "前两天那个念头还在，过来提一句。",
+            "安静归安静，该说的话还是要说。",
         ],
         "short_no_reply": [
-            "忙完了没。",
-            "有空吗。",
-            "出来说句话。",
+            "刚空一下，来找你。",
+            "顺手冒个头。",
+            "过来碰你一下。",
         ],
         "with_topic": [
-            "有件事。",
-            "跟你说下。",
-            "听好了。",
+            "有件小事，想跟你说一下。",
+            "刚想起个点，顺手跟你说下。",
+            "你先别走神，我有句话给你。",
         ],
     },
     "默认": {
         "default": [
             "刚刚想起你，来问一声。",
-            "你这会儿忙完了吗？",
-            "想和你聊聊天。",
-            "在干嘛呢？",
+            "刚才想到你了，就顺手来打个招呼。",
+            "忽然有句话想和你说。",
+            "路过的时候想起你，就来冒个泡。",
         ],
         "long_no_reply": [
-            "好久不见了。",
-            "最近还好吗？",
+            "隔了几天又想起你，就顺手来一下。",
+            "这两天安静了点，但刚刚又想到你了。",
         ],
         "short_no_reply": [
             "刚刚想到你了～",
-            "嗨～",
+            "我来冒个泡～",
         ],
         "with_topic": [
             "对了，刚才想起个小事。",
@@ -871,6 +873,42 @@ class ProactiveEngine:
         )
         return any(marker in text for marker in generic_markers)
 
+    def _looks_like_reply_tone(self, message: str) -> bool:
+        text = self._clean_message(message)
+        reply_tone_markers = (
+            "总算想起我了",
+            "终于想起我了",
+            "还知道找我",
+            "终于舍得理我了",
+            "终于舍得回我了",
+            "怎么才回我",
+            "怎么现在才回",
+            "怎么不理我",
+            "你是不是把我忘了",
+            "你该不会把我忘了吧",
+            "把我忘了吧",
+            "反正你也不在意",
+        )
+        return any(marker in text for marker in reply_tone_markers)
+
+    def _looks_like_thin_content(self, message: str) -> bool:
+        text = self._clean_message(message)
+        compact = self._normalize_message_text(text)
+        if not compact:
+            return False
+        thin_markers = {
+            "想起个事",
+            "有件事",
+            "跟你说下",
+            "听好了",
+            "顺手来一句",
+        }
+        if compact in thin_markers:
+            return True
+        if len(compact) <= 6 and any(marker in compact for marker in thin_markers):
+            return True
+        return False
+
     def _looks_like_parrot_user(self, message: str, anchor: dict | None) -> bool:
         text = self._normalize_duplicate_check_text(message)
         signals = anchor.get("scene_signals") if isinstance(anchor, dict) else {}
@@ -904,6 +942,10 @@ class ProactiveEngine:
             return "scene_conflict"
         if self._looks_like_generic_probe(message):
             return "generic_probe"
+        if self._looks_like_reply_tone(message):
+            return "reply_tone"
+        if self._looks_like_thin_content(message):
+            return "thin_content"
         if self._looks_like_parrot_user(message, anchor):
             return "parrot_user"
         if self._looks_like_topic_jump(message, anchor):
@@ -1580,7 +1622,11 @@ class ProactiveEngine:
                 relationship_desc=rel_desc,
                 user_memory_context=user_memory_context,
                 recent_scene_anchor=scene_anchor_text,
-                allow_question="是" if getattr(self.config, "idle_ping_allow_question", True) else "否",
+                question_rule=(
+                    "可以用自然问句收尾，但不能是盘问式。"
+                    if getattr(self.config, "idle_ping_allow_question", True)
+                    else "尽量不要用问句收尾，保持像顺手冒泡。"
+                ),
             )
         else:
             prompt = GENERATE_MESSAGE_PROMPT.format(
@@ -2159,8 +2205,65 @@ class ProactiveEngine:
         content = re.sub(r'\s*```$', '', content)
         return content
 
+    def _scene_grounded_fallback_message(self, scenario: str) -> str:
+        anchor = self._recent_scene_anchor_data()
+        signals = anchor.get("scene_signals") if isinstance(anchor.get("scene_signals"), dict) else {}
+
+        corrections = signals.get("corrections") if isinstance(signals.get("corrections"), list) else []
+        arrangements = signals.get("current_arrangements") if isinstance(signals.get("current_arrangements"), list) else []
+        commitments = signals.get("commitments") if isinstance(signals.get("commitments"), list) else []
+        user_messages = signals.get("user_messages") if isinstance(signals.get("user_messages"), list) else []
+
+        if corrections:
+            correction = str(corrections[0]).strip("。！？!? ")
+            if correction:
+                return f"刚才那句我还记着呢，{correction}，我就顺手回来碰你一下。"
+
+        if scenario == "with_topic" and commitments:
+            commitment = str(commitments[0]).strip("。！？!? ")
+            if commitment:
+                return f"刚才那个话头我还记着，{commitment}，所以先来接你一句。"
+
+        if arrangements:
+            arrangement = self._summarize_arrangement_for_fallback(str(arrangements[0]))
+            if arrangement:
+                return f"刚才看你还在{arrangement}，我就顺手来冒个泡。"
+
+        if user_messages:
+            message = str(user_messages[0]).strip("。！？!? ")
+            if message and len(message) <= 24:
+                return f"刚才你那句“{message}”还在我脑子里，我就顺手来找你。"
+
+        return ""
+
+    def _summarize_arrangement_for_fallback(self, content: str) -> str:
+        text = " ".join(str(content or "").split())
+        if not text:
+            return ""
+        marker_map = (
+            ("盖饭", "等那份盖饭"),
+            ("外卖", "等外卖"),
+            ("开会", "开会"),
+            ("上班", "忙工作"),
+            ("工作", "忙工作"),
+            ("休息", "休息"),
+            ("刚醒", "刚醒没多久"),
+            ("陪妹妹", "陪妹妹"),
+            ("过生日", "陪家里人过生日"),
+            ("打游戏", "打游戏"),
+            ("睡", "准备休息"),
+        )
+        for marker, summary in marker_map:
+            if marker in text:
+                return summary
+        return ""
+
     def _get_fallback_message(self, scenario: str = "default") -> str:
         """获取 fallback 消息（性格模板），根据场景选择，使用 rotation 避免重复"""
+        scene_grounded = self._scene_grounded_fallback_message(scenario)
+        if scene_grounded and not self._classify_quality_gate_issue(scene_grounded, self._recent_scene_anchor_data()):
+            return scene_grounded
+
         personality_type = self._get_personality_type()
         personality_templates = PERSONALITY_MESSAGES.get(personality_type, PERSONALITY_MESSAGES["默认"])
 
