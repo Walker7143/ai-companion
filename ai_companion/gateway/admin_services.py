@@ -55,9 +55,11 @@ WEB_CONFIG_SCHEMA = {
             "description": "配置图片生成/图片理解等内置技能。图片类技能按 OpenAI-compatible 规范默认工作，只需要 Base URL、模型名和 API Key。",
             "restart": "保存后新请求生效；若 Gateway 已运行建议重启后再验证自动路由。",
             "fields": {
+                "image_generation.enabled": "是否启用图片生成技能。关闭后自动路由和 /skill image_generation 都不会执行。",
                 "image_generation.base_url": "图片生成 API 基础地址，系统会自动调用 /images/generations。",
                 "image_generation.model": "图片生成模型名，例如 gpt-image-1、dall-e-3 或服务商给你的模型名。",
                 "image_generation.api_key": "图片生成 API Key。留空或保留掩码表示继续使用旧值。",
+                "image_understanding.enabled": "是否启用图片理解技能。关闭后自动路由和 /skill image_understanding 都不会执行。",
                 "image_understanding.base_url": "图片理解 API 基础地址，系统会自动调用 /chat/completions。",
                 "image_understanding.model": "图片理解模型名，例如 gpt-4o、qwen-vl-plus 或服务商给你的模型名。",
                 "image_understanding.api_key": "图片理解 API Key。留空或保留掩码表示继续使用旧值。",
@@ -351,7 +353,7 @@ def _is_masked_or_empty(value: Any) -> bool:
 
 
 _SIMPLE_IMAGE_SKILLS = {"image_generation", "image_understanding"}
-_SIMPLE_IMAGE_SKILL_KEYS = ("base_url", "model", "api_key")
+_SIMPLE_IMAGE_SKILL_KEYS = ("enabled", "base_url", "model", "api_key")
 _SIMPLE_IMAGE_SKILL_DEFAULTS: dict[str, dict[str, str]] = {
     "image_generation": {"base_url": "https://api.openai.com/v1", "model": "gpt-image-1"},
     "image_understanding": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
@@ -396,6 +398,7 @@ def _normalize_simple_image_skill(skill_name: str, raw_cfg: dict[str, Any]) -> d
     if model.lower() in _SIMPLE_IMAGE_PROVIDER_TOKENS:
         model = ""
     cfg: dict[str, Any] = {
+        "enabled": _as_bool(raw_cfg.get("enabled"), True),
         "base_url": _first_text(raw_cfg.get("base_url"), raw_cfg.get("api_url"), *(b.get("base_url") or b.get("api_url") for b in blocks), defaults.get("base_url", "")),
         "model": _first_text(model, *(b.get("model") for b in blocks), defaults.get("model", "")),
     }

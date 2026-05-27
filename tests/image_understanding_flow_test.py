@@ -271,6 +271,63 @@ class BotImageUnderstandingIntegrationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("MEDIA:/tmp/manual.png", explicit)
 
+    async def test_disabled_image_generation_blocks_explicit_skill_command(self):
+        model = EchoModel()
+        bot = BotInstance(
+            {
+                "id": "shen_nian",
+                "name": "沈念",
+                "skills": {
+                    "image_generation": {
+                        "enabled": False,
+                        "auto": True,
+                        "base_url": "https://example.com/v1",
+                        "model": "gpt-image-1",
+                        "api_key": "test-key",
+                    }
+                },
+            },
+            model=model,
+            refusal_enabled=False,
+        )
+        bot._initialized = True
+        bot._schedulers_started = True
+        try:
+            explicit = await bot.handle_message("/skill image_generation 一张午后街景")
+        finally:
+            await bot.close()
+
+        self.assertEqual(explicit, "当前未启用图片生成功能。")
+
+    async def test_disabled_image_understanding_blocks_explicit_skill_command(self):
+        model = EchoModel()
+        bot = BotInstance(
+            {
+                "id": "shen_nian",
+                "name": "沈念",
+                "skills": {
+                    "image_understanding": {
+                        "enabled": False,
+                        "provider": "custom",
+                        "custom": {
+                            "auth_type": "none",
+                            "api_url": "https://example.com/vision",
+                        },
+                    }
+                },
+            },
+            model=model,
+            refusal_enabled=False,
+        )
+        bot._initialized = True
+        bot._schedulers_started = True
+        try:
+            explicit = await bot.handle_message("/skill image_understanding 帮我看看图里是什么")
+        finally:
+            await bot.close()
+
+        self.assertEqual(explicit, "当前未启用图片理解能力。")
+
     async def test_plain_text_without_media_keeps_normal_chat_path(self):
         model = EchoModel()
         bot = BotInstance(

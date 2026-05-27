@@ -179,6 +179,7 @@ function compactImageSkillConfig(
   const baseUrl = String(patch.base_url ?? source.base_url ?? '').trim() || defaults.base_url;
   const model = String(patch.model ?? source.model ?? '').trim() || defaults.model;
   const next: SkillEntryConfig = {
+    enabled: patch.enabled ?? source.enabled ?? true,
     base_url: baseUrl,
     model,
   };
@@ -551,6 +552,7 @@ export function Settings() {
       const currentGlobal = (prev.skills?.global?.[skillName] || {}) as SkillEntryConfig;
       const currentResolved = (prev.skills?.resolved?.[skillName] || {}) as SkillEntryConfig;
       const current = {
+        enabled: currentGlobal.enabled ?? currentResolved.enabled ?? true,
         base_url: currentGlobal.base_url || currentResolved.base_url || defaults.base_url,
         model: currentGlobal.model || currentResolved.model || defaults.model,
         api_key: currentGlobal.api_key || currentResolved.api_key,
@@ -834,9 +836,12 @@ export function Settings() {
             return (
               <Card key={skillName}>
                 <CardContent style={{ padding: 16, display: 'grid', gap: 14 }}>
-                  <div>
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
-                    <FieldHint text={skillName === 'image_generation' ? '只要服务商兼容 OpenAI 图片生成接口，填写这三项就能用。' : '只要服务商兼容 OpenAI Chat Completions 多模态接口，填写这三项就能用。'} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{title}</div>
+                      <FieldHint text={skillName === 'image_generation' ? '只要服务商兼容 OpenAI 图片生成接口，填写这三项就能用。关闭后自动路由和 /skill 都不会执行。' : '只要服务商兼容 OpenAI Chat Completions 多模态接口，填写这三项就能用。关闭后自动路由和 /skill 都不会执行。'} />
+                    </div>
+                    <Toggle checked={simpleCfg.enabled !== false} onChange={(event) => patchSimpleImageSkill(skillName, { enabled: event.target.checked })} />
                   </div>
                   <div style={compactGridStyle}>
                     <div>

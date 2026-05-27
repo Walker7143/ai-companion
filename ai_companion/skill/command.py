@@ -9,6 +9,11 @@ from typing import Any
 from .base import SkillContext, SkillResult
 from .dispatcher import SkillDispatcher
 
+_DISABLED_SKILL_HINTS = {
+    "image_generation": "当前未启用图片生成功能。",
+    "image_understanding": "当前未启用图片理解能力。",
+}
+
 
 _SENSITIVE_TOKEN_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
@@ -123,6 +128,13 @@ async def execute_skill_command(
         if capabilities is not None:
             return format_runtime_skill_capabilities(capabilities)
         return format_skill_list(dispatcher)
+
+    if capabilities is not None:
+        skill_status = ((capabilities or {}).get("skills") or {}).get(skill_name) or {}
+        if skill_name in _DISABLED_SKILL_HINTS and (
+            not bool(skill_status.get("enabled", False)) or not bool(skill_status.get("registered", False))
+        ):
+            return _DISABLED_SKILL_HINTS[skill_name]
 
     skill = dispatcher.get(skill_name)
     if skill:

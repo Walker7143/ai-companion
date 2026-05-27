@@ -14,7 +14,10 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "Read(//Users/wangxiaowei/.claude/**)",
+      "Bash(defaults read *)",
+      "Bash(python *)"
     ]
   }
 }

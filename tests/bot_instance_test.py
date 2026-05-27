@@ -1511,10 +1511,11 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
                 },
             )
             self.assertEqual(public["global"]["image_generation"]["api_key"], "real...-key")
+            self.assertTrue(public["global"]["image_generation"]["enabled"])
             self.assertEqual(public["global"]["image_generation"]["base_url"], "https://api.openai.com/v1")
-            self.assertNotIn("enabled", public["global"]["image_generation"])
             self.assertNotIn("auto", public["global"]["image_generation"])
             self.assertNotIn("output_dir", public["global"]["image_generation"])
+            self.assertTrue(public["global"]["image_understanding"]["enabled"])
             self.assertEqual(public["global"]["image_understanding"]["base_url"], "https://vision.example.com/v1")
             self.assertEqual(public["global"]["image_understanding"]["api_key"], "nest...-key")
             self.assertNotIn("openai", public["global"]["image_understanding"])
@@ -1545,6 +1546,7 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 saved["skills"]["image_generation"],
                 {
+                    "enabled": True,
                     "base_url": "https://example.com/v1",
                     "model": "gpt-image-1",
                     "api_key": "real-image-key",
@@ -1553,6 +1555,7 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 saved["skills"]["image_understanding"],
                 {
+                    "enabled": True,
                     "base_url": "https://vision.example.com/v1",
                     "model": "gpt-4o",
                     "api_key": "nested-vision-key",
