@@ -103,6 +103,21 @@ class MemoryPromptBuilder:
             if isinstance(item, dict) and item.get("key")
         }
         turn_constraint_text = self._format_turn_constraints(retrieved)
+        session_state_text = self._format_session_state(retrieved)
+        if session_state_text:
+            blocks.append(
+                PromptBlock(
+                    name="session_state",
+                    title="【当前已确认状态】",
+                    body=session_state_text,
+                    usage=(
+                        "使用方式：这些是当前场景里已经成立的真实状态，必须默认承接。"
+                        "不要回到已被覆盖的旧判断，不要追问已经确认的安排或完成态。"
+                    ),
+                    budget=max(260, int(budgets["turn_constraints"] * 1.4)),
+                    priority=1,
+                )
+            )
         if turn_constraint_text:
             blocks.append(
                 PromptBlock(
@@ -347,6 +362,25 @@ class MemoryPromptBuilder:
                 timing.append(f"有效期至 {expires}")
             suffix = f"（{'，'.join(timing)}）" if timing else ""
             lines.append(f"  - {value}{suffix}")
+        return "\n".join(lines)
+
+    def _format_session_state(self, retrieved: RetrievedMemory) -> str:
+        items = getattr(retrieved, "session_state", []) or []
+        lines: list[str] = []
+        seen: set[str] = set()
+        for item in items[:8]:
+            if not isinstance(item, dict):
+                continue
+            scope = str(item.get("scope") or "").strip()
+            predicate = str(item.get("predicate") or "").strip()
+            value = _compact_prompt_text(item.get("value"), 160)
+            if not scope or not predicate or not value:
+                continue
+            marker = f"{scope}/{predicate}/{value}"
+            if marker in seen:
+                continue
+            seen.add(marker)
+            lines.append(f"  - {scope} / {predicate}: {value}")
         return "\n".join(lines)
 
     def _format_activation_window(self, retrieved: RetrievedMemory) -> str:

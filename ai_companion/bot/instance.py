@@ -56,6 +56,30 @@ DEFAULT_DOCUMENT_MEMORY_CHARS = 12_000
 DEFAULT_DOCUMENT_TASK_CHARS = 30_000
 
 
+def _normalize_bot_data_root(data_dir: Path | None, bot_id: str) -> Path | None:
+    """Normalize caller-provided data_dir to the expected bot root (.../data/bots)."""
+    if data_dir is None:
+        return None
+
+    candidate = Path(data_dir)
+    normalized = candidate.expanduser()
+    parts_lower = [part.lower() for part in normalized.parts]
+
+    # Correct callers that pass ~/.ai-companion/data instead of ~/.ai-companion/data/bots.
+    if parts_lower and parts_lower[-1] == "data":
+        fixed = normalized / "bots"
+        logger.warning("[BotInstance] data_dir=%s 缺少 bots 层级，自动修正为 %s", normalized, fixed)
+        return fixed
+
+    # Correct callers that pass a bot-specific directory instead of the shared bot root.
+    if parts_lower and parts_lower[-1] == bot_id.lower():
+        parent = normalized.parent
+        logger.warning("[BotInstance] data_dir=%s 指向 bot 子目录，自动修正为 %s", normalized, parent)
+        return parent
+
+    return normalized
+
+
 class BotInstance:
     """单个 Bot 的运行实例"""
 
@@ -71,9 +95,11 @@ class BotInstance:
         # 解析 data_dir：优先使用参数，其次使用 config 中的值
         if data_dir is None and "data_dir" in config:
             data_dir = Path(config["data_dir"])
+        data_dir = _normalize_bot_data_root(data_dir, self.id)
 
         # 统一保存 data_dir 供后续使用
-        self._data_dir = data_dir if data_dir else (Path(config["data_dir"]) if "data_dir" in config else Path(__file__).parent.parent.parent / "data" / "bots")
+        fallback_data_dir = Path(config["data_dir"]) if "data_dir" in config else Path(__file__).parent.parent.parent / "data" / "bots"
+        self._data_dir = data_dir if data_dir else _normalize_bot_data_root(fallback_data_dir, self.id)
 
         # 人格文件目录：优先用户目录，不存在则用项目目录
         if data_dir:
@@ -734,6 +760,7 @@ class BotInstance:
             "response_style_trace": response_style_trace,
             "memory_prompt_diagnostics": prompt_diagnostics,
             "conscious_context": conscious_context,
+            "active_session_state": copy.deepcopy(ctx.get("session_state", [])) if isinstance(ctx.get("session_state"), list) else [],
             "memory_intent": ctx.get("memory_intent", ""),
             "relationship_state": relationship_state or retrieved_relationship,
             "daily_context": daily_context,
@@ -932,6 +959,11 @@ class BotInstance:
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
                 return self._format_model_failure_message()
+            state_check = {"consistent": True, "severity": "none", "conflicts": [], "rewrite_guidance": ""}
+            response, state_check = await self.memory.ensure_response_state_consistency(
+                response,
+                str((memory_turn_context or {}).get("session_id") or getattr(getattr(self.memory, "working", None), "current_session", "") or ""),
+            )
             response = self._polish_response(response, ctx, relationship_state)
             self._record_deferred_reply_task_if_detected(effective_user_input, response, memory_turn_context)
             self._track_background_task(
@@ -950,6 +982,8 @@ class BotInstance:
                 self.memory.extract_turn_memory(memory_user_input, response, turn_context=recorded_context),
                 name="memory.extract_turn_memory",
             )
+            if isinstance(self._last_debug_context, dict):
+                self._last_debug_context["response_state_conflicts"] = state_check
         else:
             memory_suffix = image_context_suffix if image_context_suffix else None
             if document_context_suffix:
@@ -975,12 +1009,15 @@ class BotInstance:
             response = await self._chat_with_fallback(messages, system_prompt)
             if response is None:
                 return self._format_model_failure_message()
+            state_check = {"consistent": True, "severity": "none", "conflicts": [], "rewrite_guidance": ""}
             response = self._polish_response(response, {}, relationship_state)
             self._record_deferred_reply_task_if_detected(effective_user_input, response, memory_turn_context)
             self._track_background_task(
                 self._run_proactive_closeout_analysis(effective_user_input, response, memory_turn_context),
                 name="closeout_analysis",
             )
+            if isinstance(self._last_debug_context, dict):
+                self._last_debug_context["response_state_conflicts"] = state_check
 
         if image_user_hint and image_user_hint not in response:
             response = f"{image_user_hint}\n{response}"

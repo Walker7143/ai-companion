@@ -126,8 +126,10 @@ class DreamingRunStore:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._closed = False
 
     async def init(self):
+        self._closed = False
         await asyncio.to_thread(self._init_sync)
 
     def _init_sync(self):
@@ -436,6 +438,9 @@ class DreamingRunStore:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM dreaming_runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
+
+    async def close(self):
+        self._closed = True
 
 
 class DreamingCandidateCollector:
@@ -1057,3 +1062,15 @@ class DreamingOrchestrator:
 
     async def stop_scheduler(self):
         await self.scheduler.stop()
+
+    async def close(self):
+        try:
+            await self.stop_scheduler()
+        except Exception:
+            pass
+        await self.run_store.close()
+        self.collector = None
+        self.governor = None
+        self.persistence = None
+        self.report_builder = None
+        self.doctor = None

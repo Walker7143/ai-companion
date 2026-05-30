@@ -62,10 +62,23 @@ export interface MemoryTrustView {
   commitments?: unknown[];
 }
 
+export interface SessionStateItem {
+  state_id?: string;
+  scope?: string;
+  subject?: string;
+  predicate?: string;
+  value?: string;
+  confidence?: number;
+  status?: string;
+  updated_at?: string;
+  source_kind?: string;
+}
+
 export interface MemoryTrustPayload {
   bot_id: string;
   user_id?: string;
   memory_trust_view: MemoryTrustView;
+  session_state?: SessionStateItem[];
   recent_lifecycle_events?: MemoryTrustItem[];
   fact_history?: MemoryTrustItem[];
   relationship?: Record<string, unknown>;
@@ -237,6 +250,13 @@ export interface DebugContextPayload {
     relationship_state?: Record<string, unknown>;
     daily_context?: Record<string, unknown>;
     user_understanding?: Record<string, unknown>;
+    active_session_state?: SessionStateItem[];
+    response_state_conflicts?: {
+      consistent?: boolean;
+      severity?: string;
+      conflicts?: string[];
+      rewrite_guidance?: string;
+    };
   };
 }
 

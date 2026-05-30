@@ -52,6 +52,7 @@ class MemoryActivationPlanner:
     """Build a turn-level attention window from all retrieved memory layers."""
 
     CONTINUITY_SOURCES = {
+        "session_state",
         "working_recent",
         "daily_recent",
         "daily_summary",
@@ -90,6 +91,7 @@ class MemoryActivationPlanner:
     def build(self, retrieved: Any, current_input: str) -> MemoryActivationPlan:
         intent = str(getattr(retrieved, "intent", "") or "casual_chat")
         candidates: list[ActivatedMemory] = []
+        candidates.extend(self._session_state_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._turn_constraint_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._working_recent_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._daily_recent_candidates(retrieved, current_input, intent=intent))
@@ -170,6 +172,34 @@ class MemoryActivationPlanner:
                     recency=round(recency, 3),
                     relevance=round(relevance, 3),
                     evidence=_list(item.get("evidence")),
+                )
+            )
+        return candidates
+
+    def _session_state_candidates(self, retrieved: Any, current_input: str, *, intent: str) -> list[ActivatedMemory]:
+        candidates: list[ActivatedMemory] = []
+        for age, item in enumerate(getattr(retrieved, "session_state", []) or []):
+            if not isinstance(item, dict):
+                continue
+            scope = str(item.get("scope") or "").strip()
+            predicate = str(item.get("predicate") or "").strip()
+            value = _compact(item.get("value"), 180)
+            if not scope or not predicate or not value:
+                continue
+            recency = max(0.0, 1.0 - age * 0.10)
+            relevance = _cue_overlap(current_input, f"{scope} {predicate} {value}")
+            score = 0.82 + recency * 0.10 + relevance * 0.08
+            candidates.append(
+                ActivatedMemory(
+                    text=f"当前已确认状态：{scope} / {predicate} = {value}",
+                    source="session_state",
+                    score=_clamp_score(score),
+                    expression_mode="hard_constraint",
+                    reason="当前场景已经成立的世界状态，优先级高于旧记忆和旧假设",
+                    layer="session_state",
+                    recency=round(recency, 3),
+                    relevance=round(relevance, 3),
+                    evidence=[str(item.get('state_id') or '')],
                 )
             )
         return candidates

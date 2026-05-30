@@ -1,4 +1,6 @@
 import asyncio
+import gc
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,7 +61,8 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
 
     def test_turn_constraints_stay_out_of_stable_understanding_but_enter_prompt(self):
         async def run():
-            with tempfile.TemporaryDirectory(prefix="memory-regression-turn-constraint-") as td:
+            td = tempfile.mkdtemp(prefix="memory-regression-turn-constraint-")
+            try:
                 engine = MemoryEngine("constraint_bot", Path(td), config={"embedding": "none"})
                 await engine.init()
                 candidates = await MemoryExtractor().extract("今天不许吃粉，吃点别的", "好，换一家。", session_id="s1")
@@ -78,7 +81,11 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
                     min_confidence=0.0,
                 )
                 await engine.close()
+                del engine
+                gc.collect()
                 return ctx, understanding, facts
+            finally:
+                shutil.rmtree(td, ignore_errors=True)
 
         ctx, understanding, facts = asyncio.run(run())
         self.assertTrue(facts)
@@ -89,7 +96,8 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
 
     def test_semantic_write_does_not_side_effect_understanding_projection(self):
         async def run():
-            with tempfile.TemporaryDirectory(prefix="memory-regression-projection-") as td:
+            td = tempfile.mkdtemp(prefix="memory-regression-projection-")
+            try:
                 engine = MemoryEngine("projection_bot", Path(td), config={"embedding": "none"})
                 await engine.init()
                 await engine.semantic.set_fact(
@@ -106,7 +114,11 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
                 await engine.governor.refresh_projection(bot_id="projection_bot", user_id="default_user")
                 refreshed = engine.user_understanding.load()
                 await engine.close()
+                del engine
+                gc.collect()
                 return immediate, refreshed
+            finally:
+                shutil.rmtree(td, ignore_errors=True)
 
         immediate, refreshed = asyncio.run(run())
         self.assertNotIn("prefers concise replies", immediate["layered"]["core"]["preferences"])
@@ -114,7 +126,8 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
 
     def test_memory_trust_view_and_gateway_memory_command(self):
         async def run():
-            with tempfile.TemporaryDirectory(prefix="memory-regression-view-") as td:
+            td = tempfile.mkdtemp(prefix="memory-regression-view-")
+            try:
                 engine = MemoryEngine("view_bot", Path(td), config={"embedding": "none"})
                 await engine.init()
                 await engine.governor.apply(
@@ -166,7 +179,11 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
 
                 command_text = await GatewayCommandHandler(_Config()).handle("/memory", _Bot())
                 await engine.close()
+                del engine
+                gc.collect()
                 return status, command_text
+            finally:
+                shutil.rmtree(td, ignore_errors=True)
 
         status, command_text = asyncio.run(run())
         trust = status["memory_trust_view"]

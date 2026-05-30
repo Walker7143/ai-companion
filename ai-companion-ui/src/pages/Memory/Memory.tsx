@@ -3,7 +3,7 @@ import { Archive, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, He
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Modal, useToast } from '../../components/ui';
 import { memoryApi } from '../../api';
 import { useBotStore } from '../../stores';
-import type { DailyMemoryPayload, DreamingDoctorPayload, DreamingStatusPayload, EpisodicItem, Fact, MemoryStats, MemoryTrustItem, MemoryTrustPayload, Message, SemanticMemory } from '../../types';
+import type { DailyMemoryPayload, DreamingDoctorPayload, DreamingStatusPayload, EpisodicItem, Fact, MemoryStats, MemoryTrustItem, MemoryTrustPayload, Message, SemanticMemory, SessionStateItem } from '../../types';
 
 type MemoryTab = 'stats' | 'working' | 'daily' | 'episodic' | 'semantic';
 type MemoryDeleteType = 'working' | 'daily' | 'episodic' | 'semantic';
@@ -67,6 +67,10 @@ function trustItems(items?: MemoryTrustItem[]) {
   return Array.isArray(items) ? items.filter(Boolean) : [];
 }
 
+function sessionStateItems(items?: SessionStateItem[]) {
+  return Array.isArray(items) ? items.filter(Boolean) : [];
+}
+
 function trustText(value: unknown) {
   if (value === null || value === undefined || value === '') return '暂无';
   if (typeof value === 'string') return value;
@@ -96,6 +100,7 @@ function RelationshipMetric({ label, value, tone }: { label: string; value: numb
 
 function MemoryTrustPanel({ payload }: { payload: MemoryTrustPayload | null }) {
   const view = payload?.memory_trust_view || {};
+  const sessionStates = sessionStateItems(payload?.session_state ?? (view as { session_state?: SessionStateItem[] }).session_state);
   const recently = trustItems(view.recently_remembered);
   const stable = trustItems(view.stable_understanding);
   const pending = trustItems(view.pending_confirmation);
@@ -124,6 +129,7 @@ function MemoryTrustPanel({ payload }: { payload: MemoryTrustPayload | null }) {
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+          <SessionStateSection items={sessionStates} />
           <TrustSection title="最近会自然想起" items={recently} empty="暂无最近激活的记忆" />
           <TrustSection title="稳定用户理解" items={stable} empty="暂无高置信用户事实" />
           <TrustSection title="需要继续确认" items={pending} empty="暂无低置信待确认事实" />
@@ -162,6 +168,35 @@ function MemoryTrustPanel({ payload }: { payload: MemoryTrustPayload | null }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function SessionStateSection({ items }: { items: SessionStateItem[] }) {
+  return (
+    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 10, alignContent: 'start' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>当前状态记忆</span>
+        <Badge>{items.length}</Badge>
+      </div>
+      {items.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>暂无当前场景状态</p>
+      ) : (
+        items.slice(0, 8).map((item, index) => (
+          <div key={`${item.state_id || item.scope || 'state'}-${index}`} style={{ display: 'grid', gap: 5, paddingTop: 8, borderTop: '1px solid var(--border-subtle)' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                {item.scope || 'unknown'} / {item.predicate || 'unknown'}
+              </span>
+              {typeof item.confidence === 'number' && <Badge variant={item.confidence >= 0.85 ? 'success' : 'warning'}>{(item.confidence * 100).toFixed(0)}%</Badge>}
+              {item.status && <Badge>{item.status}</Badge>}
+              {item.source_kind && <Badge variant="info">{item.source_kind}</Badge>}
+            </div>
+            {item.value && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{clipText(item.value, 120)}</p>}
+            {item.updated_at && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{trustDate(item.updated_at)}</span>}
+          </div>
+        ))
+      )}
+    </div>
   );
 }
 

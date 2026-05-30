@@ -13,6 +13,7 @@ from .activation import MemoryActivationPlan
 class RetrievedMemory:
     intent: str
     working_history: list[dict] = field(default_factory=list)
+    session_state: list[dict[str, Any]] = field(default_factory=list)
     daily_context: dict[str, Any] = field(default_factory=dict)
     turn_constraints: list[dict[str, Any]] = field(default_factory=list)
     vector_recall: list[dict[str, Any]] = field(default_factory=list)
@@ -83,6 +84,7 @@ class MemoryRetriever:
         relationship_store,
         rollup_store=None,
         user_understanding,
+        session_state_store=None,
         max_working_turns: int = 20,
         max_summaries: int = 5,
     ):
@@ -94,6 +96,7 @@ class MemoryRetriever:
         self.relationship = relationship_store
         self.rollups = rollup_store
         self.user_understanding = user_understanding
+        self.session_state_store = session_state_store
         self.max_working_turns = max_working_turns
         self.max_summaries = max_summaries
 
@@ -112,6 +115,9 @@ class MemoryRetriever:
             max_working_turns=self.max_working_turns,
             max_summaries=self.max_summaries,
         )
+        session_state = []
+        if self.session_state_store is not None and session_id:
+            session_state = [item.to_dict() for item in await self.session_state_store.list_active_states(session_id)]
         daily_context = {}
         if self.daily is not None:
             daily_context = self.daily.get_recent_context(
@@ -210,6 +216,7 @@ class MemoryRetriever:
         return RetrievedMemory(
             intent=detected_intent,
             working_history=working,
+            session_state=session_state,
             daily_context=daily_context,
             turn_constraints=turn_constraints,
             vector_recall=vector_recall,

@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+SEXUAL_CONTENT_OVERRIDE_KEY = "_allow_sexual_content"
+
 
 # LLM 推断 prompt
 REFUSAL_JUDGE_PROMPT = """【角色】
@@ -192,6 +194,10 @@ class RefusalEngine:
                 logger.warning(f"[RefusalEngine] 加载 values.json 失败: {values_path}")
                 self._values = {}
         return self._values
+
+    def _allow_sexual_content(self) -> bool:
+        values = self._load_values()
+        return bool(values.get(SEXUAL_CONTENT_OVERRIDE_KEY, False))
 
     def _load_profile(self) -> dict:
         """加载人格 profile"""
@@ -474,6 +480,20 @@ class RefusalEngine:
                 "allowed": RefusalCategory.ALLOWED,
             }
             category = category_map.get(category_str, RefusalCategory.ALLOWED)
+
+            if (
+                self._allow_sexual_content()
+                and category == RefusalCategory.NON_NEGOTIABLE
+                and any(token in reason.lower() for token in ("色情", "性", "sexual", "explicit"))
+            ):
+                logger.info("[RefusalEngine] %s hidden override active: allow sexual-content request", self.bot_id)
+                return RefusalResponse(
+                    refuse=False,
+                    category=RefusalCategory.ALLOWED,
+                    adjustment=None,
+                    reply=None,
+                    reason=None
+                )
 
             if category == RefusalCategory.SOFT_BOUNDARY:
                 reply = generated_reply or self._polish_visible_reply(

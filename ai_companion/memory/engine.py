@@ -22,7 +22,7 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,12 @@ from .conscious import ConsciousContextBuilder
 from .prompt_builder import MemoryPromptBuilder
 from .retriever import MemoryRetriever
 from .dreaming import DreamingOrchestrator
+from .session_state import (
+    ResponseStateConsistencyChecker,
+    SessionStateExtractor,
+    SessionStateResolver,
+    SessionStateStore,
+)
 from ..context.tokenizer import TokenEstimator
 
 # 上下文压缩器（可选）
@@ -153,7 +159,11 @@ class MemoryEngine:
             persona_backstory_path=persona_backstory_path,
         )
         self.rollups = MemoryRollupStore(self.memory_dir / "rollups.db", enabled=self.config.get("rollups", {}).get("enabled", True) if isinstance(self.config.get("rollups"), dict) else True)
+        self.session_state = SessionStateStore(self.memory_dir / "session_state.db")
         self.extractor = MemoryExtractor()
+        self.session_state_extractor = SessionStateExtractor()
+        self.session_state_resolver = SessionStateResolver()
+        self.response_state_checker = ResponseStateConsistencyChecker()
         self.governor = MemoryGovernor(
             semantic_store=self.semantic,
             episodic_store=self.episodic,
@@ -169,6 +179,7 @@ class MemoryEngine:
             relationship_store=self.relationship,
             rollup_store=self.rollups,
             user_understanding=self.user_understanding,
+            session_state_store=self.session_state,
             max_working_turns=self.max_working_turns,
             max_summaries=self.max_summaries,
         )
@@ -206,6 +217,8 @@ class MemoryEngine:
         self.semantic.set_summarizer(summarizer)
         self.episodic.set_summarizer(summarizer)
         self.extractor.set_summarizer(summarizer)
+        self.session_state_extractor.set_summarizer(summarizer)
+        self.response_state_checker.set_summarizer(summarizer)
 
     def start_session(self, session_id: str = None):
         self._session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -227,6 +240,7 @@ class MemoryEngine:
         await self.semantic.init()
         await self.relationship.init()
         await self.rollups.init()
+        await self.session_state.init()
         await self.dreaming.init()
         await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id, summarizer=self._summarizer)
         await self.rebuild_vector_index()
@@ -270,6 +284,7 @@ class MemoryEngine:
             "turn_constraints": retrieved.turn_constraints,
             "relationship_state": retrieved.relationship_state,
             "daily_context": retrieved.daily_context,
+            "session_state": retrieved.session_state,
             "memory_intent": retrieved.intent,
             "user_understanding": self.user_understanding.load(),
             "memory_activation_plan": retrieved.activation_plan.to_dict() if retrieved.activation_plan else {},
@@ -277,6 +292,7 @@ class MemoryEngine:
             "memory_prompt_diagnostics": diagnostics,
             "system_suffix": suffix,
             "memory_continuity": {
+                "session_state_count": len(retrieved.session_state or []),
                 "daily_open_threads": retrieved.daily_context.get("open_threads", []) if isinstance(retrieved.daily_context, dict) else [],
                 "daily_commitments": retrieved.daily_context.get("commitments", []) if isinstance(retrieved.daily_context, dict) else [],
                 "relationship_label": retrieved.relationship_state.get("relationship_label") if isinstance(retrieved.relationship_state, dict) else None,
@@ -299,6 +315,8 @@ class MemoryEngine:
         context = self._normalize_turn_context(turn_context, session_id=current_sid)
         sid = context.session_id or current_sid
         user_id = context.user_id or self.user_id
+        self.working.start_session(sid)
+        self._session_id = sid
         await self.working.append(
             user_input=user_input,
             bot_output=llm_output,
@@ -359,10 +377,33 @@ class MemoryEngine:
 
         task.add_done_callback(_on_task_done)
         await task
+        turn_id = f"{sid}:{len(recent)}:{datetime.now().timestamp()}"
+        active_states = await self.session_state.list_active_states(sid)
+        state_diff = await self.session_state_extractor.extract(
+            user_input=user_input,
+            bot_output=llm_output,
+            conversation_context=conversation_context,
+            active_states=active_states,
+        )
+        session_state_result = await self.session_state_resolver.apply_diff(
+            store=self.session_state,
+            session_id=sid,
+            diff=state_diff,
+            evidence_turn_id=turn_id,
+        )
         self._maintenance_counter += 1
         if self._maintenance_counter % 5 == 0:
             await self.maintenance.run_light(bot_id=self.bot_id, user_id=user_id, summarizer=self._summarizer)
             await self.rebuild_vector_index()
+        return session_state_result
+
+    async def ensure_response_state_consistency(self, response: str, session_id: str) -> tuple[str, dict[str, Any]]:
+        active_states = await self.session_state.list_active_states(session_id) if session_id else []
+        check = await self.response_state_checker.check(response, active_states)
+        if check.get("consistent", True):
+            return response, check
+        rewritten = await self.response_state_checker.rewrite(response, active_states, check.get("conflicts") or [])
+        return rewritten, check
 
     async def record_assistant_message(
         self,
@@ -453,6 +494,11 @@ class MemoryEngine:
             user_id=self.user_id,
             limit=16,
         )
+        active_session_states = []
+        current_session = self._session_id or self.working.current_session
+        if current_session:
+            active_session_states = [state.to_dict() for state in await self.session_state.list_active_states(current_session)]
+
         trust_view = self._build_memory_trust_view(
             facts=facts,
             relationship=relationship,
@@ -460,6 +506,7 @@ class MemoryEngine:
             recent_episodes=recent_episodes,
             fact_history=fact_history,
             lifecycle_events=lifecycle_events,
+            session_state=active_session_states,
         )
 
         return {
@@ -494,6 +541,7 @@ class MemoryEngine:
         recent_episodes: list[dict],
         fact_history: list[dict],
         lifecycle_events: list[dict],
+        session_state: list[dict],
     ) -> dict:
         recent_facts = sorted(
             [fact for fact in facts if not fact.get("archived")],
@@ -574,6 +622,20 @@ class MemoryEngine:
             "recently_remembered": _dedupe_view_items(recently_remembered)[:8],
             "stable_understanding": [_fact_view_item(fact) for fact in stable_facts[:8]],
             "relationship_anchor": relationship_anchor,
+            "session_state": [
+                {
+                    "state_id": item.get("state_id"),
+                    "scope": item.get("scope"),
+                    "subject": item.get("subject"),
+                    "predicate": item.get("predicate"),
+                    "value": item.get("value"),
+                    "confidence": item.get("confidence"),
+                    "status": item.get("status"),
+                    "updated_at": item.get("updated_at"),
+                    "source_kind": item.get("source_kind"),
+                }
+                for item in (session_state or [])[:8]
+            ],
             "pending_confirmation": [_fact_view_item(fact) for fact in pending[:8]],
             "corrected_memories": [
                 {
@@ -674,6 +736,7 @@ class MemoryEngine:
         await self.semantic.close()
         await self.relationship.close()
         await self.rollups.close()
+        await self.dreaming.close()
 
     # ── 内部方法 ─────────────────────────────────────────────
 
