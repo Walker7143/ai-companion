@@ -44,6 +44,7 @@ const providerOptions = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'claude', label: 'Claude' },
   { value: 'mimo', label: 'MiMo' },
+  { value: 'deepseek', label: 'DeepSeek' },
   { value: 'tele', label: 'TeleClaw' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'custom', label: '自定义' },

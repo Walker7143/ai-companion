@@ -99,11 +99,7 @@ class AutoSkillRouter:
             return None
 
         if not bool(status.get("enabled", False)):
-            return AutoSkillRouteResult(
-                handled=False,
-                user_facing_hint="当前未启用图片理解能力。",
-                route="image_understanding",
-            )
+            return None
 
         skill = self.dispatcher.get("image_understanding")
         if skill is None or not skill.is_available():
@@ -146,11 +142,7 @@ class AutoSkillRouter:
             return None
 
         if not bool(status.get("enabled", False)):
-            return AutoSkillRouteResult(
-                handled=True,
-                direct_response="当前未启用图片生成功能。",
-                route="image_generation",
-            )
+            return None
 
         skill = self.dispatcher.get("image_generation")
         if skill is None or not skill.is_available():
