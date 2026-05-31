@@ -3,7 +3,21 @@ import { Archive, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, He
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Modal, useToast } from '../../components/ui';
 import { memoryApi } from '../../api';
 import { useBotStore } from '../../stores';
-import type { DailyMemoryPayload, DreamingDoctorPayload, DreamingStatusPayload, EpisodicItem, Fact, MemoryStats, MemoryTrustItem, MemoryTrustPayload, Message, SemanticMemory, SessionStateItem } from '../../types';
+import type {
+  ContinuityContractFact,
+  DailyMemoryPayload,
+  DreamingDoctorPayload,
+  DreamingStatusPayload,
+  EpisodicItem,
+  Fact,
+  MemoryStats,
+  MemoryTrustItem,
+  MemoryTrustPayload,
+  Message,
+  RelationshipProjectionView,
+  SemanticMemory,
+  SessionStateItem,
+} from '../../types';
 
 type MemoryTab = 'stats' | 'working' | 'daily' | 'episodic' | 'semantic';
 type MemoryDeleteType = 'working' | 'daily' | 'episodic' | 'semantic';
@@ -107,6 +121,8 @@ function MemoryTrustPanel({ payload }: { payload: MemoryTrustPayload | null }) {
   const corrected = trustItems(view.corrected_memories);
   const archived = trustItems(view.archived_or_suppressed);
   const relationship = view.relationship_anchor || {};
+  const contract = payload?.continuity_contract || null;
+  const relationshipProjection = payload?.relationship_projection || null;
   const openThreads = Array.isArray(view.open_threads) ? view.open_threads : [];
   const commitments = Array.isArray(view.commitments) ? view.commitments : [];
   const hasRelationship = Boolean(relationship.label || relationship.status || relationship.narrative || relationship.guidance);
@@ -146,6 +162,35 @@ function MemoryTrustPanel({ payload }: { payload: MemoryTrustPayload | null }) {
             </div>
             {relationship.narrative && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)' }}>{relationship.narrative}</p>}
             {relationship.guidance && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{relationship.guidance}</p>}
+          </div>
+        )}
+
+        {(contract || relationshipProjection) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+            {contract && (
+              <div style={{ display: 'grid', gap: 12 }}>
+                <ContractFactList title="连续性硬事实" items={contract.hard_facts || []} empty="暂无硬事实" />
+                <ContractFactList title="当前约束" items={contract.active_boundaries || []} empty="暂无当前约束" />
+                <ContractFactList title="软语境" items={contract.soft_context || []} empty="暂无软语境" />
+                <ContractFactList title="表达自由" items={contract.style_freedom || []} empty="暂无表达自由" />
+                <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>风险标记</span>
+                    <Badge>{(contract.risk_flags || []).length}</Badge>
+                  </div>
+                  {(contract.risk_flags || []).length === 0 ? (
+                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>暂无风险标记</p>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {(contract.risk_flags || []).map((flag) => (
+                        <Badge key={flag} variant="warning">{flag}</Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            <RelationshipProjectionCard projection={relationshipProjection} />
           </div>
         )}
 
@@ -197,6 +242,54 @@ function SessionStateSection({ items }: { items: SessionStateItem[] }) {
         ))
       )}
     </div>
+  );
+}
+
+function ContractFactList({ title, items, empty }: { title: string; items: ContinuityContractFact[]; empty: string }) {
+  return (
+    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 10, alignContent: 'start' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+        <Badge>{items.length}</Badge>
+      </div>
+      {items.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>{empty}</p>
+      ) : (
+        items.slice(0, 6).map((item, index) => (
+          <div key={`${item.kind || 'fact'}-${index}`} style={{ display: 'grid', gap: 5, paddingTop: 8, borderTop: '1px solid var(--border-subtle)' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{item.kind || 'fact'}</span>
+              {item.source && <Badge>{item.source}</Badge>}
+              {typeof item.priority === 'number' && <Badge variant="info">P{item.priority}</Badge>}
+            </div>
+            {item.text && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{clipText(item.text, 120)}</p>}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+function RelationshipProjectionCard({ projection }: { projection: RelationshipProjectionView | null | undefined }) {
+  if (!projection) return null;
+  const needs = Array.isArray(projection.need_from_bot) ? projection.need_from_bot : [];
+  const repairs = Array.isArray(projection.repair_preferences) ? projection.repair_preferences : [];
+  const threads = Array.isArray(projection.open_threads) ? projection.open_threads : [];
+  return (
+    <Card style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
+      <CardHeader style={{ borderBottom: 'none', padding: '16px 20px' }}>
+        <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Link2 style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+          关系投影诊断
+          {projection.label && <Badge variant="success">{projection.label}</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent style={{ padding: '0 20px 20px', display: 'grid', gap: 12 }}>
+        <ContractFactList title="Bot 需要承接" items={needs.map((text, index) => ({ kind: `need_${index}`, text }))} empty="暂无投影内容" />
+        <ContractFactList title="修复偏好" items={repairs.map((text, index) => ({ kind: `repair_${index}`, text }))} empty="暂无修复偏好" />
+        <ContractFactList title="开放线程" items={threads.map((text, index) => ({ kind: `thread_${index}`, text }))} empty="暂无开放线程" />
+      </CardContent>
+    </Card>
   );
 }
 

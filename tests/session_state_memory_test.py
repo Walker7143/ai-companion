@@ -1,3 +1,5 @@
+import gc
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,12 +45,8 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
                 }
             ]
         )
-        await self.resolver.apply_diff(
-            store=self.store,
-            session_id="s1",
-            diff=first,
-            evidence_turn_id="t1",
-        )
+        await self.resolver.apply_diff(store=self.store, session_id="s1", diff=first, evidence_turn_id="t1")
+
         second = SessionStateDiff(
             upserts=[
                 {
@@ -61,12 +59,7 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
                 }
             ]
         )
-        result = await self.resolver.apply_diff(
-            store=self.store,
-            session_id="s1",
-            diff=second,
-            evidence_turn_id="t2",
-        )
+        result = await self.resolver.apply_diff(store=self.store, session_id="s1", diff=second, evidence_turn_id="t2")
         active = await self.store.list_active_states("s1")
         self.assertEqual(1, len(active))
         self.assertIn("豪华大床房", active[0].value)
@@ -112,8 +105,10 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
                 ]
             )
         )
+        from ai_companion.memory.session_state import SessionStateItem
+
         await self.store.upsert_state(
-            __import__("ai_companion.memory.session_state", fromlist=["SessionStateItem"]).SessionStateItem(
+            SessionStateItem(
                 state_id="x1",
                 session_id="s3",
                 scope="trip/lodging",
@@ -186,7 +181,8 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
     async def test_session_state_does_not_project_into_understanding(self):
         from ai_companion.memory.engine import MemoryEngine
 
-        with tempfile.TemporaryDirectory(prefix="session-state-boundary-") as td:
+        td = tempfile.mkdtemp(prefix="session-state-boundary-")
+        try:
             engine = MemoryEngine("boundary_bot", Path(td), config={"embedding": "none"})
             await engine.init()
             engine.working.start_session("s-boundary")
@@ -212,6 +208,50 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
             rendered = str(understanding.get("layered", {}))
             self.assertNotIn("豪华大床房", rendered)
             await engine.close()
+            del engine
+            gc.collect()
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    async def test_relationship_consistency_rewrites_denial_of_confirmed_partner_status(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        class RelationshipSummarizer:
+            async def chat(self, messages, system_prompt=None, max_tokens=None):
+                text = str(messages[-1].get("content") or "")
+                if "判断回复是否和当前状态冲突" in text:
+                    return {"content": '{"consistent": true, "severity": "none", "conflicts": [], "rewrite_guidance": ""}'}
+                if "你是关系一致性裁判" in text:
+                    return {"content": '{"consistent": false, "severity": "high", "conflicts": ["回复否认了已经确认的恋人关系"], "rewrite_guidance": "承接恋人关系，但可以嘴硬"}'}
+                if "你要重写一条回复，使其承接已经确认的关系事实" in text:
+                    return {"content": "……男朋友就男朋友，少得意，先过来吃早餐。"}
+                return {"content": ""}
+
+            async def summarize_old_conversation(self, old_messages_text):
+                return old_messages_text[:120]
+
+        td = tempfile.mkdtemp(prefix="relationship-consistency-")
+        try:
+            engine = MemoryEngine("relationship_bot", Path(td), config={"embedding": "none"})
+            await engine.init()
+            engine.set_summarizer(RelationshipSummarizer())
+            rewritten, result = await engine.ensure_response_state_consistency(
+                "……谁给你封的官儿啊？我怎么不记得批准过这任命？",
+                session_id="s-relationship",
+                relationship_state={
+                    "relationship_label": "恋人",
+                    "relationship_narrative": "你们已经确认恋人/男女朋友关系，关系很亲近。",
+                    "interaction_guidance": "承接已经确认的恋人关系；可用少量共同记忆和亲近语气，但不要否认关系事实。",
+                },
+            )
+            self.assertFalse(result["consistent"])
+            self.assertIn("恋人关系", "".join(result["conflicts"]))
+            self.assertIn("男朋友", rewritten)
+            await engine.close()
+            del engine
+            gc.collect()
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
 
 
 if __name__ == "__main__":

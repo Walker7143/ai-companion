@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..continuity import RelationshipProjectionService
+
 
 class UserUnderstandingStore:
     """Readable user profile backed by memory/user_understanding.json.
@@ -180,6 +182,7 @@ class UserUnderstandingStore:
     def __init__(self, path: str | Path, max_value_chars: int = 4400):
         self.path = Path(path)
         self.max_value_chars = max_value_chars
+        self.relationship_projection = RelationshipProjectionService()
 
     async def init(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -396,16 +399,12 @@ class UserUnderstandingStore:
         committed_relationship = False
         if relationship:
             label = str(relationship.get("relationship_label") or "").strip()
-            narrative = str(relationship.get("relationship_narrative") or "").strip()
-            posture = str(relationship.get("current_posture") or "").strip()
-            guidance = str(relationship.get("interaction_guidance") or "").strip()
+            projection = self.relationship_projection.build_projection(relationship)
             committed_relationship = _is_committed_relationship(label)
-            if narrative:
-                self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], narrative)
-            if posture:
-                self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], posture)
-            if guidance:
-                self._append_unique(relationship_memory["repair_preferences"], guidance)
+            for item in projection.get("need_from_bot") or []:
+                self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], str(item))
+            for item in projection.get("repair_preferences") or []:
+                self._append_unique(relationship_memory["repair_preferences"], str(item))
             if label:
                 self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], f"当前关系标签：{label}")
             if _float(relationship.get("tension_score"), 0) >= 45:
@@ -415,7 +414,7 @@ class UserUnderstandingStore:
                 self._append_unique(relationship_memory["things_that_brought_them_closer"], "近期互动提升了信任或亲密感。")
             for moment in relationship.get("key_moments") or []:
                 self._append_unique(relationship_memory["things_that_brought_them_closer"], str(moment))
-            for thread in relationship.get("open_emotional_threads") or []:
+            for thread in projection.get("open_threads") or []:
                 self._append_unique(auto["open_threads"], str(thread))
                 self._append_unique(relationship_memory["what_user_seems_to_need_from_bot"], f"还有未完成的情绪话题：{thread}")
 

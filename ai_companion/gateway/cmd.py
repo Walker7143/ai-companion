@@ -940,6 +940,8 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "bot_id": bot_id,
                 "user_id": getattr(bot.memory, "user_id", user_id or "default_user"),
                 "memory_trust_view": status.get("memory_trust_view") or {},
+                "continuity_contract": status.get("continuity_contract") or {},
+                "relationship_projection": status.get("relationship_projection") or {},
                 "session_state": status.get("memory_trust_view", {}).get("session_state") or [],
                 "recent_lifecycle_events": status.get("recent_lifecycle_events") or [],
                 "fact_history": status.get("fact_history") or [],

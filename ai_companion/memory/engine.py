@@ -43,8 +43,10 @@ from .activation import MemoryActivationPlanner
 from .conscious import ConsciousContextBuilder
 from .prompt_builder import MemoryPromptBuilder
 from .retriever import MemoryRetriever
+from .continuity import ContinuityContractBuilder, RelationshipProjectionService
 from .dreaming import DreamingOrchestrator
 from .session_state import (
+    RelationshipConsistencyChecker,
     ResponseStateConsistencyChecker,
     SessionStateExtractor,
     SessionStateResolver,
@@ -164,6 +166,9 @@ class MemoryEngine:
         self.session_state_extractor = SessionStateExtractor()
         self.session_state_resolver = SessionStateResolver()
         self.response_state_checker = ResponseStateConsistencyChecker()
+        self.relationship_state_checker = RelationshipConsistencyChecker()
+        self.continuity_contract_builder = ContinuityContractBuilder()
+        self.relationship_projection = RelationshipProjectionService()
         self.governor = MemoryGovernor(
             semantic_store=self.semantic,
             episodic_store=self.episodic,
@@ -219,6 +224,7 @@ class MemoryEngine:
         self.extractor.set_summarizer(summarizer)
         self.session_state_extractor.set_summarizer(summarizer)
         self.response_state_checker.set_summarizer(summarizer)
+        self.relationship_state_checker.set_summarizer(summarizer)
 
     def start_session(self, session_id: str = None):
         self._session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -288,6 +294,7 @@ class MemoryEngine:
             "memory_intent": retrieved.intent,
             "user_understanding": self.user_understanding.load(),
             "memory_activation_plan": retrieved.activation_plan.to_dict() if retrieved.activation_plan else {},
+            "continuity_contract": retrieved.continuity_contract.to_dict() if retrieved.continuity_contract else {},
             "conscious_context": conscious.to_dict(),
             "memory_prompt_diagnostics": diagnostics,
             "system_suffix": suffix,
@@ -397,13 +404,25 @@ class MemoryEngine:
             await self.rebuild_vector_index()
         return session_state_result
 
-    async def ensure_response_state_consistency(self, response: str, session_id: str) -> tuple[str, dict[str, Any]]:
+    async def ensure_response_state_consistency(self, response: str, session_id: str, relationship_state: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
         active_states = await self.session_state.list_active_states(session_id) if session_id else []
         check = await self.response_state_checker.check(response, active_states)
-        if check.get("consistent", True):
-            return response, check
-        rewritten = await self.response_state_checker.rewrite(response, active_states, check.get("conflicts") or [])
-        return rewritten, check
+        if not check.get("consistent", True):
+            response = await self.response_state_checker.rewrite(response, active_states, check.get("conflicts") or [])
+
+        relationship_check = await self.relationship_state_checker.check(response, relationship_state)
+        if not relationship_check.get("consistent", True):
+            response = await self.relationship_state_checker.rewrite(response, relationship_state, relationship_check.get("conflicts") or [])
+
+        merged = {
+            "consistent": bool(check.get("consistent", True) and relationship_check.get("consistent", True)),
+            "severity": relationship_check.get("severity") if not relationship_check.get("consistent", True) else check.get("severity", "none"),
+            "conflicts": [*(check.get("conflicts") or []), *(relationship_check.get("conflicts") or [])],
+            "rewrite_guidance": relationship_check.get("rewrite_guidance") or check.get("rewrite_guidance") or "",
+            "relationship_consistency": relationship_check,
+            "session_state_consistency": check,
+        }
+        return response, merged
 
     async def record_assistant_message(
         self,
@@ -508,6 +527,20 @@ class MemoryEngine:
             lifecycle_events=lifecycle_events,
             session_state=active_session_states,
         )
+        continuity_contract = self.continuity_contract_builder.build(
+            current_input="",
+            retrieved=type(
+                "_StatusRetrieved",
+                (),
+                {
+                    "relationship_state": relationship or {},
+                    "turn_constraints": [],
+                    "session_state": active_session_states or [],
+                    "daily_context": daily_context or {},
+                },
+            )(),
+        )
+        relationship_projection = self.relationship_projection.build_projection(relationship or {})
 
         return {
             "session_id": sid,
@@ -524,6 +557,8 @@ class MemoryEngine:
             "daily_open_threads": daily_context.get("open_threads", []) if isinstance(daily_context, dict) else [],
             "daily_commitments": daily_context.get("commitments", []) if isinstance(daily_context, dict) else [],
             "memory_trust_view": trust_view,
+            "continuity_contract": continuity_contract.to_dict(),
+            "relationship_projection": relationship_projection,
             "recent_lifecycle_events": lifecycle_events,
             "fact_history": fact_history,
             "user_understanding_path": str(self.user_understanding.path),

@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Any
 
 from .activation import MemoryActivationPlan
+from .continuity import ContinuityContract, ContinuityContractBuilder
 
 
 @dataclass
@@ -24,6 +25,7 @@ class RetrievedMemory:
     relationship_state: dict[str, Any] = field(default_factory=dict)
     user_understanding: dict[str, Any] = field(default_factory=dict)
     activation_plan: MemoryActivationPlan | None = None
+    continuity_contract: ContinuityContract | None = None
 
 
 class MemoryRetriever:
@@ -99,6 +101,7 @@ class MemoryRetriever:
         self.session_state_store = session_state_store
         self.max_working_turns = max_working_turns
         self.max_summaries = max_summaries
+        self.contract_builder = ContinuityContractBuilder()
 
     async def retrieve(
         self,
@@ -213,7 +216,7 @@ class MemoryRetriever:
                 intent=detected_intent,
             )
 
-        return RetrievedMemory(
+        retrieved = RetrievedMemory(
             intent=detected_intent,
             working_history=working,
             session_state=session_state,
@@ -227,6 +230,8 @@ class MemoryRetriever:
             relationship_state=relationship,
             user_understanding=understanding,
         )
+        retrieved.continuity_contract = self.contract_builder.build(current_input=current_input, retrieved=retrieved)
+        return retrieved
 
     def classify_intent(self, text: str) -> str:
         text = text or ""

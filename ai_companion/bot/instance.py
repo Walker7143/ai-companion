@@ -675,6 +675,19 @@ class BotInstance:
             system_prompt = system_prompt + "\n\n" + embodied_prompt
         if memory_suffix:
             system_prompt = system_prompt + "\n\n" + memory_suffix
+        contract = memory_context.get("continuity_contract") if isinstance(memory_context, dict) else {}
+        if isinstance(contract, dict) and contract:
+            guard_lines: list[str] = []
+            for item in contract.get("hard_facts") or []:
+                text = str((item or {}).get("text") or "").strip()
+                if text:
+                    guard_lines.append(f"- {text}")
+            for item in contract.get("active_boundaries") or []:
+                text = str((item or {}).get("text") or "").strip()
+                if text:
+                    guard_lines.append(f"- {text}")
+            if guard_lines:
+                system_prompt = system_prompt + "\n\n【生成前连续性护栏】\n" + "\n".join(guard_lines[:8])
         if adjustment_note:
             system_prompt = system_prompt + adjustment_note
         return system_prompt
@@ -726,6 +739,7 @@ class BotInstance:
         user_understanding = copy.deepcopy(ctx.get("user_understanding", {})) if isinstance(ctx.get("user_understanding"), dict) else {}
         conscious_context = copy.deepcopy(ctx.get("conscious_context", {})) if isinstance(ctx.get("conscious_context"), dict) else {}
         prompt_diagnostics = copy.deepcopy(ctx.get("memory_prompt_diagnostics", {})) if isinstance(ctx.get("memory_prompt_diagnostics"), dict) else {}
+        continuity_contract = copy.deepcopy(ctx.get("continuity_contract", {})) if isinstance(ctx.get("continuity_contract"), dict) else {}
 
         retrieved_memory = {
             "working_history": working_history,
@@ -738,6 +752,7 @@ class BotInstance:
             "user_understanding": user_understanding,
             "conscious_context": conscious_context,
             "memory_prompt_diagnostics": prompt_diagnostics,
+            "continuity_contract": continuity_contract,
             "system_suffix": ctx.get("system_suffix", ""),
         }
         response_style_trace = {
@@ -759,6 +774,7 @@ class BotInstance:
             "retrieved_memory": retrieved_memory,
             "response_style_trace": response_style_trace,
             "memory_prompt_diagnostics": prompt_diagnostics,
+            "continuity_contract": continuity_contract,
             "conscious_context": conscious_context,
             "active_session_state": copy.deepcopy(ctx.get("session_state", [])) if isinstance(ctx.get("session_state"), list) else [],
             "memory_intent": ctx.get("memory_intent", ""),
@@ -963,6 +979,7 @@ class BotInstance:
             response, state_check = await self.memory.ensure_response_state_consistency(
                 response,
                 str((memory_turn_context or {}).get("session_id") or getattr(getattr(self.memory, "working", None), "current_session", "") or ""),
+                relationship_state=relationship_state,
             )
             response = self._polish_response(response, ctx, relationship_state)
             self._record_deferred_reply_task_if_detected(effective_user_input, response, memory_turn_context)

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from ..context.tokenizer import TokenEstimator
 from .conscious import ConsciousContext
+from .continuity import is_committed_relationship_label
 from .retriever import RetrievedMemory
 
 
@@ -116,6 +117,18 @@ class MemoryPromptBuilder:
                     ),
                     budget=max(260, int(budgets["turn_constraints"] * 1.4)),
                     priority=1,
+                )
+            )
+        contract_text = self._format_continuity_contract(retrieved)
+        if contract_text:
+            blocks.append(
+                PromptBlock(
+                    name="continuity_contract",
+                    title="【连续性硬约束】",
+                    body=contract_text,
+                    usage="使用方式：先满足这些硬约束，再决定语气、姿态和展开方式。",
+                    budget=max(420, int(budgets["turn_constraints"] * 1.8)),
+                    priority=2,
                 )
             )
         if turn_constraint_text:
@@ -362,6 +375,27 @@ class MemoryPromptBuilder:
                 timing.append(f"有效期至 {expires}")
             suffix = f"（{'，'.join(timing)}）" if timing else ""
             lines.append(f"  - {value}{suffix}")
+        return "\n".join(lines)
+
+    def _format_continuity_contract(self, retrieved: RetrievedMemory) -> str:
+        contract = getattr(retrieved, "continuity_contract", None)
+        if contract is None:
+            return ""
+        lines: list[str] = []
+        for item in sorted(contract.hard_facts, key=lambda fact: fact.priority):
+            if item.text:
+                lines.append(f"- 硬事实：{item.text}")
+        for item in sorted(contract.active_boundaries, key=lambda fact: fact.priority):
+            if item.text:
+                lines.append(f"- 当前约束：{item.text}")
+        for item in sorted(contract.soft_context, key=lambda fact: fact.priority)[:4]:
+            if item.text:
+                lines.append(f"- 当前语境：{item.text}")
+        for item in sorted(contract.style_freedom, key=lambda fact: fact.priority)[:2]:
+            if item.text:
+                lines.append(f"- 表达自由：{item.text}")
+        if getattr(contract, "risk_flags", None):
+            lines.append(f"- 风险标记：{'；'.join(contract.risk_flags)}")
         return "\n".join(lines)
 
     def _format_session_state(self, retrieved: RetrievedMemory) -> str:
@@ -1645,3 +1679,7 @@ def _value_tokens(value: object) -> set[str]:
         return tokens
     rendered = _render_value(value)
     return {rendered} if rendered else set()
+
+
+def _is_committed_relationship(label: object) -> bool:
+    return is_committed_relationship_label(label)

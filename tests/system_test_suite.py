@@ -2544,6 +2544,34 @@ class SystemTestSuite:
             indent=2,
         )
 
+    async def case_relationship_continuity_contract_prompt(self) -> tuple[bool, str, str]:
+        from ai_companion.memory.engine import MemoryEngine
+
+        with tempfile.TemporaryDirectory(prefix="sys-test-relationship-contract-") as td:
+            engine = MemoryEngine("contract_bot", Path(td), config={"embedding": "none"})
+            await engine.init()
+            await engine.relationship.apply_event(
+                bot_id="contract_bot",
+                user_id="default_user",
+                label="恋人",
+                intimacy_delta=80,
+                affection_delta=80,
+                trust_delta=80,
+                key_moment="正式确认恋人关系",
+            )
+            context = await engine.load_context("你忘了我是你男朋友？")
+            await engine.close()
+
+        contract = context.get("continuity_contract") or {}
+        hard_facts = contract.get("hard_facts") or []
+        suffix = context.get("system_suffix", "")
+        passed = bool(hard_facts) and "连续性硬约束" in suffix
+        return passed, f"hard_facts={len(hard_facts)}", json.dumps(
+            {"continuity_contract": contract, "system_suffix": suffix},
+            ensure_ascii=False,
+            indent=2,
+        )
+
     def case_admin_memory_api_schema_compatibility(self) -> tuple[bool, str, str]:
         gateway_text = (self.root / "ai_companion" / "gateway" / "cmd.py").read_text(encoding="utf-8")
         types_text = (self.root / "ai-companion-ui" / "src" / "types" / "index.ts").read_text(encoding="utf-8")

@@ -560,3 +560,132 @@ class ResponseStateConsistencyChecker:
         except Exception:
             pass
         return response
+
+
+class RelationshipConsistencyChecker:
+    DENIAL_PATTERNS = (
+        "没答应",
+        "不记得承认",
+        "谁给你封的官",
+        "谁封的官",
+        "还不是",
+        "别乱认",
+        "我怎么不记得批准",
+        "没批准过这任命",
+    )
+
+    CHECK_PROMPT = """你是关系一致性裁判。
+
+当前关系状态:
+{relationship_state}
+
+候选回复:
+{response}
+
+判断回复是否否认了已经确认的关系事实。只输出 JSON:
+{{
+  "consistent": true,
+  "severity": "none|low|medium|high",
+  "conflicts": ["..."],
+  "rewrite_guidance": ""
+}}
+
+要求:
+- 如果关系标签已经是恋人/男女朋友，回复不能再说“没答应”“不记得承认”“谁封的官”等否认关系事实的话。
+- 可以嘴硬、害羞、别扭，但不能推翻已确认关系。
+"""
+
+    REWRITE_PROMPT = """你要重写一条回复，使其承接已经确认的关系事实，同时尽量保留原有语气。
+
+当前关系状态:
+{relationship_state}
+
+原回复:
+{response}
+
+冲突说明:
+{conflicts}
+
+只输出可直接发给用户的最终回复，不要解释。"""
+
+    def __init__(self, summarizer: object | None = None):
+        self._summarizer = summarizer
+
+    def set_summarizer(self, summarizer):
+        self._summarizer = summarizer
+
+    def rule_check(self, response: str, relationship_state: dict[str, Any] | None) -> dict[str, Any]:
+        state = relationship_state if isinstance(relationship_state, dict) else {}
+        label = str(state.get("relationship_label") or state.get("relationship_level") or "").strip()
+        if label not in {"恋人", "男女朋友", "男朋友", "女朋友", "伴侣", "爱人", "老婆", "老公"}:
+            return {"consistent": True, "severity": "none", "conflicts": [], "rewrite_guidance": "", "matched_rules": []}
+        text = str(response or "").strip()
+        matched = [pattern for pattern in self.DENIAL_PATTERNS if pattern and pattern in text]
+        if not matched:
+            return {"consistent": True, "severity": "none", "conflicts": [], "rewrite_guidance": "", "matched_rules": []}
+        return {
+            "consistent": False,
+            "severity": "high",
+            "conflicts": [f"回复包含对已确认关系的否认模板: {pattern}" for pattern in matched],
+            "rewrite_guidance": "承接已确认关系；可以嘴硬或傲娇，但不能否认关系本身。",
+            "matched_rules": matched,
+        }
+
+    async def llm_check(self, response: str, relationship_state: dict[str, Any] | None) -> dict[str, Any]:
+        state = relationship_state if isinstance(relationship_state, dict) else {}
+        label = str(state.get("relationship_label") or state.get("relationship_level") or "").strip()
+        if self._summarizer is None or not label:
+            return {"consistent": True, "severity": "none", "conflicts": [], "rewrite_guidance": ""}
+        prompt = self.CHECK_PROMPT.format(
+            relationship_state=json.dumps(state, ensure_ascii=False),
+            response=response,
+        )
+        try:
+            raw = await self._summarizer.chat(messages=[{"role": "user", "content": prompt}], system_prompt=None)
+            text = str(raw.get("content") if isinstance(raw, dict) else raw or "").strip()
+            text = re.sub(r"```json\s*", "", text)
+            text = re.sub(r"```\s*", "", text).strip()
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                return {
+                    "consistent": bool(payload.get("consistent", True)),
+                    "severity": str(payload.get("severity") or "none"),
+                    "conflicts": _as_list(payload.get("conflicts")),
+                    "rewrite_guidance": str(payload.get("rewrite_guidance") or ""),
+                }
+        except Exception:
+            pass
+        return {"consistent": True, "severity": "none", "conflicts": [], "rewrite_guidance": ""}
+
+    async def check(self, response: str, relationship_state: dict[str, Any] | None) -> dict[str, Any]:
+        rule_result = self.rule_check(response, relationship_state)
+        llm_result = await self.llm_check(response, relationship_state)
+        consistent = bool(rule_result.get("consistent", True) and llm_result.get("consistent", True))
+        severity = "none"
+        if not consistent:
+            severity = "high" if rule_result.get("matched_rules") else str(llm_result.get("severity") or "high")
+        return {
+            "consistent": consistent,
+            "severity": severity,
+            "conflicts": [*(rule_result.get("conflicts") or []), *(llm_result.get("conflicts") or [])],
+            "rewrite_guidance": rule_result.get("rewrite_guidance") or llm_result.get("rewrite_guidance") or "",
+            "matched_rules": rule_result.get("matched_rules") or [],
+        }
+
+    async def rewrite(self, response: str, relationship_state: dict[str, Any] | None, conflicts: list[str]) -> str:
+        state = relationship_state if isinstance(relationship_state, dict) else {}
+        if self._summarizer is None or not conflicts or not state:
+            return response
+        prompt = self.REWRITE_PROMPT.format(
+            relationship_state=json.dumps(state, ensure_ascii=False),
+            response=response,
+            conflicts="\n".join(f"- {item}" for item in conflicts),
+        )
+        try:
+            raw = await self._summarizer.chat(messages=[{"role": "user", "content": prompt}], system_prompt=None)
+            text = str(raw.get("content") if isinstance(raw, dict) else raw or "").strip()
+            if text:
+                return text
+        except Exception:
+            pass
+        return response

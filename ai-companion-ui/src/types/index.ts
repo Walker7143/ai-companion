@@ -84,6 +84,31 @@ export interface MemoryTrustPayload {
   relationship?: Record<string, unknown>;
   daily_open_threads?: unknown[];
   daily_commitments?: unknown[];
+  continuity_contract?: ContinuityContractView | null;
+  relationship_projection?: RelationshipProjectionView | null;
+}
+
+export interface ContinuityContractFact {
+  kind?: string;
+  text?: string;
+  source?: string;
+  priority?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ContinuityContractView {
+  hard_facts?: ContinuityContractFact[];
+  active_boundaries?: ContinuityContractFact[];
+  soft_context?: ContinuityContractFact[];
+  style_freedom?: ContinuityContractFact[];
+  risk_flags?: string[];
+}
+
+export interface RelationshipProjectionView {
+  label?: string;
+  need_from_bot?: string[];
+  repair_preferences?: string[];
+  open_threads?: string[];
 }
 
 export interface VectorRebuildResult {
@@ -242,6 +267,7 @@ export interface DebugContextPayload {
     memory_suffix: string | Record<string, unknown>;
     system_suffix?: string;
     memory_prompt_diagnostics?: Record<string, unknown>;
+    continuity_contract?: ContinuityContractView;
     working_history: Message[];
     retrieved_memory: Record<string, unknown>;
     response_style_trace: Record<string, unknown>;
