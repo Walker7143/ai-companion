@@ -616,7 +616,17 @@ class RelationshipStore:
             + max(-deltas["attitude_delta"], 0)
             + max(deltas["tension_delta"], 0)
         )
-        explicit_commitment = any(word in text for word in ["在一起", "确认关系", "恋人", "情侣", "交往", "成为伴侣"])
+        def _negated_match(keyword: str) -> bool:
+            idx = text.find(keyword)
+            if idx < 0:
+                return False
+            prefix = text[max(0, idx - 3):idx]
+            for neg in ("不", "没", "别", "非", "无"):
+                if neg in prefix:
+                    return False
+            return True
+
+        explicit_commitment = any(_negated_match(w) for w in ["在一起", "确认关系", "恋人", "情侣", "交往", "成为伴侣"])
         romantic_signal = explicit_commitment or any(word in text for word in ["暧昧", "表白", "喜欢", "心动", "吃醋", "牵手"])
         rupture_signal = any(word in text for word in ["分手", "断联", "拉黑", "绝交", "不想见", "结束关系", "严重伤害"])
         meaningful = bool(key_moment) or positive_amount >= 8 or romantic_signal or explicit_commitment
@@ -809,7 +819,7 @@ def _rank(label: str) -> int:
 def _dimension_delta(value: object) -> float:
     number = _number(value)
     if abs(number) <= 1:
-        number *= 8
+        number *= 4
     return _clamp(number, -20, 20)
 
 

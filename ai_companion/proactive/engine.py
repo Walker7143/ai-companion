@@ -1606,7 +1606,7 @@ class ProactiveEngine:
             shareable_events = self._recent_visible_shareable_life_events(limit=2)
             if shareable_events:
                 event = shareable_events[0]
-                bot_life_context = f"{event.description}"
+                bot_life_context = f"【Bot自身生活事件】{event.description}"
                 if event.topic_prompt:
                     bot_life_context += f"\n可以这样提起：{event.topic_prompt}"
 

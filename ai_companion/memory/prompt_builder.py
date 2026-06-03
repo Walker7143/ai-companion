@@ -8,6 +8,7 @@ from ..context.tokenizer import TokenEstimator
 from .conscious import ConsciousContext
 from .continuity import is_committed_relationship_label
 from .retriever import RetrievedMemory
+from .scene_authority import categorize_scene_text
 
 
 @dataclass
@@ -37,8 +38,9 @@ class PromptBlock:
 class MemoryPromptBuilder:
     """Convert retrieved memory into a compact system prompt suffix."""
 
-    def __init__(self, max_chars: int = 4400):
+    def __init__(self, max_chars: int = 4400, scene_filter_enabled: bool = True):
         self.max_chars = max_chars
+        self.scene_filter_enabled = scene_filter_enabled
         self.understanding_char_limits = {
             "casual_chat": min(2600, max(1400, int(max_chars * 0.24))),
             "task_request": min(1800, max(1000, int(max_chars * 0.16))),
@@ -97,6 +99,7 @@ class MemoryPromptBuilder:
     def _build_blocks(self, retrieved: RetrievedMemory, conscious: ConsciousContext | None = None) -> list[PromptBlock]:
         blocks: list[PromptBlock] = []
         budgets = self._block_budgets(retrieved.intent)
+        budgets = self._apply_scene_budget_adjustments(budgets, retrieved)
         anchored_fact_lines = self._format_anchored_fact_items(retrieved)
         anchored_fact_keys = {
             item.get("key")
@@ -347,6 +350,39 @@ class MemoryPromptBuilder:
             key: max(220, int(self.max_chars * value))
             for key, value in weights.items()
         }
+
+    def _has_active_scene(self, retrieved: RetrievedMemory) -> bool:
+        states = getattr(retrieved, "session_state", None)
+        if not isinstance(states, list) or not states:
+            return False
+        for state in states:
+            scope = state.scope if hasattr(state, "scope") else state.get("scope", "")
+            if scope == "current_scene":
+                return True
+        return False
+
+    def _apply_scene_budget_adjustments(self, budgets: dict[str, int], retrieved: RetrievedMemory) -> dict[str, int]:
+        if not self.scene_filter_enabled:
+            return budgets
+        if not self._has_active_scene(retrieved):
+            return budgets
+        adjusted = dict(budgets)
+        for key in ("vector_recall", "rollups"):
+            if key in adjusted:
+                adjusted[key] = max(220, int(adjusted[key] * 0.5))
+        if "episodic" in adjusted:
+            adjusted["episodic"] = max(220, int(adjusted["episodic"] * 0.7))
+        freed = sum(
+            budgets.get(k, 0) - adjusted.get(k, 0)
+            for k in ("vector_recall", "episodic", "rollups")
+        )
+        if freed > 0:
+            half = freed // 2
+            if "short_term" in adjusted:
+                adjusted["short_term"] = adjusted.get("short_term", 0) + half
+            if "anchored_facts" in adjusted:
+                adjusted["anchored_facts"] = adjusted.get("anchored_facts", 0) + (freed - half)
+        return adjusted
 
     def _conscious_char_limit(self, intent: str) -> int:
         if intent in {"recall_past", "relationship_repair", "emotional_support"}:

@@ -15,6 +15,7 @@ from ..context.document_reader import (
     split_text_chunks,
 )
 from ..memory.engine import MemoryEngine
+from ..memory.session_state import extract_scene_summary
 from ..persona.loader import PersonaLoader
 from ..persona.engine import PersonaEngine
 from ..persona.refusal_engine import RefusalEngine
@@ -662,10 +663,19 @@ class BotInstance:
         relationship_state: dict | None = None,
     ) -> str:
         life_context = self._get_generation_life_context()
-        system_prompt = self.persona_engine.build_system_prompt(life_context=life_context)
+        runtime_rel_label = None
+        if isinstance(relationship_state, dict) and relationship_state.get("relationship_label"):
+            runtime_rel_label = str(relationship_state["relationship_label"])
+        system_prompt = self.persona_engine.build_system_prompt(
+            life_context=life_context,
+            runtime_relationship_label=runtime_rel_label,
+        )
         time_constraints = build_generation_time_constraints(life_context)
         if time_constraints:
             system_prompt = system_prompt + "\n\n" + time_constraints
+        scene_constraint = self._build_scene_constraint(memory_context or {})
+        if scene_constraint:
+            system_prompt = system_prompt + "\n\n" + scene_constraint
         embodied_prompt = self._build_embodied_expression_prompt(
             user_input=user_input,
             memory_context=memory_context or {},
@@ -691,6 +701,38 @@ class BotInstance:
         if adjustment_note:
             system_prompt = system_prompt + adjustment_note
         return system_prompt
+
+    def _has_active_scene(self, ctx: dict) -> bool:
+        if self.memory is not None and not self.memory.config.get("scene_constraint_enabled", True):
+            return False
+        states = ctx.get("session_state")
+        if not isinstance(states, list):
+            return False
+        scene = extract_scene_summary(states)
+        return scene is not None
+
+    def _build_scene_constraint(self, memory_context: dict) -> str | None:
+        if self.memory is not None and not self.memory.config.get("scene_constraint_enabled", True):
+            return None
+        session_states = memory_context.get("session_state")
+        if not isinstance(session_states, list) or not session_states:
+            return None
+        scene = extract_scene_summary(session_states)
+        if not scene:
+            return None
+        location = scene.get("location") or ""
+        activity = scene.get("activity") or ""
+        if not location and not activity:
+            return None
+        parts = []
+        if location and activity:
+            parts.append(f"你当前所在的场景：{location}，正在{activity}。")
+        elif location:
+            parts.append(f"你当前所在的场景：{location}。")
+        elif activity:
+            parts.append(f"你当前正在：{activity}。")
+        parts.append("你必须保持在这个场景中回复。不要跳到其他地点或活动，不要假设场景已改变。除非用户明确说离开当前场景，否则不要离开。")
+        return "【场景硬约束】\n" + " ".join(parts)
 
     def _get_generation_life_context(self) -> dict:
         if self.life_engine:
@@ -972,7 +1014,8 @@ class BotInstance:
             messages.append({"role": "user", "content": effective_user_input})
 
             # 5. 对话
-            response = await self._chat_with_fallback(messages, system_prompt)
+            chat_temp = 0.55 if self._has_active_scene(ctx) else None
+            response = await self._chat_with_fallback(messages, system_prompt, temperature=chat_temp)
             if response is None:
                 return self._format_model_failure_message()
             state_check = {"consistent": True, "severity": "none", "conflicts": [], "rewrite_guidance": ""}
@@ -1831,11 +1874,14 @@ class BotInstance:
             user_understanding=(memory_context or {}).get("user_understanding") or {},
         )
 
-    async def _chat_with_fallback(self, messages: list[dict], system_prompt: str = "") -> Optional[str]:
+    async def _chat_with_fallback(self, messages: list[dict], system_prompt: str = "", *, temperature: float | None = None) -> Optional[str]:
         """调用模型聊天，失败时返回 None（由调用者处理友好提示）"""
         try:
             self._last_model_error = None
-            response = await self.model.chat(messages, system_prompt)
+            kwargs = {}
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            response = await self.model.chat(messages, system_prompt, **kwargs)
             cleaned = self.response_polisher.strip_reasoning_artifacts(response)
             if cleaned and not self.response_polisher.looks_like_reasoning_artifact(cleaned):
                 return cleaned
@@ -1850,7 +1896,10 @@ class BotInstance:
                     ),
                 }
             ]
-            response = await self.model.chat(retry_messages, system_prompt)
+            kwargs_retry = {}
+            if temperature is not None:
+                kwargs_retry["temperature"] = temperature
+            response = await self.model.chat(retry_messages, system_prompt, **kwargs_retry)
             cleaned = self.response_polisher.strip_reasoning_artifacts(response)
             if cleaned and not self.response_polisher.looks_like_reasoning_artifact(cleaned):
                 return cleaned

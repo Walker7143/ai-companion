@@ -85,6 +85,8 @@ WEB_CONFIG_SCHEMA = {
                 "dreaming.report_retention": "保留最近多少次整理报告。",
                 "dreaming.max_candidates": "单次整理最多扫描多少候选。",
                 "dreaming.max_promotions": "单次整理最多提升多少条到长期层。",
+                "scene_constraint_enabled": "在 prompt 中注入当前场景硬约束，防止 Bot 回复偏离场景（位置、活动等）。",
+                "scene_filter_memory_enabled": "当场景活跃时，过滤向量召回中与当前场景不兼容的记忆项，降低无关记忆预算。",
             },
         },
         {
@@ -786,6 +788,8 @@ class ConfigAdminService:
                 "max_candidates": _as_int(dreaming.get("max_candidates"), 24, 1, 200),
                 "max_promotions": _as_int(dreaming.get("max_promotions"), 6, 0, 50),
             },
+            "scene_constraint_enabled": bool(memory.get("scene_constraint_enabled", True)),
+            "scene_filter_memory_enabled": bool(memory.get("scene_filter_memory_enabled", True)),
         }
 
     def _public_skills(self, bot_id: str, models_data: dict) -> dict:
@@ -1072,6 +1076,8 @@ class ConfigAdminService:
             "semantic_char_limit": _as_int(memory_data.get("semantic_char_limit"), existing.get("semantic_char_limit", 4400), 500),
             "embedding": memory_data.get("embedding", existing.get("embedding", "local")),
             "embedding_model": memory_data.get("embedding_model", existing.get("embedding_model", "all-MiniLM-L6-v2")),
+            "scene_constraint_enabled": bool(memory_data.get("scene_constraint_enabled", existing.get("scene_constraint_enabled", True))),
+            "scene_filter_memory_enabled": bool(memory_data.get("scene_filter_memory_enabled", existing.get("scene_filter_memory_enabled", True))),
         })
         daily_data = memory_data.get("daily") if isinstance(memory_data.get("daily"), dict) else {}
         existing_daily = dict(existing.get("daily", {}) if isinstance(existing.get("daily"), dict) else {})

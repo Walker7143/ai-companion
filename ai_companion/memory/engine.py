@@ -177,6 +177,7 @@ class MemoryEngine:
             relationship_store=self.relationship,
             user_understanding=self.user_understanding,
         )
+        scene_filter_enabled = bool(self.config.get("scene_filter_memory_enabled", True))
         self.retriever = MemoryRetriever(
             working_store=self.working,
             daily_store=self.daily,
@@ -189,8 +190,12 @@ class MemoryEngine:
             session_state_store=self.session_state,
             max_working_turns=self.max_working_turns,
             max_summaries=self.max_summaries,
+            scene_filter_enabled=scene_filter_enabled,
         )
-        self.prompt_builder = MemoryPromptBuilder(max_chars=self.prompt_char_limit)
+        self.prompt_builder = MemoryPromptBuilder(
+            max_chars=self.prompt_char_limit,
+            scene_filter_enabled=scene_filter_enabled,
+        )
         self.activation_planner = MemoryActivationPlanner(
             self.config.get("activation", {}) if isinstance(self.config.get("activation"), dict) else {}
         )

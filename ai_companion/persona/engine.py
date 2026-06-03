@@ -20,7 +20,7 @@ class PersonaEngine:
     def __init__(self, persona: Persona):
         self.persona = persona
 
-    def build_system_prompt(self, life_context: dict | None = None) -> str:
+    def build_system_prompt(self, life_context: dict | None = None, *, runtime_relationship_label: str | None = None) -> str:
         # 每次重新读文件，确保拿到的关系/态度是最新的
         profile = self._load_json(self.persona.persona_dir / "profile.json")
         backstory = self._load_json(self.persona.persona_dir / "backstory.json")
@@ -74,8 +74,8 @@ class PersonaEngine:
                 lines.append(f"  - {moment}")
             lines.append("")
 
-        # 6. 与用户的关系（从文件实时读取，关系变化会自动反映）
-        rel = profile.get("relationship_to_user", "朋友")
+        # 6. 与用户的关系（优先使用运行时数据库状态，fallback 到 persona 文件）
+        rel = runtime_relationship_label or profile.get("relationship_to_user", "朋友")
         lines.append(f"你和用户的关系：{rel}。")
         if _is_committed_relationship(rel):
             lines.append(
@@ -464,12 +464,12 @@ class PersonaEngine:
 
         recent_major = life_context.get("recent_major_life_events") or []
         if recent_major:
-            lines.append("近期重要人生事件：")
+            lines.append("【Bot生活背景-近期重要人生事件】以下是你近期经历的重要人生事件，并非用户告诉你的：")
             lines.extend(self._format_recent_events(recent_major))
 
         recent_daily = life_context.get("recent_life_events") or []
         if recent_daily:
-            lines.append("近期日常事件：")
+            lines.append("【Bot生活背景-近期日常事件】以下是你近期的日常生活，并非用户告诉你的：")
             lines.extend(self._format_recent_events(recent_daily))
 
         lines.append("重要：当用户询问年龄、出生日期、当前年份、当前时间、几点、日期、星期、当前生活状态或最近经历时，必须以本段为准；profile.age 只是初始年龄，不代表当前年龄。")

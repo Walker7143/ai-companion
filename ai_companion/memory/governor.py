@@ -24,7 +24,7 @@ class GovernorResult:
 class MemoryGovernor:
     """Apply memory candidates to the right stores."""
 
-    MIN_FACT_CONFIDENCE = 0.6
+    MIN_FACT_CONFIDENCE = 0.75
     MIN_PROJECTION_CONFIDENCE = 0.75
     MIN_EPISODE_IMPORTANCE = 0.68
     MIN_EPISODE_CONFIDENCE = 0.6

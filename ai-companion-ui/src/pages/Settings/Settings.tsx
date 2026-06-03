@@ -237,6 +237,8 @@ const defaultMemory: BotConfig['memory'] = {
     max_candidates: 24,
     max_promotions: 6,
   },
+  scene_constraint_enabled: true,
+  scene_filter_memory_enabled: true,
 };
 
 const defaultSkills: BotConfig['skills'] = {
@@ -874,6 +876,26 @@ export function Settings() {
           <Input label="Embedding 模型" value={draft.memory.embedding_model} onChange={(event) => patchSection('memory', { embedding_model: event.target.value })} />
         </div>
         <FieldHint text="软阈值用于后台压缩，硬阈值会同步压缩。开启本地向量会增加首次加载时间和磁盘占用。" />
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)', display: 'grid', gap: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>场景一致性</div>
+              <FieldHint text="防止 Bot 回复偏离当前对话场景（位置、活动等）。" />
+            </div>
+          </div>
+          <div style={gridStyle}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>启用场景硬约束</div>
+              <Toggle checked={draft.memory.scene_constraint_enabled} onChange={(event) => patchSection('memory', { scene_constraint_enabled: event.target.checked })} />
+              <FieldHint text="在 prompt 中注入当前场景约束，确保 Bot 不离开当前场景。" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>启用场景感知记忆过滤</div>
+              <Toggle checked={draft.memory.scene_filter_memory_enabled} onChange={(event) => patchSection('memory', { scene_filter_memory_enabled: event.target.checked })} />
+              <FieldHint text="将 Life 事件等不兼容当前场景的记忆项降权，减少无关记忆干扰。" />
+            </div>
+          </div>
+        </div>
         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)', display: 'grid', gap: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>

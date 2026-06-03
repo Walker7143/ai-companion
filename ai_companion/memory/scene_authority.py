@@ -247,3 +247,19 @@ def build_scene_authority_diff(
         no_change=False,
         confidence_explanations=[f"scene_authority_cue_{matched['name']}"],
     )
+
+
+def is_memory_compatible_with_scene(scene_categories: set, memory_item: dict) -> bool:
+    """判断 memory item 是否与当前场景兼容。life_event 类型可能包含不兼容场景。"""
+    if not scene_categories:
+        return True
+    source = str(memory_item.get("source") or memory_item.get("type") or "")
+    if source not in ("life_event", "major_life_event"):
+        return True
+    text = str(memory_item.get("text") or memory_item.get("summary") or memory_item.get("content") or "")
+    if not text:
+        return True
+    memory_categories = categorize_scene_text(text)
+    if not memory_categories:
+        return True
+    return scene_conflict_reason(memory_categories, scene_categories) is None

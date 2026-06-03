@@ -8,6 +8,7 @@ from typing import Any
 
 from .activation import MemoryActivationPlan
 from .continuity import ContinuityContract, ContinuityContractBuilder
+from .scene_authority import categorize_scene_text, is_memory_compatible_with_scene
 
 
 @dataclass
@@ -89,6 +90,7 @@ class MemoryRetriever:
         session_state_store=None,
         max_working_turns: int = 20,
         max_summaries: int = 5,
+        scene_filter_enabled: bool = True,
     ):
         self.working = working_store
         self.daily = daily_store
@@ -101,6 +103,7 @@ class MemoryRetriever:
         self.session_state_store = session_state_store
         self.max_working_turns = max_working_turns
         self.max_summaries = max_summaries
+        self.scene_filter_enabled = scene_filter_enabled
         self.contract_builder = ContinuityContractBuilder()
 
     async def retrieve(
@@ -196,6 +199,7 @@ class MemoryRetriever:
                 include_archived=False,
             )
             vector_recall = self._filter_vector_recall(vector_recall, intent=detected_intent)
+            vector_recall = self._filter_vector_recall_by_scene(vector_recall, session_state)
         top_k = 5 if detected_intent in {"recall_past", "relationship_repair"} else 2
         episodic = []
         if detected_intent in {"recall_past", "emotional_support", "relationship_repair", "casual_chat", "planning"}:
@@ -301,6 +305,37 @@ class MemoryRetriever:
                 continue
             if (today - event_date).days >= 3:
                 continue
+            result.append(item)
+        return result
+
+    def _filter_vector_recall_by_scene(
+        self, items: list[dict[str, Any]], session_states: list
+    ) -> list[dict[str, Any]]:
+        if not self.scene_filter_enabled:
+            return items
+        if not session_states:
+            return items
+        scene_categories: set[str] = set()
+        for state in session_states:
+            scope = state.scope if hasattr(state, "scope") else state.get("scope", "")
+            if scope != "current_scene":
+                continue
+            predicate = state.predicate if hasattr(state, "predicate") else state.get("predicate", "")
+            if predicate in ("current_location", "current_activity"):
+                value = state.value if hasattr(state, "value") else state.get("value", "")
+                if value:
+                    scene_categories |= categorize_scene_text(str(value))
+        if not scene_categories:
+            return items
+        result: list[dict[str, Any]] = []
+        for item in items:
+            source = str(item.get("source_type") or item.get("source") or "")
+            if source in ("life_event", "major_life_event"):
+                if not is_memory_compatible_with_scene(scene_categories, item):
+                    demoted = dict(item)
+                    demoted["score"] = round(float(item.get("score", 0.5)) * 0.3, 2)
+                    result.append(demoted)
+                    continue
             result.append(item)
         return result
 

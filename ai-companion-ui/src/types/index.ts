@@ -402,6 +402,8 @@ export interface MemoryConfig {
   embedding_model: string;
   daily: DailyMemoryConfig;
   dreaming: DreamingConfig;
+  scene_constraint_enabled: boolean;
+  scene_filter_memory_enabled: boolean;
 }
 
 export interface DailyMemoryConfig {

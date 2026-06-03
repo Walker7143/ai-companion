@@ -347,6 +347,28 @@ class SessionStateStore:
         )
 
 
+def extract_scene_summary(active_states: list) -> dict | None:
+    """从活跃 session state 中提取当前场景摘要。兼容 SessionStateItem 对象和 dict。"""
+    location = None
+    activity = None
+    spatial = None
+    for item in active_states:
+        scope = item.scope if hasattr(item, "scope") else item.get("scope", "")
+        predicate = item.predicate if hasattr(item, "predicate") else item.get("predicate", "")
+        value = item.value if hasattr(item, "value") else item.get("value", "")
+        if scope != "current_scene":
+            continue
+        if predicate == "current_location":
+            location = value
+        elif predicate == "current_activity":
+            activity = value
+        elif predicate == "spatial_relationship":
+            spatial = value
+    if location or activity:
+        return {"location": location, "activity": activity, "spatial": spatial}
+    return None
+
+
 class SessionStateExtractor:
     EXTRACT_PROMPT = """你是短时世界状态跟踪器。
 

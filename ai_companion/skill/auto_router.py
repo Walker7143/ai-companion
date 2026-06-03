@@ -231,4 +231,5 @@ class AutoSkillRouter:
             lines.append(f"置信度: {confidence_text}")
         if safety_notes:
             lines.append(f"注意事项: {'; '.join(safety_notes)}")
+        lines.append("使用方式：这是对用户发送图片的自动分析结果。当你提到图片中的内容时，请说明\"从你发的图片里我看到...\"，不要表现得像你本来就知道这些信息。")
         return "" if len(lines) == 1 else "\n".join(lines)
