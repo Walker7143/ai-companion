@@ -980,6 +980,7 @@ class BotInstance:
                 response,
                 str((memory_turn_context or {}).get("session_id") or getattr(getattr(self.memory, "working", None), "current_session", "") or ""),
                 relationship_state=relationship_state,
+                user_input=effective_user_input,
             )
             response = self._polish_response(response, ctx, relationship_state)
             self._record_deferred_reply_task_if_detected(effective_user_input, response, memory_turn_context)

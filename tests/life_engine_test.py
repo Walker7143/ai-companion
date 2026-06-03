@@ -18,6 +18,48 @@ class EmptyLifeModel:
         return "[]"
 
 
+class PlantLifeModel:
+    provider = "test"
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        return '[{"scenario_key":"plant_care_01","description":"2026-06-01 她给绿萝松土，指尖沾了一点泥。","mood_before":"平静","mood_after":"放松","importance":3,"shareable":true,"topic_prompt":"今天给绿萝松土了。","mood_tags":["日常"],"related_to_user":false}]'
+
+
+class FakeSessionStateStore:
+    async def list_active_states(self, session_id):
+        from ai_companion.memory.session_state import SessionStateItem
+
+        return [
+            SessionStateItem(
+                state_id="scene-car",
+                session_id=session_id,
+                scope="current_scene",
+                subject="shared",
+                predicate="current_location",
+                value="车上/车内，正在出行路线上",
+                confidence=0.98,
+                status="active",
+                effective_at="2026-06-01T15:00:00",
+            )
+        ]
+
+
+class FakeWorkingStore:
+    current_session = "live-session"
+
+    def get_recent(self, session_id, turns=4, include_proactive=False):
+        return [
+            {"role": "user", "content": "在车上你还能给我丢了不成"},
+            {"role": "assistant", "content": "她握着方向盘，车子往大理古城开。"},
+        ]
+
+
+class FakeMemory:
+    def __init__(self):
+        self.session_state = FakeSessionStateStore()
+        self.working = FakeWorkingStore()
+
+
 class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
     def test_daily_life_profile_summary_keeps_current_life_anchor_fields(self):
         with TemporaryDirectory(prefix="life-profile-anchor-") as td:
@@ -304,6 +346,36 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertIn("中午随手买的饭团", description)
             self.assertNotIn("晚上试着自己炒菜", description)
+
+
+    async def test_daily_event_generation_rejects_unrelated_plant_event_during_vehicle_scene(self):
+        with TemporaryDirectory(prefix="life-live-scene-plant-") as td:
+            state = LifeState("live_scene_bot", Path(td))
+            state.current_date = "2026-06-01"
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
+            engine = LifeEngine("live_scene_bot", cfg, state, model=PlantLifeModel(), memory=FakeMemory())
+
+            event = await engine.generate_daily_event()
+
+            self.assertIsNone(event)
+
+    async def test_forced_daily_event_candidates_respect_vehicle_live_scene(self):
+        with TemporaryDirectory(prefix="life-live-scene-candidates-") as td:
+            state = LifeState("live_scene_candidates_bot", Path(td))
+            state.current_date = "2026-06-01"
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
+            engine = LifeEngine("live_scene_candidates_bot", cfg, state, model=EmptyLifeModel(), memory=FakeMemory())
+
+            live_scene = await engine._get_live_scene_context()
+            event = engine._build_forced_daily_event(live_scene=live_scene)
+
+            if event is not None:
+                text = f"{event.scenario_key} {event.description}"
+                self.assertFalse(any(cue in text for cue in ("绿萝", "松土", "办公室", "同事", "床单", "收纳")))
+            candidates = engine._daily_scenario_candidates(set(), current_hour=15, limit=100, live_scene=live_scene)
+            rendered = "\n".join(f"{item['key']} {' '.join(item.get('templates') or [])}" for item in candidates)
+            self.assertNotIn("绿萝", rendered)
+            self.assertNotIn("松土", rendered)
 
 
 if __name__ == "__main__":

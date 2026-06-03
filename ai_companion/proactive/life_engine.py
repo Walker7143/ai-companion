@@ -28,6 +28,7 @@ from ..temporal_guard import (
     is_event_visible_at_current_time,
     scenario_has_compatible_template,
 )
+from ..memory.scene_authority import categorize_scene_text
 
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
@@ -72,6 +73,7 @@ Bot 当前心情：{bot_mood}
 Bot 当前活动：{bot_current_activity}
 Bot 出生天数：{bot_age_days} 天
 最近发生的事件：{recent_events}
+你和用户最近/当前的共同处境：{live_scene_context}
 近期禁止复用的场景 key：{forbidden_scenarios}
 本次可选场景 key（只从这些 key 中选择）：{scenario_guidance}
 
@@ -94,6 +96,7 @@ Bot 出生天数：{bot_age_days} 天
 9. scenario_key 必须从“本次可选场景 key”里选择，除非确实需要输出空数组。
 10. 如果生活画像没有公司、办公室、同事、通勤等当前设定，不要生成这些通用职场/城市通勤事件；可以输出空数组。
 11. 事件必须是按当前本地时间已经可能发生的事；如果现在是中午，不要生成今天晚饭、晚饭后、晚上、睡前、夜宵等尚未发生的事件。
+12. 如果“你和用户最近/当前的共同处境”显示正在车上、吃饭、出门游览、洗澡、睡觉等 live 场景，事件必须优先承接这个 live 场景；如果可选场景都不贴合当前处境，输出 []，不要凭空生成养花、收纳、办公室、家务等无关事件。
 
 【输出格式】
 输出一个 JSON 数组，每个元素如下：
@@ -123,6 +126,7 @@ Bot 当前心情：{bot_mood}
 Bot 当前活动：{bot_current_activity}
 Bot 出生天数：{bot_age_days} 天（相当于 {age_years} 岁）
 最近发生的事件：{recent_events}
+你和用户最近/当前的共同处境：{live_scene_context}
 你们的关系：{relationship_desc}
 
 【人生大事定义】
@@ -143,6 +147,7 @@ Bot 出生天数：{bot_age_days} 天（相当于 {age_years} 岁）
 - 日常琐事，不影响人生轨迹
 - 只有情绪变化但没有具体事实的总结
 - “对未来方向做了更明确选择”“人生规划出现转折”“收到重要反馈意识到成长”这类抽象句
+- 如果当前共同处境显示正在车上、吃饭、出门游览等 live 场景，不要凭空生成与当前处境无关的人生大事；除非事件直接发生在这个 live 场景中或由最近对话明确触发，否则 is_major=false。
 
 【输出格式】
 输出一个 JSON 对象：
@@ -618,8 +623,10 @@ class LifeEngine:
         # 生成事件
         event = await self.generate_daily_event()
         if not event and self._should_force_daily_event():
+            live_scene = await self._get_live_scene_context()
             event = self._build_forced_daily_event(
                 exclude_scenario_keys=self._forbidden_daily_scenario_keys(),
+                live_scene=live_scene,
             )
             if event:
                 logger.info(
@@ -633,6 +640,7 @@ class LifeEngine:
             event = self._build_forced_daily_event(
                 exclude_descriptions=self._recent_event_descriptions(limit=30),
                 exclude_scenario_keys=self._forbidden_daily_scenario_keys(),
+                live_scene=await self._get_live_scene_context(),
             )
         if event:
             if not is_event_visible_at_current_time(event, self._build_life_context()):
@@ -778,6 +786,7 @@ class LifeEngine:
         """生成日常小事"""
         from .life_state import LifeEvent
 
+        live_scene = await self._get_live_scene_context()
         recent_limit = max(3, getattr(self.config, "llm_recent_event_limit", 20))
         recent = self.state.life_events[-recent_limit:] if self.state.life_events else []
         recent_str = "\n".join([
@@ -789,6 +798,7 @@ class LifeEngine:
             forbidden,
             current_hour=self._get_local_now().hour,
             limit=getattr(self.config, "llm_daily_candidate_limit", 12),
+            live_scene=live_scene,
         )
         scenario_guidance = self._scenario_guidance(candidate_scenarios)
 
@@ -814,6 +824,7 @@ class LifeEngine:
             bot_current_activity=self._current_activity_for_prompt(),
             bot_age_days=self.state.bot_age_days,
             recent_events=recent_str,
+            live_scene_context=live_scene.get("summary") or "无明确 live 场景",
             forbidden_scenarios=", ".join(sorted(forbidden)) if forbidden else "无",
             scenario_guidance=scenario_guidance,
             **life_context,
@@ -840,6 +851,14 @@ class LifeEngine:
                 scenario_key = self._infer_scenario_key(event_data.get("description", ""))
             if self._is_daily_scenario_blocked(scenario_key):
                 logger.info("[LifeEngine] LLM 生成场景仍在冷却中，跳过: %s", scenario_key)
+                return None
+            if not self._event_matches_live_scene(event_data.get("description", ""), scenario_key, live_scene):
+                logger.info(
+                    "[LifeEngine] LLM daily event conflicts with live scene, skipped: scenario=%s description=%s live=%s",
+                    scenario_key,
+                    event_data.get("description", ""),
+                    live_scene.get("summary"),
+                )
                 return None
             if not self._is_generated_event_temporally_valid(event_data.get("description", ""), scenario_key):
                 logger.info("[LifeEngine] LLM 生成事件与当前时段冲突，跳过: %s", event_data.get("description", ""))
@@ -1186,6 +1205,7 @@ class LifeEngine:
         if self._should_sync_realtime_with_local_time():
             self._sync_state_to_local_now(persist=False)
 
+        live_scene = await self._get_live_scene_context()
         recent = self.state.life_events[-5:] if self.state.life_events else []
         recent_str = "\n".join([
             f"- {e.description}"
@@ -1212,6 +1232,7 @@ class LifeEngine:
             bot_current_activity=self._current_activity_for_prompt(),
             bot_age_days=self.state.bot_age_days,
             recent_events=recent_str,
+            live_scene_context=live_scene.get("summary") or "??? live ??",
             relationship_desc="普通朋友",
             season=life_context["season"],
             month=life_context["month"],
@@ -1233,13 +1254,13 @@ class LifeEngine:
             # 解析 JSON
             json_payload = self._extract_first_json_object(response)
             if not json_payload:
-                return self._maybe_generate_probability_major_event()
+                return self._maybe_generate_probability_major_event(live_scene=live_scene)
 
             data = json.loads(json_payload)
             if not isinstance(data, dict):
-                return self._maybe_generate_probability_major_event()
+                return self._maybe_generate_probability_major_event(live_scene=live_scene)
             if not data.get("is_major", False):
-                return self._maybe_generate_probability_major_event()
+                return self._maybe_generate_probability_major_event(live_scene=live_scene)
 
             event_data = data.get("event", {})
             scenario_key = str(event_data.get("scenario_key") or "").strip()
@@ -1247,10 +1268,18 @@ class LifeEngine:
                 scenario_key = self._infer_major_scenario_key(event_data.get("description", ""))
             if self._is_major_scenario_blocked(scenario_key):
                 logger.info("[LifeEngine] LLM 人生大事场景仍在冷却中，改走固定概率兜底: %s", scenario_key)
-                return self._maybe_generate_probability_major_event()
+                return self._maybe_generate_probability_major_event(live_scene=live_scene)
             if not self._is_meaningful_major_description(event_data.get("description", "")):
                 logger.info("[LifeEngine] LLM 人生大事描述过于抽象，改走固定概率兜底: %s", event_data.get("description", ""))
-                return self._maybe_generate_probability_major_event()
+                return self._maybe_generate_probability_major_event(live_scene=live_scene)
+            if not self._major_event_matches_live_scene(event_data.get("description", ""), scenario_key, live_scene):
+                logger.info(
+                    "[LifeEngine] LLM major event conflicts with live scene, skipped: scenario=%s description=%s live=%s",
+                    scenario_key,
+                    event_data.get("description", ""),
+                    live_scene.get("summary"),
+                )
+                return None
             event = MajorLifeEvent(
                 description=event_data.get("description", ""),
                 mood_before=event_data.get("mood_before", ""),
@@ -1270,7 +1299,7 @@ class LifeEngine:
 
         except Exception as e:
             logger.error(f"[LifeEngine] 生成人生大事失败: {e}")
-            return self._maybe_generate_probability_major_event()
+            return self._maybe_generate_probability_major_event(live_scene=live_scene)
 
     def _should_force_daily_event(self) -> bool:
         """保证每 N 天至少产出 1 个日常事件。"""
@@ -1288,6 +1317,7 @@ class LifeEngine:
         self,
         exclude_descriptions: Optional[set[str]] = None,
         exclude_scenario_keys: Optional[set[str]] = None,
+        live_scene: Optional[dict[str, Any]] = None,
     ) -> Optional["LifeEvent"]:
         from .life_state import LifeEvent
 
@@ -1300,6 +1330,7 @@ class LifeEngine:
         available = [
             item for item in catalog
             if item["key"] not in blocked_keys and not self._is_daily_scenario_blocked(item["key"])
+            and self._scenario_matches_live_scene(item, live_scene or {})
         ]
         if not available:
             return None
@@ -2019,6 +2050,7 @@ class LifeEngine:
         forbidden: set[str],
         limit: int = 12,
         current_hour: int | None = None,
+        live_scene: Optional[dict[str, Any]] = None,
     ) -> list[dict[str, Any]]:
         """过滤近期/冷却场景后，从剩余大池子中随机抽样少量候选给 LLM。"""
         blocked = set(forbidden or set())
@@ -2026,6 +2058,7 @@ class LifeEngine:
             item for item in self._daily_scenario_catalog()
             if item["key"] not in blocked and not self._is_daily_scenario_blocked(item["key"])
             and scenario_has_compatible_template(item, current_hour=current_hour)
+            and self._scenario_matches_live_scene(item, live_scene or {})
         ]
         if not available:
             return []
@@ -2340,6 +2373,108 @@ class LifeEngine:
                 return item.get("category", "daily")
         return "daily"
 
+    async def _get_live_scene_context(self) -> dict[str, Any]:
+        session_id = getattr(getattr(self.memory, "working", None), "current_session", None)
+        states: list[dict[str, Any]] = []
+        recent_messages: list[dict[str, Any]] = []
+        if self.memory is not None and session_id:
+            try:
+                store = getattr(self.memory, "session_state", None)
+                if store is not None:
+                    states = [item.to_dict() for item in await store.list_active_states(session_id)]
+            except Exception as exc:
+                logger.debug("[LifeEngine] live session_state unavailable: %s", exc)
+            try:
+                working = getattr(self.memory, "working", None)
+                if working is not None:
+                    recent_messages = list(working.get_recent(session_id, turns=4, include_proactive=False) or [])
+            except Exception as exc:
+                logger.debug("[LifeEngine] live working context unavailable: %s", exc)
+        text_parts = [
+            str(item.get("value") or "")
+            for item in states
+            if str(item.get("scope") or "") == "current_scene"
+        ]
+        text_parts.extend(str(item.get("content") or "") for item in recent_messages)
+        text = "\n".join(text_parts)
+        categories = self._live_scene_categories(text)
+        if not categories:
+            return {"categories": [], "summary": "", "session_id": session_id}
+        summary_bits = [
+            f"{item.get('predicate')}={item.get('value')}"
+            for item in states
+            if str(item.get("scope") or "") == "current_scene"
+        ][:6]
+        if recent_messages:
+            summary_bits.append("recent=" + " / ".join(str(item.get("content") or "")[:80] for item in recent_messages[-3:]))
+        return {
+            "categories": sorted(categories),
+            "summary": "；".join(summary_bits)[:800],
+            "session_id": session_id,
+        }
+
+    def _live_scene_categories(self, text: str) -> set[str]:
+        return categorize_scene_text(text) - {"room_reset", "intimate_room"}
+
+    def _scenario_matches_live_scene(self, scenario: dict[str, Any], live_scene: dict[str, Any]) -> bool:
+        categories = set(live_scene.get("categories") or [])
+        if not categories:
+            return True
+        key = str(scenario.get("key") or "")
+        category = str(scenario.get("category") or "")
+        text = " ".join(
+            [
+                key,
+                category,
+                " ".join(str(tag) for tag in scenario.get("tags", []) or []),
+                " ".join(str(tag) for tag in scenario.get("life_tags", []) or []),
+                " ".join(str(template) for template in scenario.get("templates", []) or []),
+            ]
+        )
+        if "vehicle" in categories:
+            return any(cue in text for cue in ("车", "路上", "出门", "古城", "游览", "交通", "延误", "行李", "抵达"))
+        if "outing" in categories:
+            return any(cue in text for cue in ("出门", "街", "古城", "游览", "店", "餐", "路上", "雨", "天气", "小善意", "迷路"))
+        if "meal" in categories:
+            return category == "food" or any(cue in text for cue in ("饭", "餐", "吃", "小店", "外卖", "饮料", "甜品"))
+        if "sleep" in categories:
+            return any(cue in text for cue in ("睡", "床", "休息", "起床", "失眠"))
+        if "bathroom" in categories:
+            return any(cue in text for cue in ("洗", "浴室", "衣服", "水", "卫生间"))
+        return True
+
+    def _event_matches_live_scene(self, description: str, scenario_key: str, live_scene: dict[str, Any]) -> bool:
+        categories = set(live_scene.get("categories") or [])
+        if not categories:
+            return True
+        catalog_item = next((item for item in self._daily_scenario_catalog() if item["key"] == scenario_key), None)
+        if catalog_item and not self._scenario_matches_live_scene(catalog_item, live_scene):
+            return False
+        text = f"{scenario_key} {description}"
+        if "vehicle" in categories:
+            unrelated = ("绿萝", "松土", "盆栽", "阳台", "书桌", "办公室", "同事", "床单", "收纳", "下水", "维修")
+            return not any(cue in text for cue in unrelated)
+        if "outing" in categories:
+            unrelated = ("绿萝", "松土", "办公室", "同事", "床单", "下水", "维修")
+            return not any(cue in text for cue in unrelated)
+        if "meal" in categories:
+            unrelated = ("绿萝", "松土", "床上", "被子", "浴室", "办公室", "同事")
+            return not any(cue in text for cue in unrelated)
+        return True
+
+    def _major_event_matches_live_scene(self, description: str, scenario_key: str, live_scene: dict[str, Any]) -> bool:
+        categories = set(live_scene.get("categories") or [])
+        if not categories:
+            return True
+        text = f"{scenario_key} {description}"
+        if "vehicle" in categories:
+            return any(cue in text for cue in ("车", "路上", "抵达", "大理", "旅行", "行李", "事故", "延误", "证件"))
+        if "outing" in categories:
+            return any(cue in text for cue in ("路上", "街", "古城", "旅行", "抵达", "大理", "证件", "事故", "延误"))
+        if "meal" in categories:
+            return any(cue in text for cue in ("餐", "饭", "店", "食物", "用户", "关系", "决定", "争执", "和好"))
+        return False
+
     def _activity_summary_for_event(self, event: "LifeEvent") -> str:
         key = event.scenario_key or self._infer_scenario_key(event.description)
         summary_map = {
@@ -2420,7 +2555,10 @@ class LifeEngine:
         self.state.last_major_probability_check_date = current_date
         return True
 
-    def _maybe_generate_probability_major_event(self) -> Optional["MajorLifeEvent"]:
+    def _maybe_generate_probability_major_event(self, live_scene: Optional[dict[str, Any]] = None) -> Optional["MajorLifeEvent"]:
+        if live_scene and live_scene.get("categories"):
+            logger.info("[LifeEngine] skip probability major event because live scene is active: %s", live_scene.get("summary"))
+            return None
         unexpected_event = self._maybe_generate_unexpected_major_event()
         if unexpected_event:
             return unexpected_event

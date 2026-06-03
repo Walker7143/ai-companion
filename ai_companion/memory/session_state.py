@@ -11,6 +11,14 @@ from typing import Any, Optional
 
 import aiosqlite
 
+from .scene_authority import (
+    categorize_scene_text,
+    exclusive_state_groups,
+    has_room_reset_cue,
+    is_scene_authority_predicate,
+    scene_conflict_reason,
+)
+
 
 def _utcnow() -> str:
     return datetime.now().isoformat()
@@ -41,6 +49,56 @@ def _loads_dict(value: object) -> dict[str, Any]:
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _exclusive_state_groups(scope: str, predicate: str) -> set[str]:
+    return exclusive_state_groups(scope, predicate)
+
+
+def _is_vehicle_scene_text(text: object) -> bool:
+    return "vehicle" in categorize_scene_text(text)
+
+
+def _is_room_reset_text(text: object) -> bool:
+    return has_room_reset_cue(text)
+
+
+def _scene_categories(text: object) -> set[str]:
+    return categorize_scene_text(text)
+
+
+def _is_scene_authority_predicate(scope: str, predicate: str) -> bool:
+    return is_scene_authority_predicate(scope, predicate)
+
+
+def _active_scene_categories(active_states: list["SessionStateItem"]) -> set[str]:
+    categories: set[str] = set()
+    for item in active_states:
+        if _is_scene_authority_predicate(item.scope, item.predicate):
+            categories.update(_scene_categories(item.value))
+    return categories
+
+
+def _has_vehicle_scene(active_states: list["SessionStateItem"]) -> bool:
+    return "vehicle" in _active_scene_categories(active_states)
+
+
+def _scene_conflict_reason(incoming_categories: set[str], active_categories: set[str]) -> str | None:
+    return scene_conflict_reason(incoming_categories, active_categories)
+
+
+def _is_assistant_only_scene_reset(item: dict[str, Any], active_states: list["SessionStateItem"]) -> bool:
+    scope = str(item.get("scope") or "").strip()
+    predicate = str(item.get("predicate") or "").strip()
+    source_kind = str(item.get("source_kind") or "").strip()
+    if not _is_scene_authority_predicate(scope, predicate):
+        return False
+    if source_kind == "user_explicit":
+        return False
+    incoming_categories = _scene_categories(item.get("value"))
+    if not incoming_categories:
+        return False
+    return _scene_conflict_reason(incoming_categories, _active_scene_categories(active_states)) is not None
 
 
 @dataclass
@@ -218,7 +276,21 @@ class SessionStateStore:
             existing = latest_by_slot.get(slot)
             if existing is None or str(item.updated_at or "") > str(existing.updated_at or ""):
                 latest_by_slot[slot] = item
-        return sorted(latest_by_slot.values(), key=lambda item: str(item.updated_at or ""), reverse=True)
+        latest_by_group: dict[str, SessionStateItem] = {}
+        kept: list[SessionStateItem] = []
+        for item in latest_by_slot.values():
+            groups = _exclusive_state_groups(item.scope, item.predicate)
+            if not groups:
+                kept.append(item)
+                continue
+            for group in groups:
+                existing = latest_by_group.get(group)
+                if existing is None or str(item.updated_at or "") > str(existing.updated_at or ""):
+                    latest_by_group[group] = item
+        grouped_ids = {item.state_id for item in latest_by_group.values()}
+        kept.extend(item for item in latest_by_slot.values() if item.state_id in grouped_ids)
+        deduped = {item.state_id: item for item in kept}
+        return sorted(deduped.values(), key=lambda item: str(item.updated_at or ""), reverse=True)
 
     async def list_recent_states(self, session_id: str, limit: int = 12) -> list[SessionStateItem]:
         return await self._list_states(session_id=session_id, statuses=None, limit=limit)
@@ -404,6 +476,20 @@ class SessionStateResolver:
         for item in diff.upserts:
             if not isinstance(item, dict):
                 continue
+            if _is_assistant_only_scene_reset(item, active):
+                incoming_categories = _scene_categories(item.get("value"))
+                await store.append_event(
+                    session_id,
+                    "rejected_conflicting_scene",
+                    {
+                        "item": item,
+                        "active_scene_categories": sorted(_active_scene_categories(active)),
+                        "incoming_scene_categories": sorted(incoming_categories),
+                        "reason": _scene_conflict_reason(incoming_categories, _active_scene_categories(active))
+                        or "assistant_or_joint_scene_conflict",
+                    },
+                )
+                continue
             scope = str(item.get("scope") or "").strip()
             predicate = str(item.get("predicate") or "").strip()
             subject = str(item.get("subject") or "shared").strip() or "shared"
@@ -417,6 +503,14 @@ class SessionStateResolver:
             if current:
                 superseded_ids.append(current.state_id)
                 supersedes_state_ids.append(current.state_id)
+            exclusive_groups = _exclusive_state_groups(scope, predicate)
+            if exclusive_groups:
+                for active_item in active:
+                    if active_item.state_id == getattr(current, "state_id", None):
+                        continue
+                    if _exclusive_state_groups(active_item.scope, active_item.predicate) & exclusive_groups:
+                        superseded_ids.append(active_item.state_id)
+                        supersedes_state_ids.append(active_item.state_id)
             expires_hours = item.get("expires_hours")
             expires_at = None
             try:
@@ -515,7 +609,55 @@ class ResponseStateConsistencyChecker:
     def set_summarizer(self, summarizer):
         self._summarizer = summarizer
 
-    async def check(self, response: str, active_states: list[SessionStateItem]) -> dict[str, Any]:
+    def rule_check(
+        self,
+        response: str,
+        active_states: list[SessionStateItem],
+        *,
+        user_input: str = "",
+    ) -> dict[str, Any]:
+        conflicts: list[str] = []
+        active_categories = _active_scene_categories(active_states)
+        user_categories = _scene_categories(user_input)
+        incoming_categories = _scene_categories(response)
+        if user_categories and incoming_categories and user_categories & incoming_categories:
+            return {
+                "consistent": True,
+                "severity": "none",
+                "conflicts": [],
+                "rewrite_guidance": "",
+                "matched_rules": ["user_scene_transition_overrides_previous_state"],
+            }
+        conflict_reason = _scene_conflict_reason(incoming_categories, active_categories)
+        matched_rules: list[str] = []
+        if conflict_reason:
+            conflicts.append(f"回复场景与当前权威场景冲突：{conflict_reason}")
+            matched_rules.append("scene_authority_conflict")
+        if active_states and _has_vehicle_scene(active_states) and _is_room_reset_text(response):
+            conflicts.append("当前场景已在车上/行驶中，回复却回退到客栈房间、床上或衣着未完成状态")
+            matched_rules.append("vehicle_scene_room_reset")
+        if conflicts:
+            return {
+                "consistent": False,
+                "severity": "high",
+                "conflicts": conflicts,
+                "rewrite_guidance": "保持当前权威场景，不要回退到旧地点、旧动作或与当前状态冲突的身体/衣着状态。",
+                "matched_rules": sorted(set(matched_rules)),
+            }
+        return {
+            "consistent": True,
+            "severity": "none",
+            "conflicts": [],
+            "rewrite_guidance": "",
+            "matched_rules": [],
+        }
+
+    async def check(self, response: str, active_states: list[SessionStateItem], *, user_input: str = "") -> dict[str, Any]:
+        rule_result = self.rule_check(response, active_states, user_input=user_input)
+        if not rule_result.get("consistent", True):
+            return rule_result
+        if rule_result.get("matched_rules"):
+            return rule_result
         if self._summarizer is None or not active_states:
             return {"consistent": True, "severity": "none", "conflicts": [], "rewrite_guidance": ""}
         active_text = "\n".join(

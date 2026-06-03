@@ -45,9 +45,11 @@ from .prompt_builder import MemoryPromptBuilder
 from .retriever import MemoryRetriever
 from .continuity import ContinuityContractBuilder, RelationshipProjectionService
 from .dreaming import DreamingOrchestrator
+from .scene_authority import build_scene_authority_diff
 from .session_state import (
     RelationshipConsistencyChecker,
     ResponseStateConsistencyChecker,
+    SessionStateDiff,
     SessionStateExtractor,
     SessionStateResolver,
     SessionStateStore,
@@ -392,6 +394,18 @@ class MemoryEngine:
             conversation_context=conversation_context,
             active_states=active_states,
         )
+        deterministic_scene_diff = self._build_scene_authority_diff(
+            user_input=user_input,
+            bot_output=llm_output,
+            conversation_context=conversation_context,
+        )
+        if deterministic_scene_diff.upserts:
+            state_diff.upserts = [*deterministic_scene_diff.upserts, *state_diff.upserts]
+            state_diff.confidence_explanations = [
+                *state_diff.confidence_explanations,
+                *deterministic_scene_diff.confidence_explanations,
+            ]
+            state_diff.no_change = False
         session_state_result = await self.session_state_resolver.apply_diff(
             store=self.session_state,
             session_id=sid,
@@ -404,9 +418,34 @@ class MemoryEngine:
             await self.rebuild_vector_index()
         return session_state_result
 
-    async def ensure_response_state_consistency(self, response: str, session_id: str, relationship_state: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    def _build_scene_authority_diff(
+        self,
+        *,
+        user_input: str,
+        bot_output: str,
+        conversation_context: str,
+    ) -> SessionStateDiff:
+        diff = build_scene_authority_diff(
+            user_input=user_input,
+            bot_output=bot_output,
+            conversation_context=conversation_context,
+        )
+        return SessionStateDiff(
+            upserts=diff.upserts,
+            no_change=diff.no_change,
+            confidence_explanations=diff.confidence_explanations,
+        )
+
+    async def ensure_response_state_consistency(
+        self,
+        response: str,
+        session_id: str,
+        relationship_state: dict[str, Any] | None = None,
+        *,
+        user_input: str = "",
+    ) -> tuple[str, dict[str, Any]]:
         active_states = await self.session_state.list_active_states(session_id) if session_id else []
-        check = await self.response_state_checker.check(response, active_states)
+        check = await self.response_state_checker.check(response, active_states, user_input=user_input)
         if not check.get("consistent", True):
             response = await self.response_state_checker.rewrite(response, active_states, check.get("conflicts") or [])
 

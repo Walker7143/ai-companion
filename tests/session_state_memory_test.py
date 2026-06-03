@@ -96,6 +96,342 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("先去酒店放行李", active[0].value)
         self.assertTrue(active_result["superseded_state_ids"])
 
+    async def test_current_scene_activity_and_posture_are_exclusive(self):
+        await self.resolver.apply_diff(
+            store=self.store,
+            session_id="scene",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene",
+                        "subject": "assistant",
+                        "predicate": "physical_state",
+                        "value": "已在床上被子里",
+                        "confidence": 0.95,
+                        "source_kind": "joint_inference",
+                    },
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "activity_type",
+                        "value": "起床与早餐准备",
+                        "confidence": 0.9,
+                        "source_kind": "joint_inference",
+                    },
+                ]
+            ),
+            evidence_turn_id="t1",
+        )
+        result = await self.resolver.apply_diff(
+            store=self.store,
+            session_id="scene",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "current_activity",
+                        "value": "共同进餐",
+                        "confidence": 0.95,
+                        "source_kind": "joint_inference",
+                    },
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "spatial_relationship",
+                        "value": "两人在餐桌旁同桌就坐",
+                        "confidence": 0.9,
+                        "source_kind": "joint_inference",
+                    },
+                ]
+            ),
+            evidence_turn_id="t2",
+        )
+        active = await self.store.list_active_states("scene")
+        values = [item.value for item in active]
+        self.assertIn("共同进餐", values)
+        self.assertIn("两人在餐桌旁同桌就坐", values)
+        self.assertNotIn("起床与早餐准备", values)
+        self.assertNotIn("已在床上被子里", values)
+        self.assertGreaterEqual(len(result["superseded_state_ids"]), 2)
+
+    async def test_vehicle_scene_blocks_assistant_room_reset_write(self):
+        await self.resolver.apply_diff(
+            store=self.store,
+            session_id="vehicle",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "current_location",
+                        "value": "车上/车内，正在出行路线上",
+                        "confidence": 0.96,
+                        "source_kind": "user_explicit",
+                    },
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "current_activity",
+                        "value": "乘车前往大理古城",
+                        "confidence": 0.96,
+                        "source_kind": "user_explicit",
+                    },
+                ]
+            ),
+            evidence_turn_id="t1",
+        )
+        result = await self.resolver.apply_diff(
+            store=self.store,
+            session_id="vehicle",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "current_location",
+                        "value": "客栈房间内，靠在床头，被子还盖着",
+                        "confidence": 0.9,
+                        "source_kind": "joint_inference",
+                    },
+                    {
+                        "scope": "current_scene",
+                        "subject": "user",
+                        "predicate": "clothing_status_bottom",
+                        "value": "未着下装",
+                        "confidence": 0.8,
+                        "source_kind": "joint_inference",
+                    },
+                ]
+            ),
+            evidence_turn_id="t2",
+        )
+        active = await self.store.list_active_states("vehicle")
+        rendered = "\n".join(item.value for item in active)
+        self.assertIn("车上", rendered)
+        self.assertIn("乘车前往大理古城", rendered)
+        self.assertNotIn("客栈房间", rendered)
+        self.assertNotIn("未着下装", rendered)
+        self.assertFalse(result["written"])
+
+    async def test_rule_checker_catches_vehicle_to_room_reset_without_llm(self):
+        checker = ResponseStateConsistencyChecker()
+        from ai_companion.memory.session_state import SessionStateItem
+
+        active = [
+            SessionStateItem(
+                state_id="v1",
+                session_id="vehicle",
+                scope="current_scene",
+                subject="shared",
+                predicate="current_location",
+                value="车上/车内，正在出行路线上",
+                confidence=0.96,
+                status="active",
+                effective_at="2026-06-01T15:00:00+08:00",
+            )
+        ]
+        check = await checker.check("她靠在床头，掀了掀被角，说你连客栈大门都出不去。", active)
+        self.assertFalse(check["consistent"])
+        self.assertEqual("high", check["severity"])
+        self.assertIn("vehicle_scene_room_reset", check.get("matched_rules") or [])
+
+    async def test_scene_authority_blocks_meal_to_sleep_reset(self):
+        await self.resolver.apply_diff(
+            store=self.store,
+            session_id="meal",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "current_activity",
+                        "value": "共同进餐",
+                        "confidence": 0.96,
+                        "source_kind": "user_explicit",
+                    },
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "current_location",
+                        "value": "餐桌/餐厅场景",
+                        "confidence": 0.96,
+                        "source_kind": "user_explicit",
+                    },
+                ]
+            ),
+            evidence_turn_id="t1",
+        )
+        result = await self.resolver.apply_diff(
+            store=self.store,
+            session_id="meal",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "physical_state",
+                        "value": "两人还躺在床上盖着被子",
+                        "confidence": 0.86,
+                        "source_kind": "joint_inference",
+                    }
+                ]
+            ),
+            evidence_turn_id="t2",
+        )
+        active = await self.store.list_active_states("meal")
+        rendered = "\n".join(item.value for item in active)
+        self.assertIn("共同进餐", rendered)
+        self.assertNotIn("躺在床上", rendered)
+        self.assertFalse(result["written"])
+
+    async def test_scene_authority_variant_scope_is_exclusive(self):
+        await self.resolver.apply_diff(
+            store=self.store,
+            session_id="variant",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "current_activity",
+                        "value": "外出游览或抵达目的地",
+                        "confidence": 0.9,
+                        "source_kind": "joint_inference",
+                    }
+                ]
+            ),
+            evidence_turn_id="t1",
+        )
+        result = await self.resolver.apply_diff(
+            store=self.store,
+            session_id="variant",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene/current_activity",
+                        "subject": "shared",
+                        "predicate": "current_activity",
+                        "value": "房间内亲密互动或夜间安排执行中",
+                        "confidence": 0.95,
+                        "source_kind": "user_explicit",
+                    }
+                ]
+            ),
+            evidence_turn_id="t2",
+        )
+        active = await self.store.list_active_states("variant")
+        rendered = "\n".join(f"{item.scope}:{item.value}" for item in active)
+        self.assertIn("房间内亲密互动", rendered)
+        self.assertNotIn("外出游览", rendered)
+        self.assertTrue(result["superseded_state_ids"])
+
+    async def test_scene_substate_variants_are_exclusive(self):
+        await self.resolver.apply_diff(
+            store=self.store,
+            session_id="substate",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene/night_activity_expectation",
+                        "subject": "shared",
+                        "predicate": "anticipation_status",
+                        "value": "需重新协商夜间安排",
+                        "confidence": 0.8,
+                        "source_kind": "joint_inference",
+                    },
+                    {
+                        "scope": "current_scene/current_player_role",
+                        "subject": "assistant",
+                        "predicate": "dominant_role",
+                        "value": "助手主导角色已确认",
+                        "confidence": 0.8,
+                        "source_kind": "joint_inference",
+                    },
+                ]
+            ),
+            evidence_turn_id="t1",
+        )
+        result = await self.resolver.apply_diff(
+            store=self.store,
+            session_id="substate",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene/night_activity_expectation/anticipation_status",
+                        "subject": "shared",
+                        "predicate": "anticipation_status",
+                        "value": "实际执行中，跳过原定协商流程",
+                        "confidence": 0.95,
+                        "source_kind": "joint_inference",
+                    },
+                    {
+                        "scope": "current_scene",
+                        "subject": "shared",
+                        "predicate": "current_player_role/dominant_role",
+                        "value": "用户主导，助手服从但带一定主动性",
+                        "confidence": 0.95,
+                        "source_kind": "joint_inference",
+                    },
+                ]
+            ),
+            evidence_turn_id="t2",
+        )
+        active = await self.store.list_active_states("substate")
+        rendered = "\n".join(f"{item.scope}:{item.predicate}:{item.value}" for item in active)
+        self.assertIn("实际执行中", rendered)
+        self.assertIn("用户主导", rendered)
+        self.assertNotIn("需重新协商", rendered)
+        self.assertNotIn("助手主导角色已确认", rendered)
+        self.assertGreaterEqual(len(result["superseded_state_ids"]), 2)
+
+    async def test_rule_checker_catches_meal_to_sleep_reset_without_llm(self):
+        checker = ResponseStateConsistencyChecker()
+        from ai_companion.memory.session_state import SessionStateItem
+
+        active = [
+            SessionStateItem(
+                state_id="m1",
+                session_id="meal",
+                scope="current_scene",
+                subject="shared",
+                predicate="current_activity",
+                value="共同进餐",
+                confidence=0.96,
+                status="active",
+                effective_at="2026-06-01T15:00:00+08:00",
+            )
+        ]
+        check = await checker.check("她缩回被子里，靠在床头说再睡一会。", active)
+        self.assertFalse(check["consistent"])
+        self.assertEqual("high", check["severity"])
+        self.assertIn("scene_authority_conflict", check.get("matched_rules") or [])
+
+    async def test_response_checker_allows_user_scene_transition_over_old_state(self):
+        checker = ResponseStateConsistencyChecker()
+        from ai_companion.memory.session_state import SessionStateItem
+
+        active = [
+            SessionStateItem(
+                state_id="o1",
+                session_id="outing",
+                scope="current_scene",
+                subject="shared",
+                predicate="current_activity",
+                value="外出游览或抵达目的地",
+                confidence=0.96,
+                status="active",
+                effective_at="2026-06-01T18:00:00+08:00",
+            )
+        ]
+        check = await checker.check(
+            "她跟着你回到客栈房间，反手把门关上。",
+            active,
+            user_input="走，回客栈",
+        )
+        self.assertTrue(check["consistent"])
+        self.assertIn("user_scene_transition_overrides_previous_state", check.get("matched_rules") or [])
+
     async def test_consistency_checker_rewrites_conflicting_reply(self):
         checker = ResponseStateConsistencyChecker(
             FakeSummarizer(
@@ -210,6 +546,41 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
             await engine.close()
             del engine
             gc.collect()
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    async def test_scene_authority_diff_writes_user_explicit_meal_scene(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        td = tempfile.mkdtemp(prefix="scene-authority-")
+        try:
+            engine = MemoryEngine("scene_bot", Path(td), config={"embedding": "none"})
+            diff = engine._build_scene_authority_diff(
+                user_input="起来吃饭去吧",
+                bot_output="行，去餐桌旁坐下。",
+                conversation_context="",
+            )
+            rendered = "\n".join(str(item.get("value")) for item in diff.upserts)
+            self.assertIn("餐桌/餐厅场景", rendered)
+            self.assertIn("共同进餐", rendered)
+            self.assertTrue(all(item.get("source_kind") == "user_explicit" for item in diff.upserts))
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    async def test_scene_authority_diff_user_room_overrides_bot_outing_cue(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        td = tempfile.mkdtemp(prefix="scene-authority-room-")
+        try:
+            engine = MemoryEngine("scene_bot", Path(td), config={"embedding": "none"})
+            diff = engine._build_scene_authority_diff(
+                user_input="准备好了吗",
+                bot_output="她在游览途中停下脚步。",
+                conversation_context="用户：回到客栈，关门，脱衣服",
+            )
+            rendered = "\n".join(str(item.get("value")) for item in diff.upserts)
+            self.assertIn("客栈房间/床边亲密场景", rendered)
+            self.assertNotIn("户外/目的地游览场景", rendered)
         finally:
             shutil.rmtree(td, ignore_errors=True)
 
