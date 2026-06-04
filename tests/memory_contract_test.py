@@ -25,6 +25,29 @@ class MemoryContractTest(unittest.TestCase):
         self.assertTrue(any(item.metadata.get("downgraded") for item in contract.soft_context))
         self.assertIn("committed_relationship", contract.risk_flags)
 
+    def test_contract_preserves_session_state_subject_labels(self):
+        retrieved = RetrievedMemory(
+            intent="casual_chat",
+            session_state=[
+                {
+                    "subject": "user",
+                    "predicate": "current_location",
+                    "value": "北京，刚落地到家",
+                },
+                {
+                    "subject": "shared",
+                    "predicate": "next_action",
+                    "value": "先去酒店放行李",
+                },
+            ],
+        )
+
+        contract = ContinuityContractBuilder().build(current_input="我到家了", retrieved=retrieved)
+        texts = [item.text for item in contract.soft_context]
+
+        self.assertTrue(any("用户当前状态" in text for text in texts))
+        self.assertTrue(any("双方当前状态" in text for text in texts))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -217,6 +217,59 @@ class DailyMemoryTest(unittest.TestCase):
         self.assertIn("城市: 杭州", suffix)
         self.assertNotIn("城市: 上海", suffix)
 
+    def test_prompt_builder_labels_user_only_session_state_without_activating_scene_mode(self):
+        from ai_companion.memory.prompt_builder import MemoryPromptBuilder
+
+        builder = MemoryPromptBuilder(max_chars=2400)
+        retrieved = RetrievedMemory(
+            intent="casual_chat",
+            session_state=[
+                {
+                    "scope": "current_scene",
+                    "subject": "user",
+                    "predicate": "current_location",
+                    "value": "北京，刚落地到家",
+                },
+                {
+                    "scope": "current_scene",
+                    "subject": "user",
+                    "predicate": "current_activity",
+                    "value": "准备回家睡觉",
+                },
+            ],
+        )
+
+        suffix = builder.build(retrieved)
+
+        self.assertIn("[用户当前状态]", suffix)
+        self.assertIn("北京，刚落地到家", suffix)
+        self.assertFalse(builder._has_active_scene(retrieved))
+
+    def test_retriever_scene_filter_ignores_user_only_scene(self):
+        retriever = MemoryRetriever(
+            working_store=None,
+            daily_store=None,
+            episodic_store=None,
+            semantic_store=None,
+            relationship_store=None,
+            user_understanding=None,
+        )
+
+        items = [{"source_type": "life_event", "text": "她在客栈房间里准备睡觉", "score": 0.9}]
+        filtered = retriever._filter_vector_recall_by_scene(
+            items,
+            [
+                {
+                    "scope": "current_scene",
+                    "subject": "user",
+                    "predicate": "current_location",
+                    "value": "北京，刚落地到家",
+                }
+            ],
+        )
+
+        self.assertEqual(items, filtered)
+
     def test_memory_engine_promotes_explicit_correction_for_next_turn(self):
         async def run():
             with tempfile.TemporaryDirectory(prefix="explicit-correction-") as tmp:

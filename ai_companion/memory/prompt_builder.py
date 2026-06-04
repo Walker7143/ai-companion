@@ -8,7 +8,7 @@ from ..context.tokenizer import TokenEstimator
 from .conscious import ConsciousContext
 from .continuity import is_committed_relationship_label
 from .retriever import RetrievedMemory
-from .scene_authority import categorize_scene_text
+from .scene_authority import categorize_scene_text, is_shared_scene_subject
 
 
 @dataclass
@@ -115,8 +115,9 @@ class MemoryPromptBuilder:
                     title="【当前已确认状态】",
                     body=session_state_text,
                     usage=(
-                        "使用方式：这些是当前场景里已经成立的真实状态，必须默认承接。"
-                        "不要回到已被覆盖的旧判断，不要追问已经确认的安排或完成态。"
+                        "使用方式：这些状态已经按主体区分。"
+                        "双方当前状态和你自己当前状态要默认承接；用户当前状态只能当作对方近况来理解，"
+                        "不要误说成你自己的处境。不要回到已被覆盖的旧判断，不要追问已经确认的安排或完成态。"
                     ),
                     budget=max(260, int(budgets["turn_constraints"] * 1.4)),
                     priority=1,
@@ -357,7 +358,8 @@ class MemoryPromptBuilder:
             return False
         for state in states:
             scope = state.scope if hasattr(state, "scope") else state.get("scope", "")
-            if scope == "current_scene":
+            subject = state.subject if hasattr(state, "subject") else state.get("subject", "")
+            if scope == "current_scene" and is_shared_scene_subject(subject):
                 return True
         return False
 
@@ -442,15 +444,16 @@ class MemoryPromptBuilder:
             if not isinstance(item, dict):
                 continue
             scope = str(item.get("scope") or "").strip()
+            subject = str(item.get("subject") or "").strip()
             predicate = str(item.get("predicate") or "").strip()
             value = _compact_prompt_text(item.get("value"), 160)
             if not scope or not predicate or not value:
                 continue
-            marker = f"{scope}/{predicate}/{value}"
+            marker = f"{subject}/{scope}/{predicate}/{value}"
             if marker in seen:
                 continue
             seen.add(marker)
-            lines.append(f"  - {scope} / {predicate}: {value}")
+            lines.append(f"  - [{_session_state_subject_label(subject)}] {scope} / {predicate}: {value}")
         return "\n".join(lines)
 
     def _format_activation_window(self, retrieved: RetrievedMemory) -> str:
@@ -1719,3 +1722,14 @@ def _value_tokens(value: object) -> set[str]:
 
 def _is_committed_relationship(label: object) -> bool:
     return is_committed_relationship_label(label)
+
+
+def _session_state_subject_label(subject: object) -> str:
+    value = str(subject or "").strip()
+    if value == "user":
+        return "用户当前状态"
+    if value == "assistant":
+        return "你自己当前状态"
+    if value == "shared":
+        return "双方当前状态"
+    return "当前状态"

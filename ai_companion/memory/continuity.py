@@ -118,18 +118,20 @@ class ContinuityContractBuilder:
             )
 
         for state in getattr(retrieved, "session_state", []) or []:
+            subject = str(state.get("subject") or "").strip()
             predicate = str(state.get("predicate") or "").strip()
             value = str(state.get("value") or "").strip()
             if not value:
                 continue
+            rendered_value = _session_state_text(subject, value)
             if predicate in {"relationship_explicit_status"} and is_committed_relationship_label(label):
                 contract.soft_context.append(
                     ContinuityFact(
                         kind="relationship_expression_state",
-                        text=f"当前表达状态：{value}",
+                        text=f"当前表达状态：{rendered_value}",
                         source="session_state",
                         priority=30,
-                        metadata={"predicate": predicate, "downgraded": True},
+                        metadata={"predicate": predicate, "subject": subject, "downgraded": True},
                     )
                 )
                 continue
@@ -137,20 +139,20 @@ class ContinuityContractBuilder:
                 contract.active_boundaries.append(
                     ContinuityFact(
                         kind="session_boundary",
-                        text=value,
+                        text=rendered_value,
                         source="session_state",
                         priority=18,
-                        metadata={"predicate": predicate},
+                        metadata={"predicate": predicate, "subject": subject},
                     )
                 )
             else:
                 contract.soft_context.append(
                     ContinuityFact(
                         kind="session_state",
-                        text=value,
+                        text=rendered_value,
                         source="session_state",
                         priority=35,
-                        metadata={"predicate": predicate},
+                        metadata={"predicate": predicate, "subject": subject},
                     )
                 )
 
@@ -181,6 +183,24 @@ class ContinuityContractBuilder:
             )
         )
         return contract
+
+
+def _session_state_text(subject: str, value: str) -> str:
+    label = _session_state_subject_label(subject)
+    if not label:
+        return value
+    return f"{label}：{value}"
+
+
+def _session_state_subject_label(subject: str) -> str:
+    subject = str(subject or "").strip()
+    if subject == "user":
+        return "用户当前状态"
+    if subject == "assistant":
+        return "你自己当前状态"
+    if subject == "shared":
+        return "双方当前状态"
+    return ""
 
 
 class RelationshipProjectionService:

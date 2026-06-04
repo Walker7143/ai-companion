@@ -107,6 +107,55 @@ _SCENE_SPECS: tuple[dict[str, Any], ...] = (
     },
 )
 
+_SHARED_SCENE_SUBJECTS = {"shared", ""}
+_USER_FIRST_PERSON_CUES = ("我", "我先", "我去", "我回", "我到", "我在", "我刚")
+_ASSISTANT_SECOND_PERSON_CUES = ("你怎么", "你还", "你先", "你去", "你回", "你在", "你到", "你还没")
+_SHARED_PARTY_CUES = ("我们", "咱们", "一起", "陪你", "跟你", "和你", "带你")
+_SHARED_ACTION_CUES = ("吧", "走", "一起", "先去", "回客栈", "去吃饭", "上车")
+
+
+def _recent_user_context(conversation_context: str) -> str:
+    return "\n".join(
+        line for line in str(conversation_context or "").splitlines()
+        if "用户" in line or line.strip().startswith("User:")
+    )
+
+
+def _user_weighted_scene_text(user_input: str, conversation_context: str) -> str:
+    return "\n".join([str(user_input or ""), _recent_user_context(conversation_context)])
+
+
+def is_shared_scene_subject(subject: object) -> bool:
+    return str(subject or "").strip() in _SHARED_SCENE_SUBJECTS
+
+
+def infer_scene_subject(*, user_input: str, scene_name: str) -> str:
+    text = str(user_input or "").strip()
+    if any(cue in text for cue in _SHARED_PARTY_CUES):
+        return "shared"
+    if any(cue in text for cue in _ASSISTANT_SECOND_PERSON_CUES) and not any(cue in text for cue in _USER_FIRST_PERSON_CUES):
+        return "assistant"
+    if any(cue in text for cue in _USER_FIRST_PERSON_CUES) and not any(cue in text for cue in _SHARED_PARTY_CUES):
+        return "user"
+    if any(cue in text for cue in _SHARED_ACTION_CUES):
+        return "shared"
+    if scene_name in {"vehicle", "meal", "outing", "intimate_room"}:
+        return "shared"
+    return "user"
+
+
+def detect_user_scene_match(
+    *,
+    user_input: str,
+    conversation_context: str,
+) -> dict[str, Any] | None:
+    """Match only user-provided scene cues; never infer a new shared scene from bot prose alone."""
+    user_weighted_text = _user_weighted_scene_text(user_input, conversation_context)
+    for spec in _SCENE_SPECS:
+        if any(cue in user_weighted_text for cue in spec["user_cues"]):
+            return spec
+    return None
+
 
 def exclusive_state_groups(scope: str, predicate: str) -> set[str]:
     scope = str(scope or "").strip()
@@ -181,34 +230,25 @@ def build_scene_authority_diff(
     conversation_context: str,
 ) -> SceneAuthorityDiff:
     user_text = str(user_input or "")
-    recent_user_context = "\n".join(
-        line for line in str(conversation_context or "").splitlines()
-        if "用户" in line or line.strip().startswith("User:")
-    )
-    user_weighted_text = "\n".join([user_text, recent_user_context])
+    user_weighted_text = _user_weighted_scene_text(user_input, conversation_context)
     combined = "\n".join([user_weighted_text, str(bot_output or "")])
-    matched = None
-    for spec in _SCENE_SPECS:
-        if any(cue in user_weighted_text for cue in spec["user_cues"]):
-            matched = spec
-            break
-    if matched is None:
-        for spec in _SCENE_SPECS:
-            if any(cue in combined for cue in spec["cues"]):
-                matched = spec
-                break
+    matched = detect_user_scene_match(
+        user_input=user_input,
+        conversation_context=conversation_context,
+    )
     if matched is None:
         return SceneAuthorityDiff(no_change=True)
 
     user_explicit = any(cue in user_text for cue in matched["user_cues"])
     source_kind = "user_explicit" if user_explicit else "joint_inference"
     confidence = 0.96 if user_explicit else 0.82
+    subject = infer_scene_subject(user_input=user_text, scene_name=str(matched.get("name") or ""))
     activity_spec = matched["activity"]
     activity = activity_spec(combined) if callable(activity_spec) else str(activity_spec)
     upserts = [
         {
             "scope": "current_scene",
-            "subject": "shared",
+            "subject": subject,
             "predicate": "current_location",
             "value": str(matched["location"]),
             "confidence": confidence,
@@ -218,7 +258,7 @@ def build_scene_authority_diff(
         },
         {
             "scope": "current_scene",
-            "subject": "shared",
+            "subject": subject,
             "predicate": "current_activity",
             "value": activity,
             "confidence": confidence,
@@ -229,7 +269,7 @@ def build_scene_authority_diff(
     ]
     spatial = matched.get("spatial")
     spatial_cues = matched.get("spatial_cues") or ()
-    if spatial and any(cue in combined for cue in spatial_cues):
+    if subject == "shared" and spatial and any(cue in combined for cue in spatial_cues):
         upserts.append(
             {
                 "scope": "current_scene",

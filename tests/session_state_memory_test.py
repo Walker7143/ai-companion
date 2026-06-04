@@ -9,6 +9,7 @@ from ai_companion.memory.session_state import (
     SessionStateDiff,
     SessionStateResolver,
     SessionStateStore,
+    extract_scene_summary,
 )
 
 
@@ -583,6 +584,71 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("户外/目的地游览场景", rendered)
         finally:
             shutil.rmtree(td, ignore_errors=True)
+
+    async def test_scene_authority_diff_ignores_bot_only_scene_prose(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        td = tempfile.mkdtemp(prefix="scene-authority-bot-only-")
+        try:
+            engine = MemoryEngine("scene_bot", Path(td), config={"embedding": "none"})
+            diff = engine._build_scene_authority_diff(
+                user_input="我到北京了",
+                bot_output="她单手扶着方向盘，笑着让你先回家睡觉。",
+                conversation_context="",
+            )
+            self.assertFalse(diff.upserts)
+            self.assertTrue(diff.no_change)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    async def test_scene_authority_diff_marks_user_only_arrival_as_user_subject(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        td = tempfile.mkdtemp(prefix="scene-authority-user-only-")
+        try:
+            engine = MemoryEngine("scene_bot", Path(td), config={"embedding": "none"})
+            diff = engine._build_scene_authority_diff(
+                user_input="我到北京了，先回家睡觉",
+                bot_output="好，你先休息。",
+                conversation_context="",
+            )
+            self.assertTrue(diff.upserts)
+            self.assertTrue(all(item.get("subject") == "user" for item in diff.upserts))
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    async def test_scene_authority_diff_marks_assistant_status_query_as_assistant_subject(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        td = tempfile.mkdtemp(prefix="scene-authority-assistant-only-")
+        try:
+            engine = MemoryEngine("scene_bot", Path(td), config={"embedding": "none"})
+            diff = engine._build_scene_authority_diff(
+                user_input="你怎么还没回客栈",
+                bot_output="我马上回去。",
+                conversation_context="",
+            )
+            self.assertTrue(diff.upserts)
+            self.assertTrue(all(item.get("subject") == "assistant" for item in diff.upserts))
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    def test_extract_scene_summary_ignores_user_only_scene(self):
+        active = [
+            {
+                "scope": "current_scene",
+                "subject": "user",
+                "predicate": "current_location",
+                "value": "北京，刚落地到家",
+            },
+            {
+                "scope": "current_scene",
+                "subject": "user",
+                "predicate": "current_activity",
+                "value": "准备回家睡觉",
+            },
+        ]
+        self.assertIsNone(extract_scene_summary(active))
 
     async def test_relationship_consistency_rewrites_denial_of_confirmed_partner_status(self):
         from ai_companion.memory.engine import MemoryEngine

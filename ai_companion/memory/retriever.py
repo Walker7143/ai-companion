@@ -8,7 +8,7 @@ from typing import Any
 
 from .activation import MemoryActivationPlan
 from .continuity import ContinuityContract, ContinuityContractBuilder
-from .scene_authority import categorize_scene_text, is_memory_compatible_with_scene
+from .scene_authority import categorize_scene_text, is_memory_compatible_with_scene, is_shared_scene_subject
 
 
 @dataclass
@@ -319,6 +319,9 @@ class MemoryRetriever:
         for state in session_states:
             scope = state.scope if hasattr(state, "scope") else state.get("scope", "")
             if scope != "current_scene":
+                continue
+            subject = state.subject if hasattr(state, "subject") else state.get("subject", "")
+            if not is_shared_scene_subject(subject):
                 continue
             predicate = state.predicate if hasattr(state, "predicate") else state.get("predicate", "")
             if predicate in ("current_location", "current_activity"):

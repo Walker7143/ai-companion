@@ -45,7 +45,7 @@ from .prompt_builder import MemoryPromptBuilder
 from .retriever import MemoryRetriever
 from .continuity import ContinuityContractBuilder, RelationshipProjectionService
 from .dreaming import DreamingOrchestrator
-from .scene_authority import build_scene_authority_diff
+from .scene_authority import build_scene_authority_diff, detect_user_scene_match
 from .session_state import (
     RelationshipConsistencyChecker,
     ResponseStateConsistencyChecker,
@@ -399,6 +399,11 @@ class MemoryEngine:
             conversation_context=conversation_context,
             active_states=active_states,
         )
+        state_diff = self._filter_scene_state_diff(
+            state_diff,
+            user_input=user_input,
+            conversation_context=conversation_context,
+        )
         deterministic_scene_diff = self._build_scene_authority_diff(
             user_input=user_input,
             bot_output=llm_output,
@@ -439,6 +444,46 @@ class MemoryEngine:
             upserts=diff.upserts,
             no_change=diff.no_change,
             confidence_explanations=diff.confidence_explanations,
+        )
+
+    def _filter_scene_state_diff(
+        self,
+        diff: SessionStateDiff,
+        *,
+        user_input: str,
+        conversation_context: str,
+    ) -> SessionStateDiff:
+        if not diff.upserts:
+            return diff
+        user_scene_match = detect_user_scene_match(
+            user_input=user_input,
+            conversation_context=conversation_context,
+        )
+        if user_scene_match is not None:
+            return diff
+
+        filtered_upserts = []
+        filtered_any = False
+        for item in diff.upserts:
+            if not isinstance(item, dict):
+                filtered_upserts.append(item)
+                continue
+            scope = str(item.get("scope") or "").strip()
+            if scope == "current_scene" or scope.startswith("current_scene/"):
+                filtered_any = True
+                continue
+            filtered_upserts.append(item)
+        if not filtered_any:
+            return diff
+        return SessionStateDiff(
+            upserts=filtered_upserts,
+            confirmations=diff.confirmations,
+            invalidations=diff.invalidations,
+            no_change=diff.no_change and not filtered_upserts,
+            confidence_explanations=[
+                *list(diff.confidence_explanations),
+                "filtered_scene_upserts_without_user_scene_evidence",
+            ],
         )
 
     async def ensure_response_state_consistency(

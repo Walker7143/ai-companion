@@ -354,9 +354,12 @@ def extract_scene_summary(active_states: list) -> dict | None:
     spatial = None
     for item in active_states:
         scope = item.scope if hasattr(item, "scope") else item.get("scope", "")
+        subject = item.subject if hasattr(item, "subject") else item.get("subject", "")
         predicate = item.predicate if hasattr(item, "predicate") else item.get("predicate", "")
         value = item.value if hasattr(item, "value") else item.get("value", "")
         if scope != "current_scene":
+            continue
+        if subject not in {"shared", "assistant", ""}:
             continue
         if predicate == "current_location":
             location = value
