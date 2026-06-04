@@ -101,6 +101,20 @@ def _is_assistant_only_scene_reset(item: dict[str, Any], active_states: list["Se
     return _scene_conflict_reason(incoming_categories, _active_scene_categories(active_states)) is not None
 
 
+def _is_assistant_only_current_scene_state(item: dict[str, Any]) -> bool:
+    scope = str(item.get("scope") or "").strip()
+    if not (scope == "current_scene" or scope.startswith("current_scene/")):
+        return False
+    if str(item.get("subject") or "").strip() != "assistant":
+        return False
+    source_kind = str(item.get("source_kind") or "").strip()
+    predicate = str(item.get("predicate") or "").strip()
+    return (
+        source_kind == "bot_commitment_confirmed"
+        and (scope.startswith("current_scene/") or predicate == "activity_detail")
+    )
+
+
 @dataclass
 class SessionStateItem:
     state_id: str
@@ -500,6 +514,16 @@ class SessionStateResolver:
 
         for item in diff.upserts:
             if not isinstance(item, dict):
+                continue
+            if _is_assistant_only_current_scene_state(item):
+                await store.append_event(
+                    session_id,
+                    "rejected_assistant_only_scene_state",
+                    {
+                        "item": item,
+                        "reason": "assistant_only_current_scene_state",
+                    },
+                )
                 continue
             if _is_assistant_only_scene_reset(item, active):
                 incoming_categories = _scene_categories(item.get("value"))

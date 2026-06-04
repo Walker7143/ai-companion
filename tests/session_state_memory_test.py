@@ -568,6 +568,22 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
         finally:
             shutil.rmtree(td, ignore_errors=True)
 
+    async def test_scene_authority_diff_ignores_status_question_without_shared_scene_anchor(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        td = tempfile.mkdtemp(prefix="scene-authority-status-")
+        try:
+            engine = MemoryEngine("scene_bot", Path(td), config={"embedding": "none"})
+            diff = engine._build_scene_authority_diff(
+                user_input="你中午吃饭了没",
+                bot_output="我这会儿在客栈打扫房间，准备下午的布置。",
+                conversation_context="",
+            )
+            self.assertFalse(diff.upserts)
+            self.assertTrue(diff.no_change)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
     async def test_scene_authority_diff_user_room_overrides_bot_outing_cue(self):
         from ai_companion.memory.engine import MemoryEngine
 
@@ -649,6 +665,28 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
             },
         ]
         self.assertIsNone(extract_scene_summary(active))
+
+    async def test_resolver_rejects_assistant_only_current_scene_state(self):
+        result = await self.resolver.apply_diff(
+            store=self.store,
+            session_id="assistant-scene",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "current_scene/current_activity",
+                        "subject": "assistant",
+                        "predicate": "activity_detail",
+                        "value": "已返回大理客栈，正在打扫房间并准备布置",
+                        "confidence": 0.9,
+                        "source_kind": "bot_commitment_confirmed",
+                    }
+                ]
+            ),
+            evidence_turn_id="t1",
+        )
+        active = await self.store.list_active_states("assistant-scene")
+        self.assertFalse(result["written"])
+        self.assertFalse(active)
 
     async def test_relationship_consistency_rewrites_denial_of_confirmed_partner_status(self):
         from ai_companion.memory.engine import MemoryEngine

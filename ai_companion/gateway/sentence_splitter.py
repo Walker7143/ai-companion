@@ -5,7 +5,6 @@ Designed to mimic human typing patterns: sentences are sent one at a time
 with random delays between them.
 """
 
-import re
 import random
 import asyncio
 import logging
@@ -15,10 +14,6 @@ logger = logging.getLogger(__name__)
 
 # Ellipsis placeholder — must not appear in normal text
 _ELLIPSIS_MARKER = "\x00ELLIPSIS\x00"
-# Multiple exclamation/question/period placeholders
-_MULTI_PUNCT_MARKER = "\x00MPUNCT\x00"
-
-
 def get_delay_for_sentence(sentence: str) -> float:
     """
     Calculate human-like delay before sending a sentence.
@@ -47,17 +42,13 @@ class SentenceSplitter:
 
     Edge cases handled:
     - Ellipsis "……" is treated as a single unit, not two sentence breaks
-    - Multiple consecutive punctuations ("！！！", "？？？") are merged to one
+    - Consecutive sentence-ending punctuations ("！！！", "？！", "!?") stay attached
     - Leading/trailing whitespace per sentence is stripped
     - Empty fragments are discarded
     """
 
-    # Match sentence-ending punctuation, optionally preceded by ellipsis
-    # Group 1: ellipsis (optional)
-    # Group 2: the final punctuation character (one of 。！？)
-    _SENTENCE_BOUNDARY = re.compile(
-        r"(……)?([。！？])"
-    )
+    _END_PUNCTUATION = "。！？!?"
+    _TRAILING_CLOSERS = "\"'”’）)]】》」』〉〕】"
 
     @classmethod
     def split(cls, text: str) -> List[str]:
@@ -73,11 +64,7 @@ class SentenceSplitter:
         # Step 1: Protect ellipsis "……" → placeholder
         protected = text.replace("……", _ELLIPSIS_MARKER)
 
-        # Step 2: Collapse consecutive punctuation (！！！ → 单个！)
-        # 匹配连续相同标点，保留一个
-        protected = cls._collapse_consecutive_punct(protected)
-
-        # Step 3: Split by sentence boundaries
+        # Step 2: Split by sentence boundaries
         # We split manually rather than regex.split() to preserve what we split on
         sentences, current = [], ""
 
@@ -85,12 +72,19 @@ class SentenceSplitter:
         while i < len(protected):
             char = protected[i]
 
-            # Check for sentence-ending punctuation
-            if char in "。！？":
-                current += char
+            # Check for sentence-ending punctuation. Keep a whole run like "？！"
+            # or "!!?" attached to the same sentence instead of splitting inside it.
+            if char in cls._END_PUNCTUATION:
+                while i < len(protected) and protected[i] in cls._END_PUNCTUATION:
+                    current += protected[i]
+                    i += 1
+                # Keep closing quotes/brackets attached to the same sentence:
+                # e.g. `“好。”` / `"Really?"` / `（“好。”）`
+                while i < len(protected) and protected[i] in cls._TRAILING_CLOSERS:
+                    current += protected[i]
+                    i += 1
                 sentences.append(current)
                 current = ""
-                i += 1
                 continue
 
             # Check for newline
@@ -110,13 +104,6 @@ class SentenceSplitter:
                 i += len(_ELLIPSIS_MARKER)
                 continue
 
-            # Check for multi-punct placeholder
-            if protected[i:].startswith(_MULTI_PUNCT_MARKER):
-                # The collapsed form already added one punctuation to current above
-                # This placeholder just marks the boundary
-                i += len(_MULTI_PUNCT_MARKER)
-                continue
-
             current += char
             i += 1
 
@@ -124,37 +111,13 @@ class SentenceSplitter:
         if current.strip():
             sentences.append(current)
 
-        # Step 4: Restore ellipsis placeholders (may appear mid-sentence)
+        # Step 3: Restore ellipsis placeholders (may appear mid-sentence)
         sentences = [s.replace(_ELLIPSIS_MARKER, "……") for s in sentences]
 
-        # Step 5: Strip whitespace
+        # Step 4: Strip whitespace
         sentences = [s.strip() for s in sentences if s.strip()]
 
         return sentences
-
-    @classmethod
-    def _collapse_consecutive_punct(cls, text: str) -> str:
-        """
-        Collapse runs of 。！？ into a single character.
-
-        "天气真好！！！" → "天气真好！"
-        "真的假的？？" → "真的假的？"
-        """
-        result = []
-        i = 0
-        while i < len(text):
-            char = text[i]
-            if char in "。！？":
-                # Skip consecutive same-type punctuation
-                j = i + 1
-                while j < len(text) and text[j] == char:
-                    j += 1
-                result.append(char)
-                i = j
-            else:
-                result.append(char)
-                i += 1
-        return "".join(result)
 
 
 async def send_gradually(

@@ -204,8 +204,10 @@ class ResponseStylePolisher:
         return text
 
     def _first_sentences(self, text: str, max_sentences: int) -> str:
-        parts = re.split(r"(?<=[。！？!?])", text)
-        selected = [part.strip() for part in parts if part.strip()][:max_sentences]
+        from ..gateway.sentence_splitter import SentenceSplitter
+
+        parts = SentenceSplitter.split(text)
+        selected = parts[:max_sentences]
         return "".join(selected) if selected else text
 
     def _interaction_style(self, understanding: dict[str, Any]) -> dict[str, Any]:

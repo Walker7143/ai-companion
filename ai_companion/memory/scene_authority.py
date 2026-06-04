@@ -156,6 +156,24 @@ def detect_user_scene_match(
             return spec
     return None
 
+_STATUS_QUESTION_SCENES = {"meal", "sleep", "bathroom"}
+_STATUS_QUESTION_TOKENS = ("吗", "么", "?", "？", "没", "了没")
+_STATUS_QUESTION_ACTION_TOKENS = (
+    "一起",
+    "先",
+    "去",
+    "出来",
+    "回去",
+    "回客栈",
+    "起床",
+    "睡觉",
+    "洗澡",
+    "换衣服",
+    "脱衣服",
+    "点菜",
+    "上菜",
+)
+
 
 def exclusive_state_groups(scope: str, predicate: str) -> set[str]:
     scope = str(scope or "").strip()
@@ -223,6 +241,19 @@ def has_room_reset_cue(text: object) -> bool:
     return bool(categorize_scene_text(text) & {"room_reset"})
 
 
+def _looks_like_status_question(text: object, scene_name: str) -> bool:
+    if scene_name not in _STATUS_QUESTION_SCENES:
+        return False
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if not any(token in value for token in _STATUS_QUESTION_TOKENS):
+        return False
+    if any(token in value for token in _STATUS_QUESTION_ACTION_TOKENS):
+        return False
+    return True
+
+
 def build_scene_authority_diff(
     *,
     user_input: str,
@@ -237,6 +268,8 @@ def build_scene_authority_diff(
         conversation_context=conversation_context,
     )
     if matched is None:
+        return SceneAuthorityDiff(no_change=True)
+    if any(cue in user_text for cue in matched["user_cues"]) and _looks_like_status_question(user_text, matched["name"]):
         return SceneAuthorityDiff(no_change=True)
 
     user_explicit = any(cue in user_text for cue in matched["user_cues"])
