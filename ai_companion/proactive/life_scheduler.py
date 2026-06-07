@@ -108,12 +108,21 @@ class LifeScheduler:
         except Exception:
             return None
 
+    def _daily_rollover_reference_date(self) -> date | None:
+        last_daily_tick = getattr(self.state, "last_daily_tick", None)
+        if last_daily_tick:
+            try:
+                return last_daily_tick.date()
+            except Exception:
+                pass
+        return self._parse_state_current_date()
+
     def _should_run_daily(self, now: datetime) -> tuple[bool, str]:
         if self._should_run_daily_on_local_rollover():
             local_date = self._get_local_date()
-            current_date = self._parse_state_current_date()
-            if current_date and local_date > current_date:
-                return True, f"local_date_rollover:{current_date.isoformat()}->{local_date.isoformat()}"
+            reference_date = self._daily_rollover_reference_date()
+            if reference_date and local_date > reference_date:
+                return True, f"local_date_rollover:{reference_date.isoformat()}->{local_date.isoformat()}"
 
         elapsed = (now - (self.state.last_daily_tick or datetime.fromtimestamp(0))).total_seconds()
         if elapsed >= self.config.daily_interval:

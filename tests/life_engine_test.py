@@ -327,6 +327,26 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(should_run)
             self.assertIn("local_date_rollover", reason)
 
+    def test_life_scheduler_rollover_uses_last_daily_tick_even_if_current_date_was_synced(self):
+        with TemporaryDirectory(prefix="life-scheduler-rollover-last-tick-") as td:
+            state = LifeState("scheduler_rollover_last_tick_bot", Path(td))
+            state.current_date = "2026-06-07"
+            state.last_daily_tick = datetime(2026, 6, 6, 18, 30, 0)
+            cfg = LifeConfig(
+                daily_interval_seconds=86400,
+                major_interval_seconds=604800,
+                time_ratio=1,
+                sync_with_local_time_when_realtime=True,
+            )
+            local_now = datetime(2026, 6, 7, 11, 12, 43).astimezone()
+            scheduler = LifeScheduler(FakeSchedulerLifeEngine(local_now), cfg, state)
+            scheduler._get_now = lambda: datetime(2026, 6, 7, 11, 12, 43)
+
+            should_run, reason = scheduler._should_run_daily(scheduler._get_now())
+
+            self.assertTrue(should_run)
+            self.assertIn("local_date_rollover:2026-06-06->2026-06-07", reason)
+
     def test_life_scheduler_does_not_use_local_rollover_when_sync_disabled(self):
         with TemporaryDirectory(prefix="life-scheduler-interval-mode-") as td:
             state = LifeState("scheduler_interval_bot", Path(td))
