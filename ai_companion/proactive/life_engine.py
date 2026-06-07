@@ -757,6 +757,7 @@ class LifeEngine:
                     runtime_profile_before=before_runtime,
                     runtime_profile_after=merged,
                     relationship_state=self._latest_relationship_state,
+                    bot_current_date=str(self.state.current_date or "").strip(),
                 )
             except Exception as exc:
                 logger.info("[LifeEngine] evolution capture skipped: %s", exc)

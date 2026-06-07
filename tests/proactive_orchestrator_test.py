@@ -310,6 +310,62 @@ class ProactiveOrchestratorTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(sent)
             self.assertEqual(engine.sent[0].type.value, "idle_ping")
 
+    async def test_idle_reminder_can_fallback_to_recent_real_conversation(self):
+        from ai_companion.proactive.conversation_task_store import ConversationTaskStore
+        from ai_companion.proactive.orchestrator import ProactiveOrchestrator
+
+        class Config:
+            continuity_enabled = True
+            is_active = True
+            deferred_reply_enabled = False
+            topic_continuation_enabled = False
+            emotion_followup_enabled = False
+            life_event_motive_enabled = False
+            idle_ping_enabled = False
+            idle_reminder_enabled = True
+            idle_threshold_hours = 3
+            preferred_contact_times = ["00:00-23:59"]
+            max_daily = 10
+            min_interval_hours = 0
+
+        class State:
+            today_proactive_count = 0
+            annoyance_level = 0
+
+            def get_cooldown(self, trigger_name):
+                return None
+
+        class Engine:
+            bot_id = "bot-a"
+            config = Config()
+            state = State()
+
+            def __init__(self):
+                self.sent = []
+
+            async def send_contextual_proactive_message(self, motive):
+                self.sent.append(motive)
+                return True
+
+            def has_scene_anchor_for_idle_ping(self):
+                return True
+
+            def has_grounded_idle_reminder_scene(self):
+                return False
+
+            def _calc_idle_hours(self):
+                return 4
+
+        with TemporaryDirectory(prefix="proactive-idle-reminder-fallback-") as td:
+            engine = Engine()
+            orchestrator = ProactiveOrchestrator(engine=engine, task_store=ConversationTaskStore(td))
+
+            sent = await orchestrator.tick(now=datetime(2026, 5, 9, 10, 0, 0))
+
+            self.assertTrue(sent)
+            self.assertEqual(engine.sent[0].type.value, "idle_reminder")
+            self.assertIn("真实对话", engine.sent[0].reason)
+
     async def test_life_event_motive_marks_event_shared_after_send(self):
         from ai_companion.proactive.conversation_task_store import ConversationTaskStore
         from ai_companion.proactive.life_state import LifeEvent, LifeState

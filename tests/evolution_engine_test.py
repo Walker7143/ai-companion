@@ -219,6 +219,44 @@ class PersonaEvolutionEngineTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state["last_reflection_at"])
         self.assertGreaterEqual(state["last_reflection_turn"], 8)
 
+    async def test_bot_day_cadence_reflects_once_per_new_bot_day(self):
+        with TemporaryDirectory(prefix="evolution-bot-day-cadence-") as td:
+            persona_dir = Path(td) / "bot" / "persona"
+            _write_persona_bundle(persona_dir)
+            engine = PersonaEvolutionEngine(
+                bot_id="bot",
+                persona_dir=persona_dir,
+                config={"reflection": {"turn_cadence": 99, "bot_day_cadence": 1}},
+            )
+
+            first = await engine.capture_turn(
+                user_input="我们昨晚一起认真聊了你最近越来越会安慰人的变化。",
+                bot_output="我也感觉自己最近更会先接住你的情绪了。",
+                turn_context={"bot_current_date": "2026-06-07"},
+            )
+            state_after_first = load_evolution_state(persona_dir)
+
+            second = await engine.capture_turn(
+                user_input="今天还是想接着聊聊那次对话给我们的影响。",
+                bot_output="嗯，我也一直记着那次聊完以后心里更稳了。",
+                turn_context={"bot_current_date": "2026-06-07"},
+            )
+            state_after_second = load_evolution_state(persona_dir)
+
+            third = await engine.capture_turn(
+                user_input="新的一天了，我发现你说话还是比以前更温柔一点。",
+                bot_output="被你这样说，我会更想把这种温柔认真留下来。",
+                turn_context={"bot_current_date": "2026-06-08"},
+            )
+            state_after_third = load_evolution_state(persona_dir)
+
+        self.assertTrue(first["reflected"])
+        self.assertEqual(state_after_first["last_reflection_bot_date"], "2026-06-07")
+        self.assertFalse(second["reflected"])
+        self.assertEqual(state_after_second["last_reflection_bot_date"], "2026-06-07")
+        self.assertTrue(third["reflected"])
+        self.assertEqual(state_after_third["last_reflection_bot_date"], "2026-06-08")
+
     async def test_short_or_command_input_does_not_trigger_empty_reflection(self):
         with TemporaryDirectory(prefix="evolution-empty-reflection-") as td:
             persona_dir = Path(td) / "bot" / "persona"

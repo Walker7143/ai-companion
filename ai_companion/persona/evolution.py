@@ -4,7 +4,7 @@ import copy
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -190,6 +190,16 @@ def _utcnow_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _parse_date(value: object) -> Optional[date]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -304,6 +314,8 @@ class PersonaEvolutionEngine:
         relationship_state = dict(relationship_state or {})
         signals: list[dict[str, Any]] = []
         effective = self._is_effective_turn(user_text)
+        turn_context = dict(turn_context or {})
+        bot_current_date = str(turn_context.get("bot_current_date") or "").strip()
         if effective:
             state["effective_turn_count"] = int(state.get("effective_turn_count", 0)) + 1
 
@@ -379,8 +391,19 @@ class PersonaEvolutionEngine:
 
         reflected = False
         reflect_reason = ""
+        has_reflectable_activity = any(
+            str(item.get("status") or "") in {"captured", "merged"}
+            for item in state.get("signals") or []
+        )
         if any(signal.get("importance", 0) >= 0.85 for signal in signals):
             reflect_reason = "high_importance_signal"
+        elif self._should_reflect_for_bot_day(
+            state=state,
+            bot_current_date=bot_current_date,
+            cadence_days=int(cfg["reflection"].get("bot_day_cadence", 1)),
+            has_reflectable_activity=has_reflectable_activity,
+        ):
+            reflect_reason = "periodic_bot_day_cadence"
         elif effective and (
             int(state.get("effective_turn_count", 0)) - int(state.get("last_reflection_turn", 0))
             >= cfg["reflection"]["turn_cadence"]
@@ -389,8 +412,8 @@ class PersonaEvolutionEngine:
 
         self._save_state(state)
         if reflect_reason:
-            await self.reflect(reason=reflect_reason)
-            reflected = True
+            reflect_result = await self.reflect(reason=reflect_reason, bot_current_date=bot_current_date)
+            reflected = bool(reflect_result.get("reflected"))
 
         return {
             "captured": len(signals),
@@ -443,7 +466,10 @@ class PersonaEvolutionEngine:
                 "human_readable_reason": "关系状态存储层确认了新的关系阶段。",
             }
         )
-        await self.reflect(reason="relationship_label_changed")
+        await self.reflect(
+            reason="relationship_label_changed",
+            bot_current_date=str((turn_context or {}).get("bot_current_date") or "").strip(),
+        )
         return {"captured": 1}
 
     async def capture_life_event(
@@ -455,6 +481,7 @@ class PersonaEvolutionEngine:
         runtime_profile_before: dict[str, Any] | None = None,
         runtime_profile_after: dict[str, Any] | None = None,
         relationship_state: dict[str, Any] | None = None,
+        bot_current_date: str = "",
     ) -> dict[str, Any]:
         cfg = self.get_config()
         if not cfg.get("enabled", True):
@@ -514,10 +541,10 @@ class PersonaEvolutionEngine:
                 "human_readable_reason": f"{event_type} 事件会立即进入演化链路，先影响运行态，再进入反思判断。",
             }
         )
-        await self.reflect(reason=f"life_event_{event_type}")
+        await self.reflect(reason=f"life_event_{event_type}", bot_current_date=str(bot_current_date or "").strip())
         return {"captured": 1}
 
-    async def reflect(self, *, reason: str = "manual") -> dict[str, Any]:
+    async def reflect(self, *, reason: str = "manual", bot_current_date: str = "") -> dict[str, Any]:
         cfg = self.get_config()
         state = self.get_state()
         signals = list(state.get("signals") or [])
@@ -545,6 +572,8 @@ class PersonaEvolutionEngine:
         state["diagnostics"] = diagnostics
         state["last_reflection_at"] = created_at
         state["last_reflection_turn"] = int(state.get("effective_turn_count", 0))
+        if bot_current_date:
+            state["last_reflection_bot_date"] = bot_current_date
         self._save_state(state)
 
         event = {
@@ -577,6 +606,24 @@ class PersonaEvolutionEngine:
             "pending_promotions": pending_promotions,
             "suppressed_changes": suppressed_changes,
         }
+
+    def _should_reflect_for_bot_day(
+        self,
+        *,
+        state: dict[str, Any],
+        bot_current_date: str,
+        cadence_days: int,
+        has_reflectable_activity: bool,
+    ) -> bool:
+        if not has_reflectable_activity:
+            return False
+        current = _parse_date(bot_current_date)
+        if current is None:
+            return False
+        last = _parse_date(state.get("last_reflection_bot_date"))
+        if last is None:
+            return True
+        return (current - last).days >= max(1, cadence_days)
 
     async def promote(self, *, reason: str = "manual") -> dict[str, Any]:
         cfg = self.get_config()

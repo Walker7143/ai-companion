@@ -31,6 +31,7 @@ class CLIAdapter:
         self.current_bot_id: str = None
         self._output_lock = asyncio.Lock()
         self._pending_proactive: list[tuple[str, str]] = []
+        self._proactive_flush_task: asyncio.Task | None = None
 
     async def _read_input(self) -> str:
         """读取用户输入"""
@@ -44,19 +45,23 @@ class CLIAdapter:
         async with self._output_lock:
             self.console.print(*args, **kwargs)
 
-    async def _queue_proactive_message(self, bot_name: str, message: str):
+    async def _queue_proactive_message(self, bot_name: str, message: str, target=None):
         self._pending_proactive.append((bot_name, message))
+        if self._proactive_flush_task is None or self._proactive_flush_task.done():
+            self._proactive_flush_task = asyncio.create_task(self._flush_proactive_messages())
         return True
 
     async def _flush_proactive_messages(self):
-        if not self._pending_proactive:
-            return
-        pending = list(self._pending_proactive)
-        self._pending_proactive.clear()
-        await self._safe_print("[dim]━━━ 主动消息 ━━━[/dim]")
-        for bot_name, message in pending:
-            await self._safe_print(f"[bold pink]{escape(bot_name)}[/bold pink]: {escape(message)}")
-        await self._safe_print("")
+        try:
+            while self._pending_proactive:
+                pending = list(self._pending_proactive)
+                self._pending_proactive.clear()
+                await self._safe_print("[dim]━━━ 主动消息 ━━━[/dim]")
+                for bot_name, message in pending:
+                    await self._safe_print(f"[bold pink]{escape(bot_name)}[/bold pink]: {escape(message)}")
+                await self._safe_print("")
+        finally:
+            self._proactive_flush_task = None
 
     def _install_cli_proactive_queue(self, bot):
         if not bot:
@@ -65,7 +70,7 @@ class CLIAdapter:
         if platform_type != "cli":
             return
         bot.proactive_engine._platform_sender = (
-            lambda msg, bot_name=bot.name: self._queue_proactive_message(bot_name, msg)
+            lambda msg, target=None, bot_name=bot.name: self._queue_proactive_message(bot_name, msg, target=target)
         )
 
     async def _select_bot(self):

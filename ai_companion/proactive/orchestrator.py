@@ -270,13 +270,21 @@ class ProactiveOrchestrator:
             return None
         if not self._idle_hours_reached():
             return None
-        if not getattr(self.engine, "has_grounded_idle_reminder_scene", lambda: False)():
+        grounded_scene = bool(getattr(self.engine, "has_grounded_idle_reminder_scene", lambda: False)())
+        recent_scene_anchor = bool(getattr(self.engine, "has_scene_anchor_for_idle_ping", lambda: False)())
+        if not grounded_scene and not recent_scene_anchor:
             return None
+        if grounded_scene:
+            reason = "最近现场里有明确的作息/安排线索，可以做一条低频兜底提醒"
+            prompt_context = "这是一条最后兜底的提醒型主动消息。只有在最近现场已经明确出现作息、吃饭、上班、休息等线索时，才允许轻轻提醒一次。"
+        else:
+            reason = "虽然最近没有明确作息线索，但刚发生过真实对话，可以发一条低频的承接式问候"
+            prompt_context = "这是一条低频兜底的承接型主动消息。最近已经有过真实对话，但没有明确作息安排，不要装作知道对方在做什么，只能顺着最近聊天留下的温度轻轻接一句。"
         return ProactiveMotive(
             type=ProactiveMotiveType.IDLE_REMINDER,
             priority=10,
-            reason="最近现场里有明确的作息/安排线索，可以做一条低频兜底提醒",
-            prompt_context="这是一条最后兜底的提醒型主动消息。只有在最近现场已经明确出现作息、吃饭、上班、休息等线索时，才允许轻轻提醒一次。",
+            reason=reason,
+            prompt_context=prompt_context,
         )
 
     def _idle_hours_reached(self) -> bool:

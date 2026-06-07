@@ -362,6 +362,7 @@ class MemoryEngine:
             bot_id=self.bot_id,
             user_id=user_id,
         )
+        bot_current_date = self._get_bot_current_date()
         await self.evolution.capture_turn(
             user_input=user_input,
             bot_output=llm_output,
@@ -370,6 +371,7 @@ class MemoryEngine:
                 "session_id": sid,
                 "user_id": user_id,
                 "platform": context.platform,
+                "bot_current_date": bot_current_date,
             },
         )
         return context
@@ -458,9 +460,14 @@ class MemoryEngine:
             bot_id=self.bot_id,
             user_id=user_id,
         )
+        bot_current_date = self._get_bot_current_date()
         await self.evolution.capture_relationship_state(
             latest_relationship_state,
-            turn_context={"session_id": sid, "user_id": user_id},
+            turn_context={
+                "session_id": sid,
+                "user_id": user_id,
+                "bot_current_date": bot_current_date,
+            },
         )
         return session_state_result
 
@@ -1203,6 +1210,19 @@ class MemoryEngine:
                 metadata=metadata,
             )
         return MemoryTurnContext(session_id=session_id, user_id=self.user_id)
+
+    def _get_bot_current_date(self) -> str:
+        try:
+            life_state_path = self.memory_dir.parent / "life_state.json"
+            if not life_state_path.exists():
+                return ""
+            raw = json.loads(life_state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        if not isinstance(raw, dict):
+            return ""
+        value = raw.get("current_date")
+        return str(value).strip() if value else ""
 
     async def _do_compress(self):
         """执行压缩"""
