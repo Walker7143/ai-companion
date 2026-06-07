@@ -636,6 +636,56 @@ class WeixinGatewayTest(unittest.IsolatedAsyncioTestCase):
 
 
 class WeixinGatewayConfigTest(unittest.TestCase):
+    def test_weixin_adapter_prefers_single_restored_dm_for_proactive_target(self):
+        adapter = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={"account_id": "wxbot"},
+            )
+        )
+
+        adapter._token_store.set("wxbot", "user-1", "ctx-1")
+
+        self.assertEqual(adapter.get_preferred_proactive_chat_id(), "user-1")
+
+    def test_weixin_adapter_ignores_group_or_ambiguous_restored_targets(self):
+        group_only = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={"account_id": "wxbot"},
+            )
+        )
+        group_only._token_store.set("wxbot", "room-1@chatroom", "ctx-1")
+        self.assertIsNone(group_only.get_preferred_proactive_chat_id())
+
+        multiple_dm = WeixinAdapter(
+            PlatformConfig(
+                enabled=True,
+                token="token-1",
+                extra={"account_id": "wxbot"},
+            )
+        )
+        multiple_dm._token_store.set("wxbot", "user-1", "ctx-1")
+        multiple_dm._token_store.set("wxbot", "user-2", "ctx-2")
+        self.assertIsNone(multiple_dm.get_preferred_proactive_chat_id())
+
+    def test_extract_gateway_target_id_falls_back_to_platform_preferred_chat_id(self):
+        from ai_companion.gateway.cmd import _extract_gateway_target_id_from_bot
+
+        bot = SimpleNamespace(
+            proactive_config=SimpleNamespace(to_dict=lambda: {"platform": {"type": "weixin"}}),
+            _proactive_platform=SimpleNamespace(
+                get_preferred_proactive_chat_id=lambda: "restored-user-1"
+            ),
+        )
+
+        self.assertEqual(
+            _extract_gateway_target_id_from_bot(bot, "weixin"),
+            "restored-user-1",
+        )
+
     def test_build_weixin_adapter_profile_requires_one_bot_and_preserves_env_fallbacks(self):
         from ai_companion.gateway.cmd import _build_weixin_adapter_profiles
 

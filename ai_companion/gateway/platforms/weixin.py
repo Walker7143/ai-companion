@@ -300,6 +300,14 @@ class ContextTokenStore:
         self._cache[self._key(account_id, user_id)] = token
         self._persist(account_id)
 
+    def list_user_ids(self, account_id: str) -> list[str]:
+        prefix = f"{account_id}:"
+        return [
+            key[len(prefix) :]
+            for key in self._cache.keys()
+            if key.startswith(prefix) and key[len(prefix) :].strip()
+        ]
+
     def _persist(self, account_id: str) -> None:
         prefix = f"{account_id}:"
         payload = {
@@ -2023,6 +2031,17 @@ class WeixinAdapter(BasePlatformAdapter):
                 error_message=str(exc),
             )
             return SendResult(success=False, error=str(exc))
+
+    def get_preferred_proactive_chat_id(self) -> Optional[str]:
+        """Return the only restored DM peer when no explicit home channel is configured."""
+        candidates = [
+            user_id
+            for user_id in self._token_store.list_user_ids(self._account_id)
+            if user_id and not str(user_id).endswith("@chatroom")
+        ]
+        if len(candidates) != 1:
+            return None
+        return candidates[0]
 
     async def send_typing(self, chat_id: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         if not self._send_session or not self._token:

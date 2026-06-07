@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Bug, BrainCircuit, FileSearch, RefreshCw, Sparkles } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { debugApi } from '../../api';
 import { useBotStore } from '../../stores';
 import { Button, Card, CardContent, CardHeader, CardTitle, useToast } from '../../components/ui';
-import type { DebugContextPayload } from '../../types';
+import type { DebugContextPayload, EvolutionRefsView, EvolutionTimelineItem } from '../../types';
 
 export function Debug() {
   const { currentBotId } = useBotStore();
@@ -28,6 +29,7 @@ export function Debug() {
   const budget = (diagnostics.prompt_budget || {}) as Record<string, unknown>;
   const blocks = (budget.blocks || {}) as Record<string, unknown>;
   const blockEntries = Object.entries(blocks).map(([name, value]) => ({ name, value: value as Record<string, unknown> }));
+  const evolutionRefs = ctx?.evolution_refs;
   const heroStyle: React.CSSProperties = {
     borderRadius: 18,
     padding: 24,
@@ -54,6 +56,8 @@ export function Debug() {
         <DebugCard icon={<BrainCircuit size={18} />} title="Memory Trace" data={ctx?.retrieved_memory} />
         <DebugCard icon={<Sparkles size={18} />} title="Response Style Trace" data={ctx?.response_style_trace} />
       </div>
+
+      <EvolutionLinksCard botId={currentBotId || ''} refs={evolutionRefs} />
 
       <Card variant="elevated">
         <CardHeader><CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}><FileSearch size={18} />Prompt Budget</CardTitle></CardHeader>
@@ -95,6 +99,86 @@ export function Debug() {
     </div>
   );
 }
+
+function EvolutionLinksCard({ botId, refs }: { botId: string; refs?: EvolutionRefsView }) {
+  const timeline = Array.isArray(refs?.timeline_preview) ? refs.timeline_preview : [];
+  const diagnostics = refs?.diagnostics;
+
+  return (
+    <Card variant="elevated">
+      <CardHeader>
+        <CardTitle style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Sparkles size={18} />
+          Evolution Links
+        </CardTitle>
+      </CardHeader>
+      <CardContent style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <span style={pillStyle}>活跃信号 {diagnostics?.captured_signal_count ?? 0}</span>
+          <span style={pillStyle}>待晋升 {diagnostics?.pending_promotion_count ?? 0}</span>
+          <span style={pillStyle}>抑制 {diagnostics?.suppressed_promotions ?? 0}</span>
+        </div>
+        {timeline.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+            当前还没有可追踪的人格演化事件，等产生 signal / reflection / promotion 后这里会出现跳转入口。
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {timeline.map((item) => (
+              <EvolutionEventLink key={item.id} botId={botId} item={item} />
+            ))}
+          </div>
+        )}
+        <div>
+          <Link to="/evolution" style={linkStyle}>
+            打开完整人格演化页
+          </Link>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function EvolutionEventLink({ botId, item }: { botId: string; item: EvolutionTimelineItem }) {
+  return (
+    <Link
+      to={`/evolution?bot=${encodeURIComponent(botId)}&event=${encodeURIComponent(item.id)}`}
+      style={{
+        display: 'grid',
+        gap: 6,
+        padding: 12,
+        borderRadius: 10,
+        border: '1px solid var(--border-subtle)',
+        backgroundColor: 'var(--bg-tertiary)',
+        textDecoration: 'none',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <strong style={{ color: 'var(--text-primary)', fontSize: 13 }}>{item.summary || item.event_type}</strong>
+        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{item.dimension || 'mixed'}</span>
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        {item.human_readable_reason || '查看本次演化原因与前后变化'}
+      </div>
+    </Link>
+  );
+}
+
+const pillStyle: React.CSSProperties = {
+  padding: '4px 10px',
+  borderRadius: 999,
+  fontSize: 12,
+  color: 'var(--text-secondary)',
+  backgroundColor: 'var(--bg-tertiary)',
+  border: '1px solid var(--border-subtle)',
+};
+
+const linkStyle: React.CSSProperties = {
+  color: 'var(--accent)',
+  fontSize: 13,
+  fontWeight: 600,
+  textDecoration: 'none',
+};
 
 function DebugCard({ icon, title, data }: { icon: React.ReactNode; title: string; data: unknown }) {
   return (

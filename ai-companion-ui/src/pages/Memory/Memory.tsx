@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Archive, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, Heart, HelpCircle, Link2, RefreshCw, Search, Star, Trash2, User } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Modal, useToast } from '../../components/ui';
 import { memoryApi } from '../../api';
 import { useBotStore } from '../../stores';
@@ -17,6 +18,8 @@ import type {
   RelationshipProjectionView,
   SemanticMemory,
   SessionStateItem,
+  EvolutionRefsView,
+  EvolutionTimelineItem,
 } from '../../types';
 
 type MemoryTab = 'stats' | 'working' | 'daily' | 'episodic' | 'semantic';
@@ -112,8 +115,9 @@ function RelationshipMetric({ label, value, tone }: { label: string; value: numb
   );
 }
 
-function MemoryTrustPanel({ payload }: { payload: MemoryTrustPayload | null }) {
+function MemoryTrustPanel({ payload, botId }: { payload: MemoryTrustPayload | null; botId: string }) {
   const view = payload?.memory_trust_view || {};
+  const evolutionRefs = payload?.evolution_refs;
   const sessionStates = sessionStateItems(payload?.session_state ?? (view as { session_state?: SessionStateItem[] }).session_state);
   const recently = trustItems(view.recently_remembered);
   const stable = trustItems(view.stable_understanding);
@@ -211,8 +215,71 @@ function MemoryTrustPanel({ payload }: { payload: MemoryTrustPayload | null }) {
             <TrustSection title="已归档或抑制" items={archived} empty="暂无归档记录" mode="event" />
           </div>
         )}
+
+        <EvolutionRefsPanel botId={botId} refs={evolutionRefs} />
       </CardContent>
     </Card>
+  );
+}
+
+function EvolutionRefsPanel({ botId, refs }: { botId: string; refs?: EvolutionRefsView }) {
+  const timeline = Array.isArray(refs?.timeline_preview) ? refs.timeline_preview : [];
+  const diagnostics = refs?.diagnostics;
+  const pendingCount = refs?.pending_candidates?.length ?? 0;
+
+  return (
+    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Link2 style={{ width: 16, height: 16, color: 'var(--accent)' }} />
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>相关人格演化</span>
+        </div>
+        <Link to="/evolution" style={{ color: 'var(--accent)', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>
+          查看完整演化页
+        </Link>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Badge variant="info">活跃 signals {diagnostics?.captured_signal_count ?? 0}</Badge>
+        <Badge variant="warning">待晋升 {diagnostics?.pending_promotion_count ?? pendingCount}</Badge>
+        <Badge>已抑制 {diagnostics?.suppressed_promotions ?? 0}</Badge>
+      </div>
+      {timeline.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          当前还没有可追踪的人格演化事件，后续当共同经历、关系变化或风格漂移被捕获后，这里会直接给出跳转入口。
+        </p>
+      ) : (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {timeline.map((item) => (
+            <EvolutionInlineLink key={item.id} botId={botId} item={item} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvolutionInlineLink({ botId, item }: { botId: string; item: EvolutionTimelineItem }) {
+  return (
+    <Link
+      to={`/evolution?bot=${encodeURIComponent(botId)}&event=${encodeURIComponent(item.id)}`}
+      style={{
+        display: 'grid',
+        gap: 4,
+        padding: 10,
+        borderRadius: 8,
+        textDecoration: 'none',
+        border: '1px solid var(--border-subtle)',
+        backgroundColor: 'var(--bg-secondary)',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{clipText(item.summary || item.event_type, 72)}</span>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{item.dimension || 'mixed'}</span>
+      </div>
+      <span style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        {clipText(item.human_readable_reason || '查看这次演化的原因、证据和 diff', 96)}
+      </span>
+    </Link>
   );
 }
 
@@ -619,7 +686,7 @@ export function Memory() {
         </div>
       </div>
 
-      <MemoryTrustPanel payload={memoryTrust} />
+      <MemoryTrustPanel payload={memoryTrust} botId={currentBotId || ''} />
 
       {dreamingStatus && (
         <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>

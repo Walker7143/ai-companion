@@ -237,6 +237,15 @@ const defaultMemory: BotConfig['memory'] = {
     max_candidates: 24,
     max_promotions: 6,
   },
+  evolution: {
+    enabled: true,
+    auto_promotion_enabled: true,
+    auto_fields: {
+      values: true,
+      speaking_style: true,
+      profile_tags: true,
+    },
+  },
   scene_constraint_enabled: true,
   scene_filter_memory_enabled: true,
 };
@@ -383,6 +392,14 @@ function normalizeConfig(data: BotConfig): BotConfig {
       dreaming: {
         ...defaultMemory.dreaming,
         ...((raw.memory || {}).dreaming || {}),
+      },
+      evolution: {
+        ...defaultMemory.evolution,
+        ...((raw.memory || {}).evolution || {}),
+        auto_fields: {
+          ...defaultMemory.evolution.auto_fields,
+          ...(((raw.memory || {}).evolution || {}).auto_fields || {}),
+        },
       },
     },
     proactive: {
@@ -915,6 +932,37 @@ export function Settings() {
             <Input label="报告保留条数" type="number" min="1" value={draft.memory.dreaming.report_retention} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, report_retention: Number(event.target.value) } })} />
             <Input label="候选上限" type="number" min="1" value={draft.memory.dreaming.max_candidates} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, max_candidates: Number(event.target.value) } })} />
             <Input label="长期提升上限" type="number" min="0" value={draft.memory.dreaming.max_promotions} onChange={(event) => patchSection('memory', { dreaming: { ...draft.memory.dreaming, max_promotions: Number(event.target.value) } })} />
+          </div>
+        </div>
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border-subtle)', display: 'grid', gap: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>人格演化</div>
+              <FieldHint text="把日常对话、共同经历、人生事件和关系变化统一收敛成可解释的 signal -> reflection -> promotion 链路。" />
+            </div>
+            <Toggle checked={draft.memory.evolution.enabled} onChange={(event) => patchSection('memory', { evolution: { ...draft.memory.evolution, enabled: event.target.checked } })} />
+          </div>
+          <div style={gridStyle}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>允许自动晋升到核心 persona</div>
+              <Toggle checked={draft.memory.evolution.auto_promotion_enabled} onChange={(event) => patchSection('memory', { evolution: { ...draft.memory.evolution, auto_promotion_enabled: event.target.checked } })} />
+              <FieldHint text="关闭后仍会捕获 signal 和反思，但待晋升项需要管理员手动批准。" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>允许自动改 values</div>
+              <Toggle checked={draft.memory.evolution.auto_fields.values} onChange={(event) => patchSection('memory', { evolution: { ...draft.memory.evolution, auto_fields: { ...draft.memory.evolution.auto_fields, values: event.target.checked } } })} />
+              <FieldHint text="影响 soft_values、relationship_principles、recent_realizations 等软字段。" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>允许自动改 speaking_style</div>
+              <Toggle checked={draft.memory.evolution.auto_fields.speaking_style} onChange={(event) => patchSection('memory', { evolution: { ...draft.memory.evolution, auto_fields: { ...draft.memory.evolution.auto_fields, speaking_style: event.target.checked } } })} />
+              <FieldHint text="控制 tone、style_notes、special_expressions 等风格字段是否可自动晋升。" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>允许自动改 profile 标签</div>
+              <Toggle checked={draft.memory.evolution.auto_fields.profile_tags} onChange={(event) => patchSection('memory', { evolution: { ...draft.memory.evolution, auto_fields: { ...draft.memory.evolution.auto_fields, profile_tags: event.target.checked } } })} />
+              <FieldHint text="仅影响 personality_tags 等标签类字段，不会改 name、birth_date 等硬字段。" />
+            </div>
           </div>
         </div>
       </SectionCard>

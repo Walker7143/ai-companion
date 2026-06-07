@@ -8,12 +8,14 @@ from typing import Any
 
 from .activation import MemoryActivationPlan
 from .continuity import ContinuityContract, ContinuityContractBuilder
-from .scene_authority import categorize_scene_text, is_memory_compatible_with_scene, is_shared_scene_subject
+from .scene_authority import is_memory_compatible_with_scene
+from .session_state import get_scene_snapshot
 
 
 @dataclass
 class RetrievedMemory:
     intent: str
+    current_input: str = ""
     working_history: list[dict] = field(default_factory=list)
     session_state: list[dict[str, Any]] = field(default_factory=list)
     daily_context: dict[str, Any] = field(default_factory=dict)
@@ -199,7 +201,11 @@ class MemoryRetriever:
                 include_archived=False,
             )
             vector_recall = self._filter_vector_recall(vector_recall, intent=detected_intent)
-            vector_recall = self._filter_vector_recall_by_scene(vector_recall, session_state)
+            vector_recall = self._filter_vector_recall_by_scene(
+                vector_recall,
+                session_state,
+                current_input=current_input,
+            )
         top_k = 5 if detected_intent in {"recall_past", "relationship_repair"} else 2
         episodic = []
         if detected_intent in {"recall_past", "emotional_support", "relationship_repair", "casual_chat", "planning"}:
@@ -222,6 +228,7 @@ class MemoryRetriever:
 
         retrieved = RetrievedMemory(
             intent=detected_intent,
+            current_input=current_input,
             working_history=working,
             session_state=session_state,
             daily_context=daily_context,
@@ -309,25 +316,20 @@ class MemoryRetriever:
         return result
 
     def _filter_vector_recall_by_scene(
-        self, items: list[dict[str, Any]], session_states: list
+        self,
+        items: list[dict[str, Any]],
+        session_states: list,
+        *,
+        current_input: str = "",
     ) -> list[dict[str, Any]]:
         if not self.scene_filter_enabled:
             return items
         if not session_states:
             return items
-        scene_categories: set[str] = set()
-        for state in session_states:
-            scope = state.scope if hasattr(state, "scope") else state.get("scope", "")
-            if scope != "current_scene":
-                continue
-            subject = state.subject if hasattr(state, "subject") else state.get("subject", "")
-            if not is_shared_scene_subject(subject):
-                continue
-            predicate = state.predicate if hasattr(state, "predicate") else state.get("predicate", "")
-            if predicate in ("current_location", "current_activity"):
-                value = state.value if hasattr(state, "value") else state.get("value", "")
-                if value:
-                    scene_categories |= categorize_scene_text(str(value))
+        snapshot = get_scene_snapshot(session_states, user_input=current_input)
+        if not snapshot.should_anchor_generation:
+            return items
+        scene_categories = set(snapshot.categories)
         if not scene_categories:
             return items
         result: list[dict[str, Any]] = []

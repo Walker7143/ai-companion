@@ -942,6 +942,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "memory_trust_view": status.get("memory_trust_view") or {},
                 "continuity_contract": status.get("continuity_contract") or {},
                 "relationship_projection": status.get("relationship_projection") or {},
+                "evolution_refs": status.get("evolution_refs") or {},
                 "session_state": status.get("memory_trust_view", {}).get("session_state") or [],
                 "recent_lifecycle_events": status.get("recent_lifecycle_events") or [],
                 "fact_history": status.get("fact_history") or [],
@@ -1146,6 +1147,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                     "memory_prompt_diagnostics": {},
                     "session_state": [],
                 },
+                "evolution_refs": {},
                 "response_style_trace": {
                     "mode": "rule",
                     "source": "ResponseStylePolisher",
@@ -1314,6 +1316,188 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
             return web.json_response({"ok": False, "error": str(e)}, status=400)
         return web.json_response({"ok": True})
 
+    async def handle_evolution_summary(request):
+        """GET /api/v1/admin/evolution/:bot_id/summary"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            return web.json_response(bot.memory.evolution_summary())
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_evolution_timeline(request):
+        """GET /api/v1/admin/evolution/:bot_id/timeline"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        cursor = request.query.get("cursor")
+        try:
+            limit = int(request.query.get("limit", "50"))
+        except (TypeError, ValueError):
+            limit = 50
+        dimension = request.query.get("dimension")
+        status = request.query.get("status")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            return web.json_response(
+                bot.memory.evolution_timeline(
+                    cursor=cursor,
+                    limit=limit,
+                    dimension=dimension,
+                    status=status,
+                )
+            )
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_evolution_event_detail(request):
+        """GET /api/v1/admin/evolution/:bot_id/events/:event_id"""
+        bot_id = request.match_info["bot_id"]
+        event_id = request.match_info["event_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            detail = bot.memory.evolution_event_detail(event_id)
+            if not detail:
+                return web.json_response({"error": "Event not found"}, status=404)
+            return web.json_response(detail)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_evolution_state(request):
+        """GET /api/v1/admin/evolution/:bot_id/state"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            return web.json_response(bot.memory.evolution_state_view())
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_evolution_config(request):
+        """GET /api/v1/admin/evolution/:bot_id/config"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            return web.json_response(bot.memory.evolution_config_view())
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_evolution_reflect(request):
+        """POST /api/v1/admin/evolution/:bot_id/reflect"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            return web.json_response(await bot.memory.evolution_reflect())
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_evolution_rebuild(request):
+        """POST /api/v1/admin/evolution/:bot_id/rebuild"""
+        bot_id = request.match_info["bot_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            return web.json_response(await bot.memory.evolution_rebuild())
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_evolution_apply_promotion(request):
+        """POST /api/v1/admin/evolution/:bot_id/promotion/:candidate_id/apply"""
+        bot_id = request.match_info["bot_id"]
+        candidate_id = request.match_info["candidate_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            result = await bot.memory.evolution_apply_promotion(candidate_id)
+            status_code = 200 if result.get("ok") else 400
+            return web.json_response(result, status=status_code)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
+    async def handle_evolution_reject_promotion(request):
+        """POST /api/v1/admin/evolution/:bot_id/promotion/:candidate_id/reject"""
+        bot_id = request.match_info["bot_id"]
+        candidate_id = request.match_info["candidate_id"]
+        user_id = str(request.query.get("user_id") or "default_user")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        reason = str((body or {}).get("reason") or "管理员手动拒绝该晋升。").strip()
+        bot, owns_bot, error = await _load_or_create_memory_bot(bot_id, user_id)
+        if error:
+            return error
+        try:
+            if not getattr(bot, "memory", None):
+                return web.json_response({"error": "Memory unavailable"}, status=400)
+            result = await bot.memory.evolution_reject_promotion(candidate_id, reason)
+            status_code = 200 if result.get("ok") else 400
+            return web.json_response(result, status=status_code)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+        finally:
+            if owns_bot and bot:
+                await bot.close()
+
     # Create aiohttp app
     _admin_app = web.Application()
     _admin_app.router.add_get("/api/v1/admin/bots", handle_bots)
@@ -1345,6 +1529,15 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
     _admin_app.router.add_get("/api/v1/admin/persona/{bot_id}/conversation-style", handle_persona_conversation_style)
     _admin_app.router.add_put("/api/v1/admin/persona/{bot_id}/conversation-style", handle_persona_conversation_style_update)
     _admin_app.router.add_get("/api/v1/admin/debug/{bot_id}/last-context", handle_debug_last_context)
+    _admin_app.router.add_get("/api/v1/admin/evolution/{bot_id}/summary", handle_evolution_summary)
+    _admin_app.router.add_get("/api/v1/admin/evolution/{bot_id}/timeline", handle_evolution_timeline)
+    _admin_app.router.add_get("/api/v1/admin/evolution/{bot_id}/events/{event_id}", handle_evolution_event_detail)
+    _admin_app.router.add_get("/api/v1/admin/evolution/{bot_id}/state", handle_evolution_state)
+    _admin_app.router.add_get("/api/v1/admin/evolution/{bot_id}/config", handle_evolution_config)
+    _admin_app.router.add_post("/api/v1/admin/evolution/{bot_id}/reflect", handle_evolution_reflect)
+    _admin_app.router.add_post("/api/v1/admin/evolution/{bot_id}/rebuild", handle_evolution_rebuild)
+    _admin_app.router.add_post("/api/v1/admin/evolution/{bot_id}/promotion/{candidate_id}/apply", handle_evolution_apply_promotion)
+    _admin_app.router.add_post("/api/v1/admin/evolution/{bot_id}/promotion/{candidate_id}/reject", handle_evolution_reject_promotion)
     _admin_app.router.add_get("/api/v1/admin/config/{bot_id}", handle_config)
     _admin_app.router.add_put("/api/v1/admin/config/{bot_id}", handle_config_update)
     _admin_app.router.add_post("/api/v1/admin/config/{bot_id}/test", handle_config_test)
@@ -1752,6 +1945,15 @@ def _extract_gateway_target_id_from_bot(bot, platform_type: str) -> str:
             v = platform_cfg.get(key)
             if v:
                 return str(v)
+    proactive_platform = getattr(bot, "_proactive_platform", None)
+    preferred_getter = getattr(proactive_platform, "get_preferred_proactive_chat_id", None)
+    if callable(preferred_getter):
+        try:
+            preferred = preferred_getter()
+        except Exception:
+            preferred = None
+        if preferred:
+            return str(preferred)
     return ""
 
 
@@ -2033,6 +2235,11 @@ async def run_gateway(daemon: bool = True):
                 platform_value = getattr(getattr(source, "platform", None), "value", str(getattr(source, "platform", "")))
                 if platform_value:
                     setattr(bot, f"_{platform_value}_chat_id", source.chat_id)
+                    if not getattr(bot, "proactive_scheduler", None):
+                        try:
+                            await bot.ensure_schedulers_started()
+                        except Exception:
+                            logger.exception("Gateway failed to backfill schedulers after inbound chat target: bot=%s platform=%s", bot.id, platform_value)
 
             try:
                 command_response = await _run_gateway_action_with_memory_context(
@@ -2092,6 +2299,23 @@ async def run_gateway(daemon: bool = True):
             await _connect_profile("微信", profile, adapter, f"account={_safe_weixin_id(account_id)}")
     else:
         print("[WARN] 微信未配置，跳过微信连接")
+
+    for bot in bot_manager.bots.values():
+        if getattr(bot, "proactive_scheduler", None):
+            continue
+        proactive_config = getattr(bot, "proactive_config", None)
+        platform_type = str(getattr(proactive_config, "platform_type", "cli") or "cli").lower()
+        if platform_type != "weixin":
+            continue
+        proactive_platform = getattr(bot, "_proactive_platform", None)
+        preferred_getter = getattr(proactive_platform, "get_preferred_proactive_chat_id", None)
+        preferred_chat_id = preferred_getter() if callable(preferred_getter) else None
+        if preferred_chat_id and not getattr(bot, "_weixin_chat_id", None):
+            bot._weixin_chat_id = preferred_chat_id
+        should_start, reason = _should_start_gateway_schedulers_for_bot(bot, platform_configs_by_type)
+        if should_start:
+            await bot.ensure_schedulers_started()
+            print(f"[OK] Restored proactive scheduler after Weixin reconnect: {bot.name} ({bot.id}) [{reason}]")
 
     if not connected_adapters:
         print("       管理 API 已启动，可访问 http://localhost:8642")

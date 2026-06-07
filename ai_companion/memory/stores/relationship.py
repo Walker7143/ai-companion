@@ -14,6 +14,13 @@ from typing import Optional
 
 import aiosqlite
 
+from ...persona.runtime_profile import (
+    load_runtime_profile,
+    merge_runtime_profile,
+    runtime_profile_path_from_backstory_path,
+    write_runtime_profile,
+)
+
 
 class RelationshipStore:
     """Dynamic relationship state between one bot and one user."""
@@ -689,21 +696,14 @@ class RelationshipStore:
         return 1
 
     def _runtime_profile_path(self) -> Optional[Path]:
-        if not self._persona_backstory_path:
-            return None
-        return Path(self._persona_backstory_path).parent / "runtime_profile.json"
+        return runtime_profile_path_from_backstory_path(self._persona_backstory_path)
 
     def _sync_runtime_profile(self, state: dict):
         path = self._runtime_profile_path()
         if not path:
             return
-        try:
-            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        except Exception:
-            data = {}
-        data["relationship_to_user"] = state.get("relationship_label", self.DEFAULT_LABEL)
-        data["attitude_score"] = state.get("attitude_score", 50)
-        data["relationship_state"] = {
+        data = load_runtime_profile(path)
+        relationship_state = {
             "stage": state.get("relationship_label", self.DEFAULT_LABEL),
             "status": state.get("relationship_status", self.DEFAULT_STATUS),
             "narrative": state.get("relationship_narrative", ""),
@@ -716,13 +716,19 @@ class RelationshipStore:
             "tension_score": state.get("tension_score", 0),
             "score_scale": self.SCORE_SCALE,
         }
+        patch = {
+            "relationship_to_user": state.get("relationship_label", self.DEFAULT_LABEL),
+            "attitude_score": state.get("attitude_score", 50),
+            "relationship_state": relationship_state,
+        }
         if state.get("key_moments"):
-            data["key_moments"] = state["key_moments"]
-        data["updated_at"] = datetime.now().isoformat()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(path)
+            patch["key_moments"] = state["key_moments"]
+        merged, _changed = merge_runtime_profile(
+            data,
+            patch,
+            list_limits={"key_moments": 50},
+        )
+        write_runtime_profile(path, merged)
 
     async def close(self):
         return None

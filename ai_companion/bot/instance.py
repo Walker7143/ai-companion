@@ -15,7 +15,7 @@ from ..context.document_reader import (
     split_text_chunks,
 )
 from ..memory.engine import MemoryEngine
-from ..memory.session_state import extract_scene_summary
+from ..memory.session_state import get_scene_snapshot
 from ..persona.loader import PersonaLoader
 from ..persona.engine import PersonaEngine
 from ..persona.refusal_engine import RefusalEngine
@@ -666,6 +666,8 @@ class BotInstance:
         runtime_rel_label = None
         if isinstance(relationship_state, dict) and relationship_state.get("relationship_label"):
             runtime_rel_label = str(relationship_state["relationship_label"])
+        memory_context = dict(memory_context or {})
+        memory_context["current_input"] = user_input
         system_prompt = self.persona_engine.build_system_prompt(
             life_context=life_context,
             runtime_relationship_label=runtime_rel_label,
@@ -673,12 +675,12 @@ class BotInstance:
         time_constraints = build_generation_time_constraints(life_context)
         if time_constraints:
             system_prompt = system_prompt + "\n\n" + time_constraints
-        scene_constraint = self._build_scene_constraint(memory_context or {})
+        scene_constraint = self._build_scene_constraint(memory_context)
         if scene_constraint:
             system_prompt = system_prompt + "\n\n" + scene_constraint
         embodied_prompt = self._build_embodied_expression_prompt(
             user_input=user_input,
-            memory_context=memory_context or {},
+            memory_context=memory_context,
             relationship_state=relationship_state or {},
         )
         if embodied_prompt:
@@ -708,8 +710,8 @@ class BotInstance:
         states = ctx.get("session_state")
         if not isinstance(states, list):
             return False
-        scene = extract_scene_summary(states)
-        return scene is not None
+        snapshot = get_scene_snapshot(states, user_input=str(ctx.get("current_input") or ""))
+        return snapshot.should_anchor_generation
 
     def _build_scene_constraint(self, memory_context: dict) -> str | None:
         if self.memory is not None and not self.memory.config.get("scene_constraint_enabled", True):
@@ -717,11 +719,12 @@ class BotInstance:
         session_states = memory_context.get("session_state")
         if not isinstance(session_states, list) or not session_states:
             return None
-        scene = extract_scene_summary(session_states)
-        if not scene:
+        current_input = str(memory_context.get("current_input") or "")
+        snapshot = get_scene_snapshot(session_states, user_input=current_input)
+        if not snapshot.should_anchor_generation:
             return None
-        location = scene.get("location") or ""
-        activity = scene.get("activity") or ""
+        location = snapshot.location or ""
+        activity = snapshot.activity or ""
         if not location and not activity:
             return None
         parts = []
@@ -782,6 +785,7 @@ class BotInstance:
         conscious_context = copy.deepcopy(ctx.get("conscious_context", {})) if isinstance(ctx.get("conscious_context"), dict) else {}
         prompt_diagnostics = copy.deepcopy(ctx.get("memory_prompt_diagnostics", {})) if isinstance(ctx.get("memory_prompt_diagnostics"), dict) else {}
         continuity_contract = copy.deepcopy(ctx.get("continuity_contract", {})) if isinstance(ctx.get("continuity_contract"), dict) else {}
+        evolution_refs = copy.deepcopy(ctx.get("evolution_refs", {})) if isinstance(ctx.get("evolution_refs"), dict) else {}
 
         retrieved_memory = {
             "working_history": working_history,
@@ -795,6 +799,7 @@ class BotInstance:
             "conscious_context": conscious_context,
             "memory_prompt_diagnostics": prompt_diagnostics,
             "continuity_contract": continuity_contract,
+            "evolution_refs": evolution_refs,
             "system_suffix": ctx.get("system_suffix", ""),
         }
         response_style_trace = {
@@ -818,6 +823,7 @@ class BotInstance:
             "memory_prompt_diagnostics": prompt_diagnostics,
             "continuity_contract": continuity_contract,
             "conscious_context": conscious_context,
+            "evolution_refs": evolution_refs,
             "active_session_state": copy.deepcopy(ctx.get("session_state", [])) if isinstance(ctx.get("session_state"), list) else [],
             "memory_intent": ctx.get("memory_intent", ""),
             "relationship_state": relationship_state or retrieved_relationship,
@@ -834,6 +840,10 @@ class BotInstance:
     ) -> str:
         if not self.persona:
             return ""
+        session_states = (memory_context or {}).get("session_state")
+        grounded_shared_scene = False
+        if isinstance(session_states, list):
+            grounded_shared_scene = get_scene_snapshot(session_states, user_input=user_input).allows_copresent_actions
         recent_assistant_replies = [
             str(item.get("content", "") or "")
             for item in self.conversation_history[-12:]
@@ -841,11 +851,19 @@ class BotInstance:
         ]
         recent_actions = self.response_polisher.list_recent_actions(recent_assistant_replies, limit=6)
         memory_intent = str((memory_context or {}).get("memory_intent", "casual_chat") or "casual_chat")
-        return self.persona_engine.build_embodied_expression_turn_prompt(
+        prompt = self.persona_engine.build_embodied_expression_turn_prompt(
             user_input=user_input,
             intent=memory_intent,
             recent_actions=recent_actions,
             relationship_state=relationship_state or {},
+        )
+        if grounded_shared_scene:
+            return prompt
+        return (
+            prompt
+            + "\n- 当前没有被用户新近锚定的共享临场场景。"
+            + "\n- 本轮不要写成同桌、贴身、递到面前、直接触碰用户或共享物件的临场动作。"
+            + "\n- 如果要写动作，只能写你自己的即时反应，不能默认你们已经 physically 同场。"
         )
 
     async def handle_message(self, user_input: str, memory_turn_context: dict | None = None) -> str:
@@ -990,6 +1008,7 @@ class BotInstance:
             if document_context_suffix:
                 memory_suffix = self._merge_memory_suffix(memory_suffix, document_context_suffix)
 
+            ctx["current_input"] = effective_user_input
             system_prompt = self._build_system_prompt(
                 adjustment_note=adjustment_note,
                 memory_suffix=memory_suffix,

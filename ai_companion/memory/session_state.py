@@ -11,12 +11,21 @@ from typing import Any, Optional
 
 import aiosqlite
 
+from .scene_runtime import SceneSnapshot, build_scene_snapshot
 from .scene_authority import (
     categorize_scene_text,
     exclusive_state_groups,
     has_room_reset_cue,
     is_scene_authority_predicate,
+    non_copresent_scene_reason,
     scene_conflict_reason,
+)
+from .turn_roles import (
+    has_authority_claim_over_user,
+    has_explicit_authority_grant,
+    infer_turn_role_signal,
+    mentions_business_asset_of_assistant,
+    response_reverses_turn_actor,
 )
 
 
@@ -85,6 +94,35 @@ def _has_vehicle_scene(active_states: list["SessionStateItem"]) -> bool:
 
 def _scene_conflict_reason(incoming_categories: set[str], active_categories: set[str]) -> str | None:
     return scene_conflict_reason(incoming_categories, active_categories)
+
+
+_COPRESENT_ACTION_PATTERNS = (
+    re.compile(r"(?:碰|摸|拍|捏|戳|拉|拽|牵|抱|搂|亲|递|塞|扶|按|推|点)[^，。！？\n]{0,8}(?:你|你的)"),
+    re.compile(r"往你面前[^，。！？\n]{0,8}(?:伸|递|送|推)"),
+    re.compile(r"(?:递|塞|送|放)到你(?:手里|面前)"),
+    re.compile(r"你的(?:碗|手|脸|头|肩|胳膊|衣角|额头|嘴角|腰|背|怀里)"),
+)
+
+
+def _has_copresent_action_cue(text: object) -> bool:
+    value = str(text or "")
+    return any(pattern.search(value) for pattern in _COPRESENT_ACTION_PATTERNS)
+
+
+def get_scene_snapshot(
+    active_states: list["SessionStateItem"] | list[dict[str, Any]],
+    *,
+    user_input: str = "",
+) -> SceneSnapshot:
+    return build_scene_snapshot(active_states, user_input=user_input)
+
+
+def has_grounded_shared_scene(
+    active_states: list["SessionStateItem"] | list[dict[str, Any]],
+    *,
+    user_input: str = "",
+) -> bool:
+    return get_scene_snapshot(active_states, user_input=user_input).allows_copresent_actions
 
 
 def _is_assistant_only_scene_reset(item: dict[str, Any], active_states: list["SessionStateItem"]) -> bool:
@@ -363,27 +401,14 @@ class SessionStateStore:
 
 def extract_scene_summary(active_states: list) -> dict | None:
     """从活跃 session state 中提取当前场景摘要。兼容 SessionStateItem 对象和 dict。"""
-    location = None
-    activity = None
-    spatial = None
-    for item in active_states:
-        scope = item.scope if hasattr(item, "scope") else item.get("scope", "")
-        subject = item.subject if hasattr(item, "subject") else item.get("subject", "")
-        predicate = item.predicate if hasattr(item, "predicate") else item.get("predicate", "")
-        value = item.value if hasattr(item, "value") else item.get("value", "")
-        if scope != "current_scene":
-            continue
-        if subject not in {"shared", "assistant", ""}:
-            continue
-        if predicate == "current_location":
-            location = value
-        elif predicate == "current_activity":
-            activity = value
-        elif predicate == "spatial_relationship":
-            spatial = value
-    if location or activity:
-        return {"location": location, "activity": activity, "spatial": spatial}
-    return None
+    snapshot = get_scene_snapshot(active_states)
+    if not snapshot.should_anchor_generation:
+        return None
+    return {
+        "location": snapshot.location or None,
+        "activity": snapshot.activity or None,
+        "spatial": snapshot.spatial or None,
+    }
 
 
 class SessionStateExtractor:
@@ -581,7 +606,14 @@ class SessionStateResolver:
                 source_kind=str(item.get("source_kind") or "user_explicit"),
                 evidence_turn_ids=[evidence_turn_id],
                 supersedes_state_ids=supersedes_state_ids,
-                metadata={"reason": str(item.get("reason") or "").strip()},
+                metadata={
+                    **(
+                        dict(item.get("metadata"))
+                        if isinstance(item.get("metadata"), dict)
+                        else {}
+                    ),
+                    "reason": str(item.get("reason") or "").strip(),
+                },
                 created_at=now,
                 updated_at=now,
             )
@@ -666,31 +698,42 @@ class ResponseStateConsistencyChecker:
         user_input: str = "",
     ) -> dict[str, Any]:
         conflicts: list[str] = []
+        matched_rules: list[str] = []
         active_categories = _active_scene_categories(active_states)
         user_categories = _scene_categories(user_input)
         incoming_categories = _scene_categories(response)
-        if user_categories and incoming_categories and user_categories & incoming_categories:
-            return {
-                "consistent": True,
-                "severity": "none",
-                "conflicts": [],
-                "rewrite_guidance": "",
-                "matched_rules": ["user_scene_transition_overrides_previous_state"],
-            }
+        grounded_shared_scene = has_grounded_shared_scene(active_states, user_input=user_input)
+        turn_role_signal = infer_turn_role_signal(user_input)
+        user_scene_transition_override = bool(active_states and user_categories and incoming_categories and user_categories & incoming_categories)
+        if user_scene_transition_override:
+            matched_rules.append("user_scene_transition_overrides_previous_state")
         conflict_reason = _scene_conflict_reason(incoming_categories, active_categories)
-        matched_rules: list[str] = []
-        if conflict_reason:
+        if conflict_reason and not user_scene_transition_override:
             conflicts.append(f"回复场景与当前权威场景冲突：{conflict_reason}")
             matched_rules.append("scene_authority_conflict")
-        if active_states and _has_vehicle_scene(active_states) and _is_room_reset_text(response):
+        if active_states and _has_vehicle_scene(active_states) and _is_room_reset_text(response) and not user_scene_transition_override:
             conflicts.append("当前场景已在车上/行驶中，回复却回退到客栈房间、床上或衣着未完成状态")
             matched_rules.append("vehicle_scene_room_reset")
+        if _has_copresent_action_cue(response) and not grounded_shared_scene:
+            conflicts.append("当前没有被用户新近锚定的共享临场场景，回复却写成了对用户的近身或同场物件动作。")
+            matched_rules.append("ungrounded_copresent_action")
+        if response_reverses_turn_actor(response, turn_role_signal):
+            conflicts.append("本轮施事者被写反了：用户说的是他去检查/处理你的资产，回复却改写成了你去做。")
+            matched_rules.append("turn_actor_role_reversal")
+        if has_authority_claim_over_user(response):
+            authority_granted = has_explicit_authority_grant(user_input)
+            if (
+                ((turn_role_signal is not None and turn_role_signal.owner == "assistant") or mentions_business_asset_of_assistant(user_input))
+                and not authority_granted
+            ):
+                conflicts.append("当前没有确认用户受雇于你或归你管理，回复却写成了你能给用户发工资、扣工资、排班、批假或开除。")
+                matched_rules.append("ungrounded_authority_claim")
         if conflicts:
             return {
                 "consistent": False,
                 "severity": "high",
                 "conflicts": conflicts,
-                "rewrite_guidance": "保持当前权威场景，不要回退到旧地点、旧动作或与当前状态冲突的身体/衣着状态。",
+                "rewrite_guidance": "保持当前时空关系与角色关系，不要回退旧场景，不要写成同桌、贴身、递到面前或直接碰触用户的临场动作，也不要把施事者、资产归属或管理权限写反。",
                 "matched_rules": sorted(set(matched_rules)),
             }
         return {
@@ -698,7 +741,7 @@ class ResponseStateConsistencyChecker:
             "severity": "none",
             "conflicts": [],
             "rewrite_guidance": "",
-            "matched_rules": [],
+            "matched_rules": sorted(set(matched_rules)),
         }
 
     async def check(self, response: str, active_states: list[SessionStateItem], *, user_input: str = "") -> dict[str, Any]:

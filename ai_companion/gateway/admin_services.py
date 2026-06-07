@@ -761,6 +761,8 @@ class ConfigAdminService:
     def _public_memory(self, memory: dict) -> dict:
         daily = memory.get("daily") if isinstance(memory.get("daily"), dict) else {}
         dreaming = memory.get("dreaming") if isinstance(memory.get("dreaming"), dict) else {}
+        evolution = memory.get("evolution") if isinstance(memory.get("evolution"), dict) else {}
+        evolution_auto_fields = evolution.get("auto_fields") if isinstance(evolution.get("auto_fields"), dict) else {}
         return {
             "hard_limit_chars": _as_int(memory.get("hard_limit_chars"), 100000, 1000),
             "soft_limit_chars": _as_int(memory.get("soft_limit_chars"), 80000, 500),
@@ -787,6 +789,15 @@ class ConfigAdminService:
                 "report_retention": _as_int(dreaming.get("report_retention"), 10, 1, 100),
                 "max_candidates": _as_int(dreaming.get("max_candidates"), 24, 1, 200),
                 "max_promotions": _as_int(dreaming.get("max_promotions"), 6, 0, 50),
+            },
+            "evolution": {
+                "enabled": _as_bool(evolution.get("enabled"), True),
+                "auto_promotion_enabled": _as_bool(evolution.get("auto_promotion_enabled"), True),
+                "auto_fields": {
+                    "values": _as_bool(evolution_auto_fields.get("values"), True),
+                    "speaking_style": _as_bool(evolution_auto_fields.get("speaking_style"), True),
+                    "profile_tags": _as_bool(evolution_auto_fields.get("profile_tags"), True),
+                },
             },
             "scene_constraint_enabled": bool(memory.get("scene_constraint_enabled", True)),
             "scene_filter_memory_enabled": bool(memory.get("scene_filter_memory_enabled", True)),
@@ -1104,6 +1115,24 @@ class ConfigAdminService:
             "max_promotions": _as_int(dreaming_data.get("max_promotions"), existing_dreaming.get("max_promotions", 6), 0, 50),
         })
         existing["dreaming"] = existing_dreaming
+        evolution_data = memory_data.get("evolution") if isinstance(memory_data.get("evolution"), dict) else {}
+        existing_evolution = dict(existing.get("evolution", {}) if isinstance(existing.get("evolution"), dict) else {})
+        existing_auto_fields = dict(existing_evolution.get("auto_fields", {}) if isinstance(existing_evolution.get("auto_fields"), dict) else {})
+        incoming_auto_fields = evolution_data.get("auto_fields") if isinstance(evolution_data.get("auto_fields"), dict) else {}
+        existing_auto_fields.update({
+            "values": _as_bool(incoming_auto_fields.get("values"), _as_bool(existing_auto_fields.get("values"), True)),
+            "speaking_style": _as_bool(incoming_auto_fields.get("speaking_style"), _as_bool(existing_auto_fields.get("speaking_style"), True)),
+            "profile_tags": _as_bool(incoming_auto_fields.get("profile_tags"), _as_bool(existing_auto_fields.get("profile_tags"), True)),
+        })
+        existing_evolution.update({
+            "enabled": _as_bool(evolution_data.get("enabled"), _as_bool(existing_evolution.get("enabled"), True)),
+            "auto_promotion_enabled": _as_bool(
+                evolution_data.get("auto_promotion_enabled"),
+                _as_bool(existing_evolution.get("auto_promotion_enabled"), True),
+            ),
+            "auto_fields": existing_auto_fields,
+        })
+        existing["evolution"] = existing_evolution
         if existing["soft_limit_chars"] >= existing["hard_limit_chars"]:
             existing["soft_limit_chars"] = max(500, existing["hard_limit_chars"] - 1000)
         models_data["memory"] = existing

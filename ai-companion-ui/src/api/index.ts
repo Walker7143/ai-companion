@@ -17,6 +17,9 @@ import type {
   LogPage,
   BotConfig,
   BotInfo,
+  EvolutionSummary,
+  EvolutionTimelineItem,
+  EvolutionEventDetail,
 } from '../types';
 
 const API_BASE = 'http://localhost:8642/api/v1';
@@ -150,6 +153,50 @@ export const personaApi = {
 export const debugApi = {
   getLastContext: (botId: string): Promise<DebugContextPayload> =>
     fetchApi<DebugContextPayload>(`/admin/debug/${botId}/last-context`),
+};
+
+export const evolutionApi = {
+  getSummary: (botId: string): Promise<EvolutionSummary> =>
+    fetchApi<EvolutionSummary>(`/admin/evolution/${botId}/summary`),
+
+  getTimeline: (
+    botId: string,
+    params?: { cursor?: string; limit?: number; dimension?: string; status?: string }
+  ): Promise<{ items: EvolutionTimelineItem[]; next_cursor?: string | null; has_more: boolean }> => {
+    const search = new URLSearchParams();
+    if (params?.cursor) search.set('cursor', params.cursor);
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.dimension) search.set('dimension', params.dimension);
+    if (params?.status) search.set('status', params.status);
+    const query = search.toString();
+    return fetchApi<{ items: EvolutionTimelineItem[]; next_cursor?: string | null; has_more: boolean }>(
+      `/admin/evolution/${botId}/timeline${query ? `?${query}` : ''}`
+    );
+  },
+
+  getEventDetail: (botId: string, eventId: string): Promise<EvolutionEventDetail> =>
+    fetchApi<EvolutionEventDetail>(`/admin/evolution/${botId}/events/${eventId}`),
+
+  getState: (botId: string): Promise<{ state: Record<string, unknown>; human_readable_diagnostics: string[] }> =>
+    fetchApi<{ state: Record<string, unknown>; human_readable_diagnostics: string[] }>(`/admin/evolution/${botId}/state`),
+
+  getConfig: (botId: string): Promise<Record<string, unknown>> =>
+    fetchApi<Record<string, unknown>>(`/admin/evolution/${botId}/config`),
+
+  reflect: (botId: string): Promise<Record<string, unknown>> =>
+    fetchApi<Record<string, unknown>>(`/admin/evolution/${botId}/reflect`, { method: 'POST' }),
+
+  rebuild: (botId: string): Promise<Record<string, unknown>> =>
+    fetchApi<Record<string, unknown>>(`/admin/evolution/${botId}/rebuild`, { method: 'POST' }),
+
+  applyPromotion: (botId: string, candidateId: string): Promise<Record<string, unknown>> =>
+    fetchApi<Record<string, unknown>>(`/admin/evolution/${botId}/promotion/${candidateId}/apply`, { method: 'POST' }),
+
+  rejectPromotion: (botId: string, candidateId: string, reason: string): Promise<Record<string, unknown>> =>
+    fetchApi<Record<string, unknown>>(`/admin/evolution/${botId}/promotion/${candidateId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
 };
 
 // Logs API

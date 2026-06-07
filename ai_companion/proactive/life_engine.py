@@ -28,7 +28,14 @@ from ..temporal_guard import (
     is_event_visible_at_current_time,
     scenario_has_compatible_template,
 )
-from ..memory.scene_authority import categorize_scene_text
+from ..memory.session_state import get_scene_snapshot
+from ..persona.runtime_profile import (
+    dedupe_runtime_items,
+    load_runtime_profile,
+    merge_runtime_profile,
+    runtime_profile_path_from_persona_dir,
+    write_runtime_profile,
+)
 
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
@@ -196,6 +203,52 @@ PERSONA_UPDATE_PROMPT = """【任务】
   "speaking_style_updates": {{}}
 }}
 直接输出 JSON。"""
+
+
+RUNTIME_EXPERIENCE_UPDATE_PROMPT = """【任务】
+你是 Bot 运行时人生经历演化器。请判断下面这件新事件，是否值得写入 Bot 的运行时人生经历。
+
+【Bot 基本信息】
+姓名：{bot_name}
+年龄：{age_years}
+职业：{occupation}
+性格标签：{personality_tags}
+
+【当前关系与状态】
+relationship_state: {relationship_state}
+existing_runtime_profile: {runtime_profile}
+
+【新事件】
+event_type: {event_type}
+description: {description}
+mood_before: {mood_before}
+mood_after: {mood_after}
+importance: {importance}
+shareable: {shareable}
+related_to_user: {related_to_user}
+mood_tags: {mood_tags}
+scenario_key: {scenario_key}
+
+【判断原则】
+1. 只在事件会长期影响 Bot 的关系感、性格、生活节奏、价值判断、人生叙事时才更新。
+2. 普通流水账小事不要更新。
+3. 如果事件主要是 Bot 和用户共同经历的，写到 shared_experience。
+4. 如果事件主要是 Bot 自己的人生发展或情绪沉淀，写到 life_experience。
+5. 如果两边都会受影响，可以两个都写；否则只写一边。
+6. 输出文本必须像已经发生过的人生经历，简洁、具体、可长期保留，不要写建议。
+7. 如果不值得更新，should_update=false，其余字段尽量留空。
+
+【输出格式】
+只输出一个 JSON 对象：
+{{
+  "should_update": true,
+  "shared_experience": "",
+  "life_experience": "",
+  "shared_growth_summary": "",
+  "life_growth_summary": "",
+  "reason": ""
+}}
+"""
 
 
 class PersonaUpdater:
@@ -452,6 +505,262 @@ class LifeEngine:
         personality_type = ", ".join(personality_tags) if personality_tags else "默认"
         self.set_bot_info(bot_name, initial_age, occupation, personality_type)
 
+    def _runtime_profile_path(self) -> Optional[Path]:
+        return runtime_profile_path_from_persona_dir(self.persona_dir)
+
+    def _load_runtime_profile(self) -> dict[str, Any]:
+        return load_runtime_profile(self._runtime_profile_path())
+
+    def _write_runtime_profile(self, data: dict[str, Any]):
+        write_runtime_profile(self._runtime_profile_path(), data)
+
+    @staticmethod
+    def _dedupe_runtime_items(items: list[str], limit: int) -> list[str]:
+        return dedupe_runtime_items(items, limit)
+
+    @staticmethod
+    def _as_bool(value: object, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on", "enabled", "enable"}:
+            return True
+        if text in {"0", "false", "no", "off", "disabled", "disable"}:
+            return False
+        return default
+
+    def _is_concrete_runtime_experience(self, text: object) -> bool:
+        value = " ".join(str(text or "").split())
+        if len(value) < 12:
+            return False
+        if "{" in value or "}" in value:
+            return False
+        banned = (
+            "发生了一件具体的小事",
+            "有一些变化",
+            "状态更稳定了",
+            "方向更明确了",
+            "开始成长",
+            "出现转折",
+        )
+        return not any(item in value for item in banned)
+
+    def _derive_shared_growth_summary(self, experiences: list[str], *, relationship_state: dict | None = None) -> str:
+        items = [str(item).strip() for item in (experiences or []) if str(item).strip()]
+        if not items:
+            return ""
+        latest = items[-1]
+        relationship_state = relationship_state if isinstance(relationship_state, dict) else {}
+        narrative = str(
+            relationship_state.get("narrative")
+            or relationship_state.get("relationship_narrative")
+            or ""
+        ).strip()
+        stage = str(
+            relationship_state.get("stage")
+            or relationship_state.get("relationship_label")
+            or relationship_state.get("relationship_level")
+            or ""
+        ).strip()
+        summary = f"这些共同经历正在不断改变你和用户的关系感受，尤其是最近这段：{latest}。"
+        if narrative:
+            summary += f" 它也在强化你对这段关系的理解：{narrative}"
+        elif stage:
+            summary += f" 也让你更明确地感受到这段关系正在朝着{stage}发展。"
+        elif len(items) >= 2:
+            summary += " 这些经历正在慢慢改变你看待用户和这段关系的方式。"
+        return summary[:220]
+
+    def _derive_life_growth_summary(self, experiences: list[str]) -> str:
+        items = [str(item).strip() for item in (experiences or []) if str(item).strip()]
+        if not items:
+            return ""
+        latest = items[-1]
+        summary = f"这些人生经历正在慢慢塑造现在的你，尤其最近这段：{latest}。"
+        if len(items) >= 2:
+            summary += " 它们让你的生活节奏、情绪底色和对关系的理解都变得更具体。"
+        return summary[:220]
+
+    def _normalize_runtime_experience_update(self, data: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            return {"should_update": False}
+        shared_experience = " ".join(str(data.get("shared_experience") or "").split())
+        life_experience = " ".join(str(data.get("life_experience") or "").split())
+        return {
+            "should_update": self._as_bool(data.get("should_update"), default=bool(shared_experience or life_experience)),
+            "shared_experience": shared_experience if self._is_concrete_runtime_experience(shared_experience) else "",
+            "life_experience": life_experience if self._is_concrete_runtime_experience(life_experience) else "",
+            "shared_growth_summary": " ".join(str(data.get("shared_growth_summary") or "").split()),
+            "life_growth_summary": " ".join(str(data.get("life_growth_summary") or "").split()),
+            "reason": " ".join(str(data.get("reason") or "").split()),
+        }
+
+    def _fallback_runtime_experience_update(self, event: "LifeEvent", event_type: str) -> dict[str, Any]:
+        description = " ".join(str(getattr(event, "description", "") or "").split())
+        if not self._is_concrete_runtime_experience(description):
+            return {"should_update": False, "reason": "event_not_concrete"}
+
+        importance = float(getattr(event, "importance", 0) or 0)
+        related_to_user = bool(getattr(event, "related_to_user", False))
+        shareable = bool(getattr(event, "shareable", False))
+        mood_before = str(getattr(event, "mood_before", "") or "").strip()
+        mood_after = str(getattr(event, "mood_after", "") or "").strip()
+        mood_changed = bool(mood_before and mood_after and mood_before != mood_after)
+
+        shared_experience = ""
+        life_experience = ""
+
+        if event_type in {"major", "milestone", "birthday"}:
+            life_experience = description
+            if related_to_user:
+                shared_experience = description
+        else:
+            if related_to_user and (importance >= 4 or shareable or mood_changed):
+                shared_experience = description
+            if (not related_to_user and importance >= 5) or importance >= 7 or (shareable and mood_changed and importance >= 4):
+                life_experience = description
+
+        should_update = bool(shared_experience or life_experience)
+        return {
+            "should_update": should_update,
+            "shared_experience": shared_experience,
+            "life_experience": life_experience,
+            "shared_growth_summary": "",
+            "life_growth_summary": "",
+            "reason": "fallback_rule",
+        }
+
+    async def _evaluate_runtime_experience_update(
+        self,
+        *,
+        event: "LifeEvent",
+        event_type: str,
+        runtime_profile: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not self.model:
+            return self._fallback_runtime_experience_update(event, event_type)
+
+        try:
+            relationship_state = runtime_profile.get("relationship_state")
+            if not isinstance(relationship_state, dict):
+                relationship_state = self._latest_relationship_state if isinstance(self._latest_relationship_state, dict) else {}
+            prompt = RUNTIME_EXPERIENCE_UPDATE_PROMPT.format(
+                bot_name=getattr(self, "bot_name", self.bot_id),
+                age_years=self._calc_real_age(),
+                occupation=getattr(self, "occupation", "未知"),
+                personality_tags=self._personality_type or "默认",
+                relationship_state=json.dumps(relationship_state, ensure_ascii=False),
+                runtime_profile=json.dumps(
+                    {
+                        "shared_experiences": runtime_profile.get("shared_experiences", []),
+                        "life_experiences": runtime_profile.get("life_experiences", []),
+                        "shared_growth_summary": runtime_profile.get("shared_growth_summary", ""),
+                        "life_growth_summary": runtime_profile.get("life_growth_summary", ""),
+                    },
+                    ensure_ascii=False,
+                ),
+                event_type=event_type,
+                description=getattr(event, "description", "") or "",
+                mood_before=getattr(event, "mood_before", "") or "",
+                mood_after=getattr(event, "mood_after", "") or "",
+                importance=getattr(event, "importance", 0) or 0,
+                shareable=bool(getattr(event, "shareable", False)),
+                related_to_user=bool(getattr(event, "related_to_user", False)),
+                mood_tags=json.dumps(getattr(event, "mood_tags", []) or [], ensure_ascii=False),
+                scenario_key=getattr(event, "scenario_key", "") or "",
+            )
+            prompt = "prompt_type: runtime_experience_update\n运行时人生经历演化器\n" + prompt
+            response = await self.model.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=None,
+            )
+            payload = self._extract_first_json_object(response)
+            if not payload:
+                return self._fallback_runtime_experience_update(event, event_type)
+            parsed = self._loads_json_lenient(payload)
+            normalized = self._normalize_runtime_experience_update(parsed)
+            if normalized.get("should_update") or normalized.get("shared_growth_summary") or normalized.get("life_growth_summary"):
+                return normalized
+        except Exception as exc:
+            logger.info("[LifeEngine] runtime experience evaluation fallback: %s", exc)
+        return self._fallback_runtime_experience_update(event, event_type)
+
+    def _merge_runtime_experience_update(
+        self,
+        runtime_profile: dict[str, Any],
+        update: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        if not isinstance(update, dict) or not update.get("should_update"):
+            return dict(runtime_profile or {}), False
+
+        shared_experience = str(update.get("shared_experience") or "").strip()
+        life_experience = str(update.get("life_experience") or "").strip()
+        merged, changed = merge_runtime_profile(
+            runtime_profile,
+            {
+                "shared_experiences": [shared_experience] if shared_experience else [],
+                "life_experiences": [life_experience] if life_experience else [],
+            },
+            list_limits={
+                "shared_experiences": 20,
+                "life_experiences": 20,
+            },
+        )
+
+        relationship_state = merged.get("relationship_state")
+        if not isinstance(relationship_state, dict):
+            relationship_state = self._latest_relationship_state if isinstance(self._latest_relationship_state, dict) else {}
+
+        if merged.get("shared_experiences"):
+            summary = str(update.get("shared_growth_summary") or "").strip() or self._derive_shared_growth_summary(
+                merged.get("shared_experiences", []),
+                relationship_state=relationship_state,
+            )
+            if summary and summary != merged.get("shared_growth_summary"):
+                merged["shared_growth_summary"] = summary
+                changed = True
+
+        if merged.get("life_experiences"):
+            summary = str(update.get("life_growth_summary") or "").strip() or self._derive_life_growth_summary(
+                merged.get("life_experiences", []),
+            )
+            if summary and summary != merged.get("life_growth_summary"):
+                merged["life_growth_summary"] = summary
+                changed = True
+
+        return merged, changed
+
+    async def _sync_runtime_experience_from_event(self, event: "LifeEvent", event_type: str):
+        path = self._runtime_profile_path()
+        if not path or not event:
+            return
+        runtime_profile = self._load_runtime_profile()
+        before_runtime = dict(runtime_profile)
+        update = await self._evaluate_runtime_experience_update(
+            event=event,
+            event_type=event_type,
+            runtime_profile=runtime_profile,
+        )
+        merged, changed = self._merge_runtime_experience_update(runtime_profile, update)
+        if changed:
+            self._write_runtime_profile(merged)
+        if self.memory and getattr(self.memory, "evolution", None):
+            try:
+                await self.memory.evolution.capture_life_event(
+                    event,
+                    event_type=event_type,
+                    runtime_update=update,
+                    runtime_profile_before=before_runtime,
+                    runtime_profile_after=merged,
+                    relationship_state=self._latest_relationship_state,
+                )
+            except Exception as exc:
+                logger.info("[LifeEngine] evolution capture skipped: %s", exc)
+
     @staticmethod
     def _extract_first_json_container(text: str, open_char: str, close_char: str) -> Optional[str]:
         """提取第一个完整 JSON 容器（支持字符串内转义）"""
@@ -650,6 +959,7 @@ class LifeEngine:
             self.state.bot_mood = event.mood_after
             self.state.bot_current_activity = self._activity_summary_for_event(event)
             self.state.add_event(event)
+            await self._sync_runtime_experience_from_event(event, "daily")
             self.state.prune_events(self.config.max_events, self.config.max_context_bits)
             await self._index_life_state_memory()
             logger.info(f"[LifeEngine] 生成日常事件: {event.description}")
@@ -772,6 +1082,7 @@ class LifeEngine:
         event = await self.generate_major_event()
         if event:
             self.state.add_major_event(event)
+            await self._sync_runtime_experience_from_event(event, "major")
             self._mark_unexpected_event_if_needed(event)
             await self._apply_major_event(event)
             await self._index_life_state_memory()
@@ -1150,6 +1461,7 @@ class LifeEngine:
         )
 
         self.state.add_major_event(event)
+        await self._sync_runtime_experience_from_event(event, "milestone")
         await self._apply_major_event(event)
         await self._index_life_state_memory()
         logger.info(f"[LifeEngine] 里程碑事件: {event_description} at age {milestone_age}")
@@ -1191,6 +1503,7 @@ class LifeEngine:
         )
 
         self.state.add_major_event(event)
+        await self._sync_runtime_experience_from_event(event, "birthday")
         triggered.append(birthday_key)
         self.state._state["_triggered_birthdays"] = triggered
         self.state.save()
@@ -2390,31 +2703,24 @@ class LifeEngine:
                     recent_messages = list(working.get_recent(session_id, turns=4, include_proactive=False) or [])
             except Exception as exc:
                 logger.debug("[LifeEngine] live working context unavailable: %s", exc)
-        text_parts = [
-            str(item.get("value") or "")
-            for item in states
-            if str(item.get("scope") or "") == "current_scene"
+        user_messages = [
+            str(item.get("content") or "")
+            for item in recent_messages
+            if str(item.get("role") or "") == "user"
         ]
-        text_parts.extend(str(item.get("content") or "") for item in recent_messages)
-        text = "\n".join(text_parts)
-        categories = self._live_scene_categories(text)
-        if not categories:
+        snapshot = get_scene_snapshot(states, user_input="\n".join(user_messages))
+        live_scene = snapshot.to_live_context()
+        if not live_scene.get("categories"):
             return {"categories": [], "summary": "", "session_id": session_id}
-        summary_bits = [
-            f"{item.get('predicate')}={item.get('value')}"
-            for item in states
-            if str(item.get("scope") or "") == "current_scene"
-        ][:6]
+        summary_bits = [str(live_scene.get("summary") or "")]
         if recent_messages:
             summary_bits.append("recent=" + " / ".join(str(item.get("content") or "")[:80] for item in recent_messages[-3:]))
         return {
-            "categories": sorted(categories),
+            "categories": sorted(set(live_scene.get("categories") or [])),
             "summary": "；".join(summary_bits)[:800],
             "session_id": session_id,
+            "scope_mode": str(live_scene.get("scope_mode") or ""),
         }
-
-    def _live_scene_categories(self, text: str) -> set[str]:
-        return categorize_scene_text(text) - {"room_reset", "intimate_room"}
 
     def _scenario_matches_live_scene(self, scenario: dict[str, Any], live_scene: dict[str, Any]) -> bool:
         categories = set(live_scene.get("categories") or [])

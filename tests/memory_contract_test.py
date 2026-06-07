@@ -48,6 +48,19 @@ class MemoryContractTest(unittest.TestCase):
         self.assertTrue(any("用户当前状态" in text for text in texts))
         self.assertTrue(any("双方当前状态" in text for text in texts))
 
+    def test_contract_adds_turn_role_and_authority_boundary(self):
+        retrieved = RetrievedMemory(intent="casual_chat")
+
+        contract = ContinuityContractBuilder().build(
+            current_input="我去大理检查你的客栈，看看这两天经营得怎么样。",
+            retrieved=retrieved,
+        )
+
+        self.assertTrue(any(item.kind == "turn_role_signal" for item in contract.hard_facts))
+        self.assertTrue(any(item.kind == "authority_boundary" for item in contract.active_boundaries))
+        self.assertIn("turn_role_signal", contract.risk_flags)
+        self.assertIn("authority_relation_unguarded", contract.risk_flags)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -78,6 +78,7 @@ export interface MemoryTrustPayload {
   bot_id: string;
   user_id?: string;
   memory_trust_view: MemoryTrustView;
+  evolution_refs?: EvolutionRefsView;
   session_state?: SessionStateItem[];
   recent_lifecycle_events?: MemoryTrustItem[];
   fact_history?: MemoryTrustItem[];
@@ -276,6 +277,7 @@ export interface DebugContextPayload {
     relationship_state?: Record<string, unknown>;
     daily_context?: Record<string, unknown>;
     user_understanding?: Record<string, unknown>;
+    evolution_refs?: EvolutionRefsView;
     active_session_state?: SessionStateItem[];
     response_state_conflicts?: {
       consistent?: boolean;
@@ -402,6 +404,7 @@ export interface MemoryConfig {
   embedding_model: string;
   daily: DailyMemoryConfig;
   dreaming: DreamingConfig;
+  evolution: EvolutionSettingsConfig;
   scene_constraint_enabled: boolean;
   scene_filter_memory_enabled: boolean;
 }
@@ -425,6 +428,112 @@ export interface DreamingConfig {
   report_retention: number;
   max_candidates: number;
   max_promotions: number;
+}
+
+export interface EvolutionSettingsConfig {
+  enabled: boolean;
+  auto_promotion_enabled: boolean;
+  auto_fields: {
+    values: boolean;
+    speaking_style: boolean;
+    profile_tags: boolean;
+  };
+}
+
+export interface EvolutionDiagnostics {
+  captured_signal_count: number;
+  pending_promotion_count: number;
+  last_reflection_at: string;
+  last_promotion_at: string;
+  suppressed_promotions: number;
+}
+
+export interface EvolutionRefsView {
+  timeline_preview: EvolutionTimelineItem[];
+  latest_event_ids: string[];
+  latest_signal_ids: string[];
+  latest_pending_candidate_ids: string[];
+  pending_candidates: PromotionCandidateView[];
+  diagnostics: EvolutionDiagnostics;
+}
+
+export interface PromotionCandidateView {
+  id: string;
+  field_path: string;
+  summary: string;
+  support_count: number;
+  window_count: number;
+  status: string;
+  promotion_reason: string;
+}
+
+export interface EvolutionSnapshot {
+  core: {
+    personality_tags: string[];
+    tone: string;
+    values_summary: string;
+    backstory_growth_summary: string;
+  };
+  runtime: {
+    shared_growth_summary: string;
+    life_growth_summary: string;
+    active_style_drift: string[];
+    active_value_drift: string[];
+  };
+  pending: PromotionCandidateView[];
+}
+
+export interface EvolutionSummary {
+  bot_id: string;
+  overview: {
+    phase: string;
+    last_reflection_at: string;
+    last_promotion_at: string;
+    active_signal_count: number;
+    pending_promotion_count: number;
+    evolution_count_7d: number;
+  };
+  snapshot: EvolutionSnapshot;
+  diagnostics: string[];
+}
+
+export interface EvolutionTimelineItem {
+  id: string;
+  created_at: string;
+  event_type: string;
+  dimension: string;
+  status: string;
+  summary: string;
+  evidence_count: number;
+  wrote_core_persona: boolean;
+  human_readable_reason: string;
+  candidate_id?: string | null;
+}
+
+export interface EvolutionEventDiff {
+  field_path: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface EvolutionEventDetail {
+  id: string;
+  created_at: string;
+  event_type: string;
+  dimension: string;
+  status: string;
+  summary: string;
+  human_readable_reason: string;
+  evidence_refs: string[];
+  scores: {
+    confidence?: number;
+    stability?: number;
+    novelty?: number;
+    importance?: number;
+  };
+  candidate_patch: Record<string, unknown>;
+  reason: string;
+  diffs: EvolutionEventDiff[];
 }
 
 export interface DreamingDecisionItem {

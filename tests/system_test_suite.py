@@ -2138,6 +2138,10 @@ class SystemTestSuite:
             await store._update_relationship("恋人")
             await store._update_attitude_profile(6)
             await store._append_key_moment("一起看烟花")
+            runtime_path = persona_dir / "runtime_profile.json"
+            runtime_data = json.loads(runtime_path.read_text(encoding="utf-8"))
+            runtime_data["shared_experiences"] = ["一起准备重要面试"]
+            runtime_path.write_text(json.dumps(runtime_data, ensure_ascii=False), encoding="utf-8")
 
             profile_after = json.loads(profile_path.read_text(encoding="utf-8"))
             backstory_after = json.loads(backstory_path.read_text(encoding="utf-8"))
@@ -2150,6 +2154,7 @@ class SystemTestSuite:
             and persona.profile["relationship_to_user"] == "恋人"
             and persona.profile["attitude_score"] == 6
             and "一起看烟花" in prompt
+            and "一起准备重要面试" in prompt
             and "你和用户的关系：恋人" in prompt
         )
         detail = f"template_rel={profile_after['relationship_to_user']} runtime_rel={persona.profile.get('relationship_to_user')}"
@@ -2157,6 +2162,7 @@ class SystemTestSuite:
             {
                 "profile_after": profile_after,
                 "backstory_after": backstory_after,
+                "runtime_profile": runtime_data,
                 "persona_profile": persona.profile,
                 "prompt": prompt,
             },
@@ -2261,7 +2267,19 @@ class SystemTestSuite:
 
         with tempfile.TemporaryDirectory(prefix="sys-test-memory-episode-") as td:
             root = Path(td)
-            engine = MemoryEngine("episode_bot", root, config={"embedding": "none"})
+            persona_dir = root / "episode_bot" / "persona"
+            persona_dir.mkdir(parents=True, exist_ok=True)
+            backstory_path = persona_dir / "backstory.json"
+            (persona_dir / "profile.json").write_text(json.dumps({"name": "episode bot"}, ensure_ascii=False), encoding="utf-8")
+            backstory_path.write_text(json.dumps({"key_moments": []}, ensure_ascii=False), encoding="utf-8")
+            (persona_dir / "values.json").write_text(json.dumps({"non_negotiable": []}, ensure_ascii=False), encoding="utf-8")
+            (persona_dir / "speaking_style.json").write_text(json.dumps({"tone": "自然"}, ensure_ascii=False), encoding="utf-8")
+            engine = MemoryEngine(
+                "episode_bot",
+                root,
+                config={"embedding": "none"},
+                persona_backstory_path=str(backstory_path),
+            )
             await engine.init()
             engine.start_session("sid")
             await engine.on_message("我明天有一个很重要的面试，真的有点焦虑。", "我陪你一起准备。")
@@ -2276,6 +2294,7 @@ class SystemTestSuite:
                 """
             ).fetchone()
             conn.close()
+            runtime_profile = json.loads((persona_dir / "runtime_profile.json").read_text(encoding="utf-8"))
             await engine.close()
 
         cue_tags = json.loads(row[8]) if row and row[8] else []
@@ -2289,8 +2308,9 @@ class SystemTestSuite:
             and row[6] in {"normal", "sensitive"}
             and row[7]
             and "面试" in cue_tags
+            and runtime_profile.get("shared_experiences")
         )
-        log = json.dumps({"row": row}, ensure_ascii=False, indent=2)
+        log = json.dumps({"row": row, "runtime_profile": runtime_profile}, ensure_ascii=False, indent=2)
         return passed, f"row={bool(row)}", log
 
     async def case_episodic_scene_capsule_recall(self) -> tuple[bool, str, str]:
@@ -2626,6 +2646,7 @@ class SystemTestSuite:
                     and "vector_recall_sources" in diagnostics
                     and "retrieved_memory" in debug_context
                     and "vector_recall" in debug_context.get("retrieved_memory", {})
+                    and "evolution_refs" in debug_context
                     and "response_style_trace" in debug_context
                     and debug_context.get("system_prompt")
                     and debug_context.get("memory_intent") == "emotional_support"

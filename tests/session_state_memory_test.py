@@ -2,6 +2,7 @@ import gc
 import shutil
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from ai_companion.memory.session_state import (
@@ -613,7 +614,8 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
                 conversation_context="",
             )
             self.assertFalse(diff.upserts)
-            self.assertTrue(diff.no_change)
+            self.assertTrue(diff.invalidations)
+            self.assertFalse(diff.no_change)
         finally:
             shutil.rmtree(td, ignore_errors=True)
 
@@ -646,6 +648,70 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertTrue(diff.upserts)
             self.assertTrue(all(item.get("subject") == "assistant" for item in diff.upserts))
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    async def test_scene_authority_diff_future_visit_clears_stale_shared_scene(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        td = tempfile.mkdtemp(prefix="scene-authority-future-visit-")
+        try:
+            engine = MemoryEngine("scene_bot", Path(td), config={"embedding": "none"})
+            diff = engine._build_scene_authority_diff(
+                user_input="我已经准备辞职了，然后就自驾去找你",
+                bot_output="你真要来？",
+                conversation_context="",
+            )
+            self.assertFalse(diff.upserts)
+            self.assertGreaterEqual(len(diff.invalidations), 3)
+            self.assertFalse(diff.no_change)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    async def test_scene_authority_diff_progresses_from_room_to_outing_on_turn_actions(self):
+        from ai_companion.memory.engine import MemoryEngine
+        from ai_companion.memory.session_state import SessionStateItem
+
+        td = tempfile.mkdtemp(prefix="scene-authority-progression-")
+        try:
+            engine = MemoryEngine("scene_bot", Path(td), config={"embedding": "none"})
+            active = [
+                SessionStateItem(
+                    state_id="room-location",
+                    session_id="scene",
+                    scope="current_scene",
+                    subject="shared",
+                    predicate="current_location",
+                    value="客栈房间/床边亲密场景",
+                    confidence=0.96,
+                    status="active",
+                    effective_at=datetime.now().isoformat(),
+                    updated_at=datetime.now().isoformat(),
+                ),
+                SessionStateItem(
+                    state_id="room-activity",
+                    session_id="scene",
+                    scope="current_scene",
+                    subject="shared",
+                    predicate="current_activity",
+                    value="房间内亲密互动或夜间安排执行中",
+                    confidence=0.96,
+                    status="active",
+                    effective_at=datetime.now().isoformat(),
+                    updated_at=datetime.now().isoformat(),
+                ),
+            ]
+            diff = engine._build_scene_authority_diff(
+                user_input="我们已经出门逛街了",
+                bot_output="她把门带上，跟你一起往古城那边走。",
+                conversation_context="",
+                active_states=active,
+            )
+            rendered = "\n".join(str(item.get("value")) for item in diff.upserts)
+            self.assertIn("户外/目的地游览场景", rendered)
+            self.assertIn("外出游览或抵达目的地", rendered)
+            self.assertTrue(all(item.get("subject") == "shared" for item in diff.upserts))
+            self.assertFalse(diff.no_change)
         finally:
             shutil.rmtree(td, ignore_errors=True)
 
@@ -687,6 +753,82 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
         active = await self.store.list_active_states("assistant-scene")
         self.assertFalse(result["written"])
         self.assertFalse(active)
+
+    async def test_rule_checker_blocks_copresent_action_when_user_is_remote(self):
+        checker = ResponseStateConsistencyChecker()
+
+        check = await checker.check(
+            "（她扬起嘴角，用筷子尖点了点你的碗沿，又把筷子往你面前一伸。）",
+            [],
+            user_input="我在北京呢，等我过段时间去找你",
+        )
+        self.assertFalse(check["consistent"])
+        self.assertEqual("high", check["severity"])
+        self.assertIn("ungrounded_copresent_action", check.get("matched_rules") or [])
+
+    async def test_rule_checker_allows_copresent_action_with_fresh_shared_scene(self):
+        checker = ResponseStateConsistencyChecker()
+        from ai_companion.memory.session_state import SessionStateItem
+
+        now = datetime.now().isoformat()
+        active = [
+            SessionStateItem(
+                state_id="meal-location",
+                session_id="meal",
+                scope="current_scene",
+                subject="shared",
+                predicate="current_location",
+                value="餐桌/餐厅场景",
+                confidence=0.96,
+                status="active",
+                effective_at=now,
+                updated_at=now,
+            ),
+            SessionStateItem(
+                state_id="meal-activity",
+                session_id="meal",
+                scope="current_scene",
+                subject="shared",
+                predicate="current_activity",
+                value="共同进餐",
+                confidence=0.96,
+                status="active",
+                effective_at=now,
+                updated_at=now,
+            ),
+        ]
+
+        check = await checker.check(
+            "（她把杯子往你面前轻轻一推，示意你先喝口水。）",
+            active,
+            user_input="快坐下吃饭",
+        )
+        self.assertTrue(check["consistent"])
+        self.assertEqual("none", check["severity"])
+
+    async def test_rule_checker_blocks_turn_actor_role_reversal(self):
+        checker = ResponseStateConsistencyChecker()
+
+        check = await checker.check(
+            "我去大理检查客栈，顺手把房间也都看了一遍。",
+            [],
+            user_input="我去大理检查你的客栈。",
+        )
+        self.assertFalse(check["consistent"])
+        self.assertEqual("high", check["severity"])
+        self.assertIn("turn_actor_role_reversal", check.get("matched_rules") or [])
+
+    async def test_rule_checker_blocks_ungrounded_authority_claim(self):
+        checker = ResponseStateConsistencyChecker()
+
+        check = await checker.check(
+            "你再这样我就扣你工资，排班也别想挑了。",
+            [],
+            user_input="我去大理检查你的客栈，看看最近经营得怎么样。",
+        )
+        self.assertFalse(check["consistent"])
+        self.assertEqual("high", check["severity"])
+        self.assertIn("ungrounded_authority_claim", check.get("matched_rules") or [])
 
     async def test_relationship_consistency_rewrites_denial_of_confirmed_partner_status(self):
         from ai_companion.memory.engine import MemoryEngine

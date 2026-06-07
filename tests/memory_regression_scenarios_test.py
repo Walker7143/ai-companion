@@ -187,6 +187,7 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
 
         status, command_text = asyncio.run(run())
         trust = status["memory_trust_view"]
+        evolution_refs = status.get("evolution_refs") or {}
         self.assertIn("recently_remembered", trust)
         self.assertTrue(trust["recently_remembered"])
         self.assertTrue(trust["stable_understanding"])
@@ -197,6 +198,8 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
         self.assertFalse(recent_keys & pending_keys)
         self.assertEqual(trust["relationship_anchor"]["label"], "恋人")
         self.assertTrue(trust["pending_confirmation"])
+        self.assertIn("timeline_preview", evolution_refs)
+        self.assertIn("diagnostics", evolution_refs)
         self.assertIn("记忆信任视图", command_text)
         self.assertIn("关系锚点", command_text)
 

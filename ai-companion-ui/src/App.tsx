@@ -11,6 +11,7 @@ import { StyleLab } from './pages/StyleLab';
 import { Operations } from './pages/Operations';
 import { Debug } from './pages/Debug';
 import { Settings } from './pages/Settings';
+import { Evolution } from './pages/Evolution';
 
 function App() {
   return (
@@ -25,6 +26,7 @@ function App() {
             <Route path="/understanding" element={<Understanding />} />
             <Route path="/style" element={<StyleLab />} />
             <Route path="/operations" element={<Operations />} />
+            <Route path="/evolution" element={<Evolution />} />
             <Route path="/debug" element={<Debug />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

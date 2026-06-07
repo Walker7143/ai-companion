@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from .turn_roles import (
+    has_explicit_authority_grant,
+    infer_turn_role_signal,
+    mentions_business_asset_of_assistant,
+)
+
 
 COMMITTED_RELATIONSHIP_LABELS = {"恋人", "男女朋友", "男朋友", "女朋友", "伴侣", "爱人", "老婆", "老公"}
 
@@ -173,6 +179,41 @@ class ContinuityContractBuilder:
         current_text = str(current_input or "").strip()
         if current_text and any(token in current_text for token in ("男朋友", "女朋友", "关系", "忘了", "记得")):
             contract.risk_flags.append("relationship_direct_query")
+        turn_role_signal = infer_turn_role_signal(current_text)
+        if turn_role_signal is not None:
+            actor_label = "用户" if turn_role_signal.actor == "user" else "你"
+            owner_label = "你的" if turn_role_signal.owner == "assistant" else "我的"
+            contract.hard_facts.append(
+                ContinuityFact(
+                    kind="turn_role_signal",
+                    text=(
+                        f"本轮事实：是{actor_label}在{turn_role_signal.raw_action}{owner_label}{turn_role_signal.asset}，"
+                        "不要把施事者、资产归属或权限关系写反。"
+                    ),
+                    source="current_input",
+                    priority=4,
+                    metadata={
+                        "actor": turn_role_signal.actor,
+                        "owner": turn_role_signal.owner,
+                        "action_family": turn_role_signal.action_family,
+                        "asset": turn_role_signal.asset,
+                    },
+                )
+            )
+            contract.risk_flags.append("turn_role_signal")
+        if (
+            ((turn_role_signal is not None and turn_role_signal.owner == "assistant") or mentions_business_asset_of_assistant(current_text))
+            and not has_explicit_authority_grant(current_text)
+        ):
+            contract.active_boundaries.append(
+                ContinuityFact(
+                    kind="authority_boundary",
+                    text="除非用户明确确认受雇、上下级或管理关系，否则不要把用户写成你的员工、下属或可被你发工资、扣工资、排班、批假、开除的对象。",
+                    source="current_input",
+                    priority=8,
+                )
+            )
+            contract.risk_flags.append("authority_relation_unguarded")
 
         contract.style_freedom.append(
             ContinuityFact(

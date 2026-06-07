@@ -47,3 +47,11 @@ class ResponseStylePolisherSentenceTest(unittest.TestCase):
         polisher = ResponseStylePolisher()
         text = "真的？！你现在才说。啊！？不是吧！！"
         self.assertEqual(polisher._first_sentences(text, 2), "真的？！你现在才说。")
+
+    def test_polish_closes_unbalanced_quotes_and_parentheses(self):
+        polisher = ResponseStylePolisher()
+        text = "（她听见他声音里的疲惫，随即带上一点关切——“吃了，随便对付了一口。你呢？"
+        self.assertEqual(
+            polisher.polish(text, intent="casual_chat", relationship_state={}, user_understanding={}),
+            "（她听见他声音里的疲惫，随即带上一点关切——“吃了，随便对付了一口。你呢？”）",
+        )

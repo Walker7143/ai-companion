@@ -76,6 +76,20 @@ class ResponseStylePolisher:
         "\u5e94\u8be5\u56de\u7b54",  # 应该回答
         "\u6700\u7ec8\u56de\u590d",  # 最终回复
     )
+    _OPEN_TO_CLOSE = {
+        "(": ")",
+        "（": "）",
+        "[": "]",
+        "【": "】",
+        "「": "」",
+        "『": "』",
+        "《": "》",
+        "〈": "〉",
+        '"': '"',
+        "“": "”",
+        "‘": "’",
+    }
+    _CLOSERS = set(_OPEN_TO_CLOSE.values())
 
     def polish(
         self,
@@ -94,7 +108,7 @@ class ResponseStylePolisher:
         text = self._soften_numbered_lists(text, intent=intent)
         text = self._apply_interaction_style(text, user_understanding or {})
         text = self._apply_intent_pacing(text, intent=intent, relationship_state=relationship_state or {})
-        return text.strip()
+        return self._close_unbalanced_wrappers(text.strip())
 
     def list_recent_actions(self, recent_replies: list[str], *, limit: int = 6) -> list[str]:
         seen: set[str] = set()
@@ -209,6 +223,29 @@ class ResponseStylePolisher:
         parts = SentenceSplitter.split(text)
         selected = parts[:max_sentences]
         return "".join(selected) if selected else text
+
+    def _close_unbalanced_wrappers(self, text: str) -> str:
+        text = str(text or "").strip()
+        if not text:
+            return text
+
+        stack: list[str] = []
+        for char in text:
+            if char in self._OPEN_TO_CLOSE:
+                if char == '"' and stack and stack[-1] == '"':
+                    stack.pop()
+                else:
+                    stack.append(char)
+                continue
+            if char not in self._CLOSERS or not stack:
+                continue
+            expected = self._OPEN_TO_CLOSE.get(stack[-1])
+            if char == expected:
+                stack.pop()
+
+        if not stack:
+            return text
+        return text + "".join(self._OPEN_TO_CLOSE[ch] for ch in reversed(stack))
 
     def _interaction_style(self, understanding: dict[str, Any]) -> dict[str, Any]:
         manual = understanding.get("manual") if isinstance(understanding.get("manual"), dict) else {}

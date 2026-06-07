@@ -7,6 +7,7 @@ import {
   HeartHandshake,
   Wand2,
   Activity,
+  TrendingUp,
   Bug,
   Settings,
   X,
@@ -30,6 +31,7 @@ const navItems = [
   { path: '/understanding', icon: HeartHandshake, label: '长期理解投影' },
   { path: '/style', icon: Wand2, label: '风格调教' },
   { path: '/operations', icon: Activity, label: '运营台' },
+  { path: '/evolution', icon: TrendingUp, label: '人格演化' },
   { path: '/debug', icon: Bug, label: '调试工具' },
   { path: '/settings', icon: Settings, label: '设置' },
 ];

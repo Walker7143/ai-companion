@@ -8,7 +8,7 @@ from ..context.tokenizer import TokenEstimator
 from .conscious import ConsciousContext
 from .continuity import is_committed_relationship_label
 from .retriever import RetrievedMemory
-from .scene_authority import categorize_scene_text, is_shared_scene_subject
+from .session_state import get_scene_snapshot
 
 
 @dataclass
@@ -356,12 +356,8 @@ class MemoryPromptBuilder:
         states = getattr(retrieved, "session_state", None)
         if not isinstance(states, list) or not states:
             return False
-        for state in states:
-            scope = state.scope if hasattr(state, "scope") else state.get("scope", "")
-            subject = state.subject if hasattr(state, "subject") else state.get("subject", "")
-            if scope == "current_scene" and is_shared_scene_subject(subject):
-                return True
-        return False
+        snapshot = get_scene_snapshot(states, user_input=str(getattr(retrieved, "current_input", "") or ""))
+        return snapshot.should_anchor_generation
 
     def _apply_scene_budget_adjustments(self, budgets: dict[str, int], retrieved: RetrievedMemory) -> dict[str, int]:
         if not self.scene_filter_enabled:

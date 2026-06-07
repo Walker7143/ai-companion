@@ -1,11 +1,12 @@
 import unittest
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from ai_companion.proactive.life_config import LifeConfig
 from ai_companion.proactive.life_engine import LifeEngine
-from ai_companion.proactive.life_state import LifeEvent, LifeState
+from ai_companion.proactive.life_state import LifeEvent, LifeState, MajorLifeEvent
 
 
 class EmptyLifeModel:
@@ -23,6 +24,87 @@ class PlantLifeModel:
 
     async def chat(self, messages, system_prompt="", **kwargs):
         return '[{"scenario_key":"plant_care_01","description":"2026-06-01 她给绿萝松土，指尖沾了一点泥。","mood_before":"平静","mood_after":"放松","importance":3,"shareable":true,"topic_prompt":"今天给绿萝松土了。","mood_tags":["日常"],"related_to_user":false}]'
+
+
+class RuntimeDailyUpdateModel:
+    provider = "test"
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        text = messages[-1].get("content", "") if messages else ""
+        if "prompt_type: runtime_experience_update" in text:
+            return json.dumps(
+                {
+                    "should_update": True,
+                    "shared_experience": "她和用户一起在客栈门口收拾被风吹乱的桌布，边整理边把气氛重新安稳下来。",
+                    "life_experience": "",
+                    "shared_growth_summary": "这类一起处理生活小乱子的经历，让她越来越习惯把用户放进自己的日常节奏里。",
+                    "life_growth_summary": "",
+                    "reason": "shared_daily_growth",
+                },
+                ensure_ascii=False,
+            )
+        if "运行时人生经历演化器" in text:
+            return json.dumps(
+                {
+                    "should_update": True,
+                    "shared_experience": "她和用户一起在客栈门口收拾被风吹乱的桌布，边拌嘴边把气氛重新安顿下来。",
+                    "life_experience": "",
+                    "shared_growth_summary": "这类一起处理生活小乱子的经历，让她越来越习惯把用户放进自己的日常节奏里。",
+                    "life_growth_summary": "",
+                    "reason": "shared_daily_growth",
+                },
+                ensure_ascii=False,
+            )
+        return '[{"scenario_key":"courtyard_cleanup","description":"傍晚风突然变大，她和用户一起把客栈门口被吹乱的桌布重新压好，还顺手收了两把椅子。","mood_before":"平静","mood_after":"踏实","importance":6,"shareable":true,"topic_prompt":"刚刚门口那阵风差点把桌布都掀走了。","mood_tags":["日常","默契"],"related_to_user":true}]'
+
+
+class RuntimeMajorUpdateModel:
+    provider = "test"
+
+    async def chat(self, messages, system_prompt="", **kwargs):
+        text = messages[-1].get("content", "") if messages else ""
+        if "prompt_type: runtime_experience_update" in text:
+            return json.dumps(
+                {
+                    "should_update": True,
+                    "shared_experience": "",
+                    "life_experience": "她认真想过之后，决定把客栈接下来的半年都按自己的想法重新打理，这让她第一次对未来的生活方向有了更清晰的掌控感。",
+                    "shared_growth_summary": "",
+                    "life_growth_summary": "这件事让她开始把自己的人生当成可以主动选择和承担的东西。",
+                    "reason": "major_life_direction",
+                },
+                ensure_ascii=False,
+            )
+        if "运行时人生经历演化器" in text:
+            return json.dumps(
+                {
+                    "should_update": True,
+                    "shared_experience": "",
+                    "life_experience": "她认真想过之后，决定把客栈接下来的半年都按自己的想法重新打理，这让她第一次对未来的生活方向有了更清晰的掌控感。",
+                    "shared_growth_summary": "",
+                    "life_growth_summary": "这件事让她开始把自己的人生当成可以主动选择和承担的东西。",
+                    "reason": "major_life_direction",
+                },
+                ensure_ascii=False,
+            )
+        if "is_major" in text or "人生大事" in text:
+            return json.dumps(
+                {
+                    "is_major": True,
+                    "reason": "test",
+                    "event": {
+                        "scenario_key": "major_life_choice",
+                        "description": "她和客栈合伙人谈到深夜后，最终决定接下未来半年的经营安排，把很多原本摇摆的计划都定了下来。",
+                        "mood_before": "犹豫",
+                        "mood_after": "坚定",
+                        "importance": 9,
+                        "topic_prompt": "今晚终于把后面的打算定下来了。",
+                        "mood_tags": ["转折", "决定"],
+                    },
+                },
+                ensure_ascii=False,
+            )
+        return "[]"
 
 
 class FakeSessionStateStore:
@@ -61,6 +143,26 @@ class FakeMemory:
 
 
 class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
+    def _write_persona_bundle(self, root: Path, bot_id: str) -> Path:
+        persona_dir = root / bot_id / "persona"
+        persona_dir.mkdir(parents=True, exist_ok=True)
+        (persona_dir / "profile.json").write_text(
+            json.dumps(
+                {
+                    "name": "测试 Bot",
+                    "age": 25,
+                    "occupation": "客栈主理人",
+                    "personality_tags": ["细腻", "嘴硬心软"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (persona_dir / "backstory.json").write_text(json.dumps({"key_moments": []}, ensure_ascii=False), encoding="utf-8")
+        (persona_dir / "values.json").write_text(json.dumps({"non_negotiable": []}, ensure_ascii=False), encoding="utf-8")
+        (persona_dir / "speaking_style.json").write_text(json.dumps({"tone": "自然"}, ensure_ascii=False), encoding="utf-8")
+        return persona_dir
+
     def test_daily_life_profile_summary_keeps_current_life_anchor_fields(self):
         with TemporaryDirectory(prefix="life-profile-anchor-") as td:
             cfg = LifeConfig(
@@ -376,6 +478,88 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
             rendered = "\n".join(f"{item['key']} {' '.join(item.get('templates') or [])}" for item in candidates)
             self.assertNotIn("绿萝", rendered)
             self.assertNotIn("松土", rendered)
+
+    async def test_tick_daily_updates_runtime_shared_experiences(self):
+        with TemporaryDirectory(prefix="life-runtime-daily-update-") as td:
+            root = Path(td)
+            bot_id = "runtime_daily_bot"
+            persona_dir = self._write_persona_bundle(root, bot_id)
+            state = LifeState(bot_id, root)
+            state.current_date = "2026-06-01"
+            state.day_of_week = "周日"
+            state.current_month = 6
+            state.current_season = "夏"
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
+            engine = LifeEngine(bot_id, cfg, state, model=RuntimeDailyUpdateModel(), persona_dir=persona_dir)
+            engine._get_local_now = lambda: datetime(2026, 6, 2, 19, 0).astimezone()
+            event = LifeEvent(
+                description="傍晚风突然变大，她和用户一起把客栈门口被吹乱的桌布重新压好，还顺手收了两把椅子。",
+                timestamp="2026-06-02T19:00:00",
+                mood_before="平静",
+                mood_after="踏实",
+                importance=6,
+                shareable=True,
+                topic_prompt="刚刚门口那阵风差点把桌布都掀走了。",
+                mood_tags=["日常", "默契"],
+                related_to_user=True,
+                scenario_key="courtyard_cleanup",
+                scenario_category="daily",
+                source="test",
+            )
+
+            async def _fake_generate_daily_event():
+                return event
+
+            engine.generate_daily_event = _fake_generate_daily_event
+
+            generated = await engine.tick_daily()
+
+            runtime_profile = json.loads((persona_dir / "runtime_profile.json").read_text(encoding="utf-8"))
+            self.assertIsNotNone(generated)
+            self.assertIn("shared_experiences", runtime_profile)
+            self.assertIn("life_experiences", runtime_profile)
+            self.assertIn("她和用户一起在客栈门口收拾被风吹乱的桌布", runtime_profile["shared_experiences"][0])
+            self.assertIn("这类一起处理生活小乱子的经历", runtime_profile.get("shared_growth_summary", ""))
+
+    async def test_tick_major_updates_runtime_life_experiences(self):
+        with TemporaryDirectory(prefix="life-runtime-major-update-") as td:
+            root = Path(td)
+            bot_id = "runtime_major_bot"
+            persona_dir = self._write_persona_bundle(root, bot_id)
+            state = LifeState(bot_id, root)
+            state.current_date = "2026-06-01"
+            state.day_of_week = "周日"
+            state.current_month = 6
+            state.current_season = "夏"
+            cfg = LifeConfig(sync_with_local_time_when_realtime=False)
+            engine = LifeEngine(bot_id, cfg, state, model=RuntimeMajorUpdateModel(), persona_dir=persona_dir)
+            event = MajorLifeEvent(
+                description="她和客栈合伙人谈到深夜后，最终决定接下未来半年的经营安排，把很多原本摇摆的计划都定了下来。",
+                mood_before="犹豫",
+                mood_after="坚定",
+                importance=9,
+                topic_prompt="今晚终于把后面的打算定下来了。",
+                mood_tags=["转折", "决定"],
+                shareable=True,
+                related_to_user=False,
+                scenario_key="major_life_choice",
+                scenario_category="major",
+                source="test",
+            )
+
+            async def _fake_generate_major_event():
+                return event
+
+            engine.generate_major_event = _fake_generate_major_event
+
+            generated = await engine.tick_major()
+
+            runtime_profile = json.loads((persona_dir / "runtime_profile.json").read_text(encoding="utf-8"))
+            self.assertIsNotNone(generated)
+            self.assertIn("life_experiences", runtime_profile)
+            self.assertTrue(runtime_profile["life_experiences"])
+            self.assertIn("决定把客栈接下来的半年都按自己的想法重新打理", runtime_profile["life_experiences"][0])
+            self.assertIn("开始把自己的人生当成可以主动选择和承担的东西", runtime_profile.get("life_growth_summary", ""))
 
 
 if __name__ == "__main__":

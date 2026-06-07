@@ -20,6 +20,13 @@ import jieba
 import logging
 jieba.setLogLevel(logging.WARNING)  # 屏蔽 jieba 加载信息
 
+from ...persona.runtime_profile import (
+    load_runtime_profile,
+    merge_runtime_profile,
+    runtime_profile_path_from_backstory_path,
+    write_runtime_profile,
+)
+
 
 class EpisodicStore:
     """重要情景片段，jieba 分词全文搜索 + Chroma 向量召回"""
@@ -42,11 +49,13 @@ class EpisodicStore:
 
     def __init__(self, db_path: str, chroma_dir: str,
                  embedding_mode: str = "local",
-                 encoder_model: str = "all-MiniLM-L6-v2"):
+                 encoder_model: str = "all-MiniLM-L6-v2",
+                 persona_backstory_path: str | None = None):
         self.db_path = db_path
         self.chroma_dir = Path(chroma_dir)
         self.embedding_mode = embedding_mode  # "local" | "none"
         self.encoder_model = encoder_model
+        self._persona_backstory_path = persona_backstory_path
         self._encoder = None
         self._chroma = None
         self._collection = None
@@ -258,6 +267,8 @@ class EpisodicStore:
             ))
             await db.commit()
 
+        self._append_shared_experience(summary)
+
         # Chroma 写入（仅在 embedding_mode="local" 时）
         if self.embedding_mode == "local":
             try:
@@ -311,6 +322,63 @@ class EpisodicStore:
         except Exception:
             pass
         return self._simple_extract(user_input, bot_output)
+
+    def _runtime_profile_path(self) -> Optional[Path]:
+        return runtime_profile_path_from_backstory_path(self._persona_backstory_path)
+
+    def _load_runtime_profile(self) -> dict:
+        return load_runtime_profile(self._runtime_profile_path())
+
+    def _write_runtime_profile(self, data: dict):
+        write_runtime_profile(self._runtime_profile_path(), data)
+
+    def _append_shared_experience(self, summary: str):
+        text = str(summary or "").strip()
+        if not text or not self._persona_backstory_path:
+            return
+        try:
+            data = self._load_runtime_profile()
+            merged, changed = merge_runtime_profile(
+                data,
+                {"shared_experiences": [text]},
+                list_limits={"shared_experiences": 20},
+            )
+            if changed:
+                growth_summary = self._derive_shared_growth_summary(
+                    merged.get("shared_experiences", []),
+                    relationship_state=merged.get("relationship_state"),
+                )
+                if growth_summary:
+                    merged["shared_growth_summary"] = growth_summary
+                self._write_runtime_profile(merged)
+        except Exception:
+            pass
+
+    def _derive_shared_growth_summary(self, experiences: list[str], *, relationship_state: dict | None = None) -> str:
+        items = [str(item).strip() for item in (experiences or []) if str(item).strip()]
+        if not items:
+            return ""
+        latest = items[-1]
+        relationship_state = relationship_state if isinstance(relationship_state, dict) else {}
+        stage = str(
+            relationship_state.get("stage")
+            or relationship_state.get("relationship_label")
+            or relationship_state.get("relationship_level")
+            or ""
+        ).strip()
+        guidance = str(
+            relationship_state.get("interaction_guidance")
+            or relationship_state.get("narrative")
+            or ""
+        ).strip()
+        prefix = f"你和用户最近又多了一段共同经历：{latest}。"
+        if stage:
+            prefix += f" 这段关系现在更像{stage}。"
+        if guidance:
+            prefix += f" 相处上记得：{guidance}"
+        elif len(items) >= 2:
+            prefix += " 这些经历正在慢慢改变你看待用户和这段关系的方式。"
+        return prefix[:220]
 
     def _simple_extract(self, user_input: str, bot_output: str) -> str:
         """无外部依赖的简单抽取策略"""

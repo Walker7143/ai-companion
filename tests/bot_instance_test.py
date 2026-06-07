@@ -638,6 +638,84 @@ class PersonaEngineDefaultStyleTest(unittest.TestCase):
         self.assertIn("关系：恋人", prompt)
         self.assertNotIn("关系：朋友", prompt)
 
+    def test_system_prompt_includes_runtime_shared_experiences(self):
+        with TemporaryDirectory(prefix="persona-runtime-shared-") as td:
+            root = Path(td)
+            bot_id = "shared_bot"
+            _write_test_persona(root, bot_id)
+            runtime_path = root / bot_id / "persona" / "runtime_profile.json"
+            runtime_path.write_text(
+                json.dumps(
+                    {
+                        "shared_experiences": ["你们一起准备了一次重要面试"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        self.assertIn("你和用户一起经历过的事", prompt)
+        self.assertIn("你们一起准备了一次重要面试", prompt)
+
+    def test_system_prompt_includes_runtime_growth_and_relationship_guidance(self):
+        with TemporaryDirectory(prefix="persona-runtime-growth-") as td:
+            root = Path(td)
+            bot_id = "growth_bot"
+            _write_test_persona(root, bot_id)
+            runtime_path = root / bot_id / "persona" / "runtime_profile.json"
+            runtime_path.write_text(
+                json.dumps(
+                    {
+                        "relationship_to_user": "暧昧中",
+                        "shared_experiences": ["你们一起准备了一次重要面试"],
+                        "shared_growth_summary": "你和用户最近又多了一段共同经历：你们一起准备了一次重要面试。 这些经历正在慢慢改变你看待用户和这段关系的方式。",
+                        "relationship_state": {
+                            "stage": "暧昧中",
+                            "narrative": "你们正在慢慢靠近，关系比以前更熟悉。",
+                            "current_posture": "可以更自然地流露熟悉感，但不要用力过猛。",
+                            "interaction_guidance": "先承接情绪，再自然带出共同经历。",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        self.assertIn("这些共同经历正在怎样改变你", prompt)
+        self.assertIn("你们正在慢慢靠近，关系比以前更熟悉", prompt)
+        self.assertIn("你现在面对用户时的关系姿态", prompt)
+        self.assertIn("先承接情绪，再自然带出共同经历", prompt)
+
+    def test_system_prompt_includes_runtime_life_experiences(self):
+        with TemporaryDirectory(prefix="persona-runtime-life-") as td:
+            root = Path(td)
+            bot_id = "life_bot"
+            _write_test_persona(root, bot_id)
+            runtime_path = root / bot_id / "persona" / "runtime_profile.json"
+            runtime_path.write_text(
+                json.dumps(
+                    {
+                        "life_experiences": ["她在客栈忙完一天后，慢慢适应了把生活节奏和情绪都安顿下来"],
+                        "life_growth_summary": "这些人生经历让她比过去更懂得在忙碌和亲密之间找到自己的节奏。",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            persona = PersonaLoader(root / bot_id / "persona").load()
+            prompt = PersonaEngine(persona).build_system_prompt()
+
+        self.assertIn("这些是你一路走来逐渐积累的人生经历", prompt)
+        self.assertIn("她在客栈忙完一天后，慢慢适应了把生活节奏和情绪都安顿下来", prompt)
+        self.assertIn("这些人生经历正在怎样塑造现在的你", prompt)
+
 
 class ResponseStyleEmbodiedActionPolishTest(unittest.TestCase):
     def test_extracts_recent_actions_for_turn_prompt(self):
@@ -988,7 +1066,7 @@ class BotInstanceRealtimeContextTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await bot.close()
 
-        prompt = model.calls[-1]["system_prompt"]
+        prompt = next((call["system_prompt"] for call in model.calls if call.get("system_prompt")), "")
         self.assertIn("[当前时间一致性约束]", prompt)
         self.assertIn("当前真实时刻：2026-05-09 12:01（周六，中午）", prompt)
         self.assertIn("不要说今天晚饭、晚饭后、夜宵、睡前或晚上活动已经发生", prompt)
@@ -1028,7 +1106,7 @@ class BotInstanceRealtimeContextTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await bot.close()
 
-        prompt = model.calls[-1]["system_prompt"]
+        prompt = next((call["system_prompt"] for call in model.calls if call.get("system_prompt")), "")
         self.assertIn("[当前时间一致性约束]", prompt)
         self.assertIn("不要说今天晚饭、晚饭后、夜宵、睡前或晚上活动已经发生", prompt)
         self.assertNotIn("晚饭后去小区快走", prompt)
@@ -1572,6 +1650,52 @@ class BotSkillCapabilityStatusTest(unittest.IsolatedAsyncioTestCase):
             await bot.close()
 
         self.assertEqual(response, "ok")
+
+
+class BotInstanceRemoteSceneGuardTest(unittest.TestCase):
+    def test_system_prompt_skips_shared_scene_constraint_for_remote_user_context(self):
+        with TemporaryDirectory(prefix="bot-remote-scene-guard-") as td:
+            root = Path(td)
+            bot_id = "remote_scene_bot"
+            _write_test_persona(root, bot_id)
+            bot = BotInstance(
+                {"id": bot_id, "name": "测试 Bot", "data_dir": str(root)},
+                model=EchoModel(),
+                data_dir=root,
+                memory_config={"embedding": "none"},
+                refusal_enabled=False,
+            )
+
+            try:
+                prompt = bot._build_system_prompt(
+                    user_input="我在北京呢，等我过段时间去找你",
+                    memory_context={
+                        "session_state": [
+                            {
+                                "scope": "current_scene",
+                                "subject": "shared",
+                                "predicate": "current_location",
+                                "value": "餐桌/餐厅场景",
+                            },
+                            {
+                                "scope": "current_scene",
+                                "subject": "shared",
+                                "predicate": "current_activity",
+                                "value": "共同进餐",
+                            },
+                        ],
+                    },
+                    relationship_state={},
+                )
+            finally:
+                import asyncio
+
+                asyncio.run(bot.close())
+
+            self.assertNotIn("【场景硬约束】", prompt)
+            self.assertIn("【本轮肢体/神态表达】", prompt)
+            self.assertIn("当前没有被用户新近锚定的共享临场场景", prompt)
+            self.assertIn("不要写成同桌、贴身、递到面前", prompt)
 
 
 

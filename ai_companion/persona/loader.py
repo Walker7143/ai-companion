@@ -3,6 +3,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .runtime_profile import apply_runtime_profile_overlay
+
 
 @dataclass
 class Persona:
@@ -40,22 +42,4 @@ class PersonaLoader:
             return json.load(f)
 
     def _apply_runtime_profile(self, profile: dict, backstory: dict, runtime: dict) -> tuple[dict, dict]:
-        if not runtime:
-            return profile, backstory
-        profile = dict(profile or {})
-        backstory = dict(backstory or {})
-
-        if runtime.get("relationship_to_user"):
-            profile["relationship_to_user"] = runtime["relationship_to_user"]
-        if runtime.get("attitude_score") is not None:
-            profile["attitude_score"] = runtime["attitude_score"]
-
-        runtime_moments = runtime.get("key_moments") or []
-        if runtime_moments:
-            key_moments = list(backstory.get("key_moments", []) or [])
-            for moment in runtime_moments:
-                if moment not in key_moments:
-                    key_moments.append(moment)
-            backstory["key_moments"] = key_moments
-
-        return profile, backstory
+        return apply_runtime_profile_overlay(profile, backstory, runtime)

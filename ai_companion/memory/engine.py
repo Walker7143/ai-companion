@@ -53,8 +53,10 @@ from .session_state import (
     SessionStateExtractor,
     SessionStateResolver,
     SessionStateStore,
+    get_scene_snapshot,
 )
 from ..context.tokenizer import TokenEstimator
+from ..persona.evolution import PersonaEvolutionEngine
 
 # 上下文压缩器（可选）
 try:
@@ -102,6 +104,7 @@ class MemoryEngine:
         self.bot_id = bot_id
         self.user_id = (config or {}).get("user_id", "default_user")
         self.persona_backstory_path = persona_backstory_path
+        self.persona_dir = Path(persona_backstory_path).parent if persona_backstory_path else None
         self.memory_dir = Path(memory_dir) / bot_id / "memory"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -141,6 +144,7 @@ class MemoryEngine:
             self.memory_dir / "chroma",
             embedding_mode=embedding_mode,
             encoder_model=embedding_model,
+            persona_backstory_path=persona_backstory_path,
         )
         self.vector = VectorMemoryStore(
             self.memory_dir / "vector",
@@ -209,6 +213,11 @@ class MemoryEngine:
             rollup_store=self.rollups,
         )
         self.dreaming = DreamingOrchestrator(self, self.config.get("dreaming", {}))
+        self.evolution = PersonaEvolutionEngine(
+            bot_id=self.bot_id,
+            persona_dir=self.persona_dir,
+            config=self.config.get("evolution", {}) if isinstance(self.config.get("evolution"), dict) else {},
+        )
 
         self._session_id: Optional[str] = None
         self._summarizer: Optional[object] = None
@@ -232,6 +241,7 @@ class MemoryEngine:
         self.session_state_extractor.set_summarizer(summarizer)
         self.response_state_checker.set_summarizer(summarizer)
         self.relationship_state_checker.set_summarizer(summarizer)
+        self.evolution.set_summarizer(summarizer)
 
     def start_session(self, session_id: str = None):
         self._session_id = session_id or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -304,6 +314,8 @@ class MemoryEngine:
             "continuity_contract": retrieved.continuity_contract.to_dict() if retrieved.continuity_contract else {},
             "conscious_context": conscious.to_dict(),
             "memory_prompt_diagnostics": diagnostics,
+            "evolution_diagnostics": self.evolution.get_diagnostics(),
+            "evolution_refs": self.evolution.get_link_refs(limit=4),
             "system_suffix": suffix,
             "memory_continuity": {
                 "session_state_count": len(retrieved.session_state or []),
@@ -345,6 +357,20 @@ class MemoryEngine:
             bot_output=llm_output,
             session_id=sid,
             context=context,
+        )
+        relationship_state = await self.relationship.get_state(
+            bot_id=self.bot_id,
+            user_id=user_id,
+        )
+        await self.evolution.capture_turn(
+            user_input=user_input,
+            bot_output=llm_output,
+            relationship_state=relationship_state,
+            turn_context={
+                "session_id": sid,
+                "user_id": user_id,
+                "platform": context.platform,
+            },
         )
         return context
 
@@ -408,9 +434,11 @@ class MemoryEngine:
             user_input=user_input,
             bot_output=llm_output,
             conversation_context=conversation_context,
+            active_states=active_states,
         )
-        if deterministic_scene_diff.upserts:
+        if deterministic_scene_diff.upserts or deterministic_scene_diff.invalidations:
             state_diff.upserts = [*deterministic_scene_diff.upserts, *state_diff.upserts]
+            state_diff.invalidations = [*deterministic_scene_diff.invalidations, *state_diff.invalidations]
             state_diff.confidence_explanations = [
                 *state_diff.confidence_explanations,
                 *deterministic_scene_diff.confidence_explanations,
@@ -426,7 +454,70 @@ class MemoryEngine:
         if self._maintenance_counter % 5 == 0:
             await self.maintenance.run_light(bot_id=self.bot_id, user_id=user_id, summarizer=self._summarizer)
             await self.rebuild_vector_index()
+        latest_relationship_state = await self.relationship.get_state(
+            bot_id=self.bot_id,
+            user_id=user_id,
+        )
+        await self.evolution.capture_relationship_state(
+            latest_relationship_state,
+            turn_context={"session_id": sid, "user_id": user_id},
+        )
         return session_state_result
+
+    def evolution_summary(self) -> dict[str, Any]:
+        return self.evolution.get_snapshot()
+
+    def evolution_timeline(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        dimension: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        return self.evolution.get_timeline(
+            cursor=cursor,
+            limit=limit,
+            dimension=dimension,
+            status=status,
+        )
+
+    def evolution_event_detail(self, event_id: str) -> dict[str, Any] | None:
+        return self.evolution.get_event_detail(event_id)
+
+    def evolution_state_view(self) -> dict[str, Any]:
+        return self.evolution.get_state_view()
+
+    def evolution_config_view(self) -> dict[str, Any]:
+        return self.evolution.get_config()
+
+    async def evolution_reflect(self) -> dict[str, Any]:
+        return await self.evolution.reflect(reason="manual_admin")
+
+    async def evolution_rebuild(self) -> dict[str, Any]:
+        relationship_state = await self.relationship.get_state(
+            bot_id=self.bot_id,
+            user_id=self.user_id,
+        )
+        life_events: list[dict[str, Any]] = []
+        try:
+            life_state_path = self.memory_dir.parent / "life_state.json"
+            if life_state_path.exists():
+                raw = json.loads(life_state_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    life_events = list(raw.get("major_life_events", []) or []) + list(raw.get("life_events", []) or [])
+        except Exception:
+            life_events = []
+        return await self.evolution.rebuild(
+            relationship_state=relationship_state,
+            life_events=life_events,
+        )
+
+    async def evolution_apply_promotion(self, candidate_id: str) -> dict[str, Any]:
+        return await self.evolution.apply_core_patch(candidate_id, approval_reason="manual_admin")
+
+    async def evolution_reject_promotion(self, candidate_id: str, reason: str) -> dict[str, Any]:
+        return await self.evolution.reject_promotion(candidate_id, reason)
 
     def _build_scene_authority_diff(
         self,
@@ -434,14 +525,22 @@ class MemoryEngine:
         user_input: str,
         bot_output: str,
         conversation_context: str,
+        active_states: list | None = None,
     ) -> SessionStateDiff:
+        snapshot = get_scene_snapshot(active_states or [], user_input=user_input)
         diff = build_scene_authority_diff(
             user_input=user_input,
             bot_output=bot_output,
             conversation_context=conversation_context,
+            active_scene_context={
+                "subject": snapshot.subject,
+                "categories": sorted(snapshot.categories),
+                "scene_names": sorted(snapshot.scene_names),
+            },
         )
         return SessionStateDiff(
             upserts=diff.upserts,
+            invalidations=diff.invalidations,
             no_change=diff.no_change,
             confidence_explanations=diff.confidence_explanations,
         )
@@ -648,6 +747,7 @@ class MemoryEngine:
             "memory_trust_view": trust_view,
             "continuity_contract": continuity_contract.to_dict(),
             "relationship_projection": relationship_projection,
+            "evolution_refs": self.evolution.get_link_refs(limit=4),
             "recent_lifecycle_events": lifecycle_events,
             "fact_history": fact_history,
             "user_understanding_path": str(self.user_understanding.path),

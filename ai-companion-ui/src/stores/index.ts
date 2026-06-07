@@ -6,3 +6,4 @@ export { useSessionStore } from './useSessionStore';
 export { useLogStore } from './useLogStore';
 export { useMemoryStore } from './useMemoryStore';
 export { useConfigStore } from './useConfigStore';
+export { useEvolutionStore } from './useEvolutionStore';

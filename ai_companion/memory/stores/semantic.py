@@ -15,6 +15,12 @@ from typing import Optional
 
 from .user_understanding import UserUnderstandingStore
 from .vector import VectorMemoryDocument, VectorMemoryStore
+from ...persona.runtime_profile import (
+    load_runtime_profile,
+    merge_runtime_profile,
+    runtime_profile_path_from_backstory_path,
+    write_runtime_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1223,29 +1229,13 @@ class SemanticStore:
     # ── 运行态人格状态 ───────────────────────────────────────
 
     def _runtime_profile_path(self) -> Optional[Path]:
-        if not self._persona_backstory_path:
-            return None
-        return Path(self._persona_backstory_path).parent / "runtime_profile.json"
+        return runtime_profile_path_from_backstory_path(self._persona_backstory_path)
 
     def _load_runtime_profile(self) -> dict:
-        path = self._runtime_profile_path()
-        if not path or not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        return load_runtime_profile(self._runtime_profile_path())
 
     def _write_runtime_profile(self, data: dict):
-        path = self._runtime_profile_path()
-        if not path:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(".json.tmp")
-        payload = dict(data or {})
-        payload["updated_at"] = datetime.now().isoformat()
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        tmp_path.replace(path)
+        write_runtime_profile(self._runtime_profile_path(), data)
 
     # ── 人格运行态写回 ───────────────────────────────────────
 
@@ -1255,11 +1245,13 @@ class SemanticStore:
             return
         try:
             data = self._load_runtime_profile()
-            moments = data.get("key_moments", [])
-            if moment not in moments:
-                moments.append(moment)
-                data["key_moments"] = moments
-                self._write_runtime_profile(data)
+            merged, changed = merge_runtime_profile(
+                data,
+                {"key_moments": [moment]},
+                list_limits={"key_moments": 50},
+            )
+            if changed:
+                self._write_runtime_profile(merged)
                 logger.info(f"[Semantic]  key_moment 已写入 runtime_profile: {moment[:30]}...")
         except Exception as e:
             logger.info(f"[Semantic]  写回 key_moment 失败: {e}")
@@ -1272,8 +1264,11 @@ class SemanticStore:
             data = self._load_runtime_profile()
             old_rel = data.get("relationship_to_user", "")
             if old_rel != relationship:
-                data["relationship_to_user"] = relationship
-                self._write_runtime_profile(data)
+                merged, _changed = merge_runtime_profile(
+                    data,
+                    {"relationship_to_user": relationship},
+                )
+                self._write_runtime_profile(merged)
                 logger.info(f"[Semantic]  relationship 已更新到 runtime_profile: {old_rel} -> {relationship}")
         except Exception as e:
             logger.info(f"[Semantic]  写回 relationship 失败: {e}")
@@ -1284,8 +1279,11 @@ class SemanticStore:
             return
         try:
             data = self._load_runtime_profile()
-            data["attitude_score"] = new_score
-            self._write_runtime_profile(data)
+            merged, _changed = merge_runtime_profile(
+                data,
+                {"attitude_score": new_score},
+            )
+            self._write_runtime_profile(merged)
             logger.info(f"[Semantic]  attitude_score 已写入 runtime_profile: {new_score}")
         except Exception as e:
             logger.info(f"[Semantic]  写回 attitude_score 失败: {e}")

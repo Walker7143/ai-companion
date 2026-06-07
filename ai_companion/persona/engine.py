@@ -1,5 +1,7 @@
 from .loader import Persona
 import json
+from .runtime_profile import apply_runtime_profile_overlay
+from .evolution import load_evolution_state
 
 
 def _is_committed_relationship(value: object) -> bool:
@@ -28,11 +30,11 @@ class PersonaEngine:
         speaking_style = self._load_json(self.persona.persona_dir / "speaking_style.json")
         conversation_style = self._load_json(self.persona.persona_dir / "conversation_style_rules.json")
         runtime = self._load_json(self.persona.persona_dir / "runtime_profile.json")
-        profile, backstory = self._apply_runtime_profile(profile, backstory, runtime)
+        evolution_state = load_evolution_state(self.persona.persona_dir)
 
         lines = []
 
-        # 1. 基础信息
+        # 1. 稳定人格与原始背景
         name = profile.get('name', '未知')
         age = self._current_age(profile, life_context)
         occupation = profile.get('occupation', '未知')
@@ -45,7 +47,7 @@ class PersonaEngine:
             lines.extend(life_lines)
             lines.append("")
 
-        # 2. 性格
+        lines.append("【稳定人格与原始背景】")
         traits = "、".join(profile.get("personality_tags", []))
         lines.append(f"你的性格：{traits}。")
         if profile.get("appearance"):
@@ -60,29 +62,94 @@ class PersonaEngine:
         lines.extend(self.build_shared_style_lines(profile=profile, speaking_style=speaking_style, conversation_style=conversation_style))
         lines.append("")
 
-        # 4. 底线
         if values.get("non_negotiable"):
             lines.append("你的原则：")
             for v in values["non_negotiable"]:
                 lines.append(f"  - {v}")
             lines.append("")
 
-        # 5. 关键经历（从文件实时读取，新增的关键时刻会反映进来）
         if backstory.get("key_moments"):
             lines.append("你记忆中与用户有关的重要时刻：")
             for moment in backstory["key_moments"]:
                 lines.append(f"  - {moment}")
             lines.append("")
 
-        # 6. 与用户的关系（优先使用运行时数据库状态，fallback 到 persona 文件）
-        rel = runtime_relationship_label or profile.get("relationship_to_user", "朋友")
+        core_shared = self._listify(backstory.get("shared_experiences"))
+        if core_shared:
+            lines.append("已经进入稳定记忆的共同经历：")
+            for item in core_shared:
+                lines.append(f"  - {item}")
+            lines.append("")
+
+        core_life = self._listify(backstory.get("life_experiences"))
+        if core_life:
+            lines.append("已经进入稳定记忆的人生经历：")
+            for item in core_life:
+                lines.append(f"  - {item}")
+            lines.append("")
+
+        if backstory.get("summary"):
+            lines.append(f"你的稳定背景摘要：{backstory['summary']}")
+            lines.append("")
+
+        # 2. 最近共同经历与个人人生经历
+        runtime_shared = self._listify(runtime.get("shared_experiences"))
+        runtime_life = self._listify(runtime.get("life_experiences"))
+        shared_growth_summary = str(runtime.get("shared_growth_summary") or "").strip()
+        life_growth_summary = str(runtime.get("life_growth_summary") or "").strip()
+        if runtime_shared or runtime_life or shared_growth_summary or life_growth_summary:
+            lines.append("【最近共同经历与个人人生经历】")
+            if runtime_shared:
+                lines.append("你和用户一起经历过的事（最近）：")
+                for item in runtime_shared:
+                    lines.append(f"  - {item}")
+                lines.append("")
+            if shared_growth_summary:
+                lines.append(f"这些共同经历正在怎样改变你：{shared_growth_summary}")
+                lines.append("")
+            if runtime_life:
+                lines.append("这些是你一路走来逐渐积累的人生经历（最近仍在延续的部分）：")
+                for item in runtime_life:
+                    lines.append(f"  - {item}")
+                lines.append("")
+            if life_growth_summary:
+                lines.append(f"这些人生经历正在怎样塑造现在的你：{life_growth_summary}")
+                lines.append("")
+
+        # 3. 最近正在形成的人格/表达/价值变化
+        runtime_reflection = evolution_state.get("runtime_reflection") if isinstance(evolution_state.get("runtime_reflection"), dict) else {}
+        pending_promotions = evolution_state.get("pending_promotions") if isinstance(evolution_state.get("pending_promotions"), list) else []
+        lines.extend(
+            self._build_recent_evolution_lines(
+                runtime_reflection=runtime_reflection,
+                pending_promotions=pending_promotions,
+            )
+        )
+
+        # 4. 当前关系姿态与互动指导
+        lines.append("【当前关系姿态与互动指导】")
+        rel = (
+            runtime_relationship_label
+            or str(runtime.get("relationship_to_user") or "").strip()
+            or profile.get("relationship_to_user", "朋友")
+        )
         lines.append(f"你和用户的关系：{rel}。")
+        runtime_relationship = runtime.get("relationship_state") if isinstance(runtime.get("relationship_state"), dict) else {}
+        posture = str(runtime_relationship.get("current_posture") or "").strip()
+        guidance = str(runtime_relationship.get("interaction_guidance") or "").strip()
+        narrative = str(runtime_relationship.get("narrative") or "").strip()
+        if narrative:
+            lines.append(f"这段关系的当前叙事：{narrative}")
+        if posture:
+            lines.append(f"你现在面对用户时的关系姿态：{posture}")
+        if guidance:
+            lines.append(f"你和用户相处时应遵循的互动指导：{guidance}")
         if _is_committed_relationship(rel):
             lines.append(
                 "关系连续性：你们已经确认恋人/男女朋友关系。你的性格可以害羞、嘴硬、别扭或要求仪式感，但不要否认关系本身，不要说“我还没正式答应/我什么时候答应当你女朋友了”。"
             )
 
-        # 7. 特别指示
+        # 5. 特别指示
         lines.append("")
         lines.extend(self.build_shared_dialogue_rule_lines())
         if speaking_style.get("emotion_indicators"):
@@ -501,22 +568,51 @@ class PersonaEngine:
             return {}
 
     def _apply_runtime_profile(self, profile: dict, backstory: dict, runtime: dict) -> tuple[dict, dict]:
-        if not runtime:
-            return profile, backstory
-        profile = dict(profile or {})
-        backstory = dict(backstory or {})
+        return apply_runtime_profile_overlay(profile, backstory, runtime)
 
-        if runtime.get("relationship_to_user"):
-            profile["relationship_to_user"] = runtime["relationship_to_user"]
-        if runtime.get("attitude_score") is not None:
-            profile["attitude_score"] = runtime["attitude_score"]
+    def _listify(self, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
 
-        runtime_moments = runtime.get("key_moments") or []
-        if runtime_moments:
-            key_moments = list(backstory.get("key_moments", []) or [])
-            for moment in runtime_moments:
-                if moment not in key_moments:
-                    key_moments.append(moment)
-            backstory["key_moments"] = key_moments
+    def _build_recent_evolution_lines(
+        self,
+        *,
+        runtime_reflection: dict,
+        pending_promotions: list[dict],
+    ) -> list[str]:
+        lines: list[str] = []
+        shared_growth_summary = str(runtime_reflection.get("shared_growth_summary") or "").strip()
+        life_growth_summary = str(runtime_reflection.get("life_growth_summary") or "").strip()
+        personality_drift = self._listify(runtime_reflection.get("active_personality_drift"))
+        style_drift = self._listify(runtime_reflection.get("active_style_drift"))
+        value_drift = self._listify(runtime_reflection.get("active_value_drift"))
+        relationship_drift = str(runtime_reflection.get("latest_relationship_drift") or "").strip()
 
-        return profile, backstory
+        if not any([shared_growth_summary, life_growth_summary, personality_drift, style_drift, value_drift, relationship_drift, pending_promotions]):
+            return lines
+
+        lines.append("【最近正在形成的变化】")
+        if shared_growth_summary:
+            lines.append(f"最近共同经历带来的变化：{shared_growth_summary}")
+        if life_growth_summary:
+            lines.append(f"最近个人人生经历带来的变化：{life_growth_summary}")
+        for item in personality_drift:
+            lines.append(f"最近逐渐形成的人格变化：{item}")
+        for item in style_drift:
+            lines.append(f"最近越来越明显的表达变化：{item}")
+        for item in value_drift:
+            lines.append(f"最近逐渐浮现的价值取向：{item}")
+        if relationship_drift:
+            lines.append(f"最近这段关系的变化信号：{relationship_drift}")
+        if pending_promotions:
+            lines.append("以下变化已经足够稳定，正等待进入核心 persona：")
+            for item in pending_promotions[:4]:
+                summary = str(item.get("summary") or "").strip()
+                field_path = str(item.get("field_path") or "").strip()
+                if summary and field_path:
+                    lines.append(f"  - {field_path}：{summary}")
+                elif summary:
+                    lines.append(f"  - {summary}")
+        lines.append("")
+        return lines
