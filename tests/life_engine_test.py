@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 from ai_companion.proactive.life_config import LifeConfig
 from ai_companion.proactive.life_engine import LifeEngine
+from ai_companion.proactive.life_scheduler import LifeScheduler
 from ai_companion.proactive.life_state import LifeEvent, LifeState, MajorLifeEvent
 
 
@@ -140,6 +141,14 @@ class FakeMemory:
     def __init__(self):
         self.session_state = FakeSessionStateStore()
         self.working = FakeWorkingStore()
+
+
+class FakeSchedulerLifeEngine:
+    def __init__(self, local_now: datetime):
+        self._local_now = local_now
+
+    def _get_local_now(self) -> datetime:
+        return self._local_now
 
 
 class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
@@ -297,6 +306,46 @@ class LifeEngineTickTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state.bot_age_days, 10)
             self.assertEqual(status["current_date"], local_now.strftime("%Y-%m-%d"))
             self.assertIn(status["time_of_day"], {"凌晨", "上午", "中午", "下午", "晚上", "白天"})
+
+    def test_life_scheduler_triggers_daily_on_local_date_rollover_in_realtime_mode(self):
+        with TemporaryDirectory(prefix="life-scheduler-local-rollover-") as td:
+            state = LifeState("scheduler_rollover_bot", Path(td))
+            state.current_date = "2026-06-06"
+            state.last_daily_tick = datetime(2026, 6, 6, 18, 30, 0)
+            cfg = LifeConfig(
+                daily_interval_seconds=86400,
+                major_interval_seconds=604800,
+                time_ratio=1,
+                sync_with_local_time_when_realtime=True,
+            )
+            local_now = datetime(2026, 6, 7, 11, 12, 43).astimezone()
+            scheduler = LifeScheduler(FakeSchedulerLifeEngine(local_now), cfg, state)
+            scheduler._get_now = lambda: datetime(2026, 6, 7, 11, 12, 43)
+
+            should_run, reason = scheduler._should_run_daily(scheduler._get_now())
+
+            self.assertTrue(should_run)
+            self.assertIn("local_date_rollover", reason)
+
+    def test_life_scheduler_does_not_use_local_rollover_when_sync_disabled(self):
+        with TemporaryDirectory(prefix="life-scheduler-interval-mode-") as td:
+            state = LifeState("scheduler_interval_bot", Path(td))
+            state.current_date = "2026-06-06"
+            state.last_daily_tick = datetime(2026, 6, 7, 6, 30, 0)
+            cfg = LifeConfig(
+                daily_interval_seconds=86400,
+                major_interval_seconds=604800,
+                time_ratio=1,
+                sync_with_local_time_when_realtime=False,
+            )
+            local_now = datetime(2026, 6, 7, 11, 12, 43).astimezone()
+            scheduler = LifeScheduler(FakeSchedulerLifeEngine(local_now), cfg, state)
+            scheduler._get_now = lambda: datetime(2026, 6, 7, 11, 12, 43)
+
+            should_run, reason = scheduler._should_run_daily(scheduler._get_now())
+
+            self.assertFalse(should_run)
+            self.assertEqual(reason, "not_due")
 
     def test_stale_current_activity_is_hidden_from_prompt_status(self):
         with TemporaryDirectory(prefix="life-stale-activity-") as td:
