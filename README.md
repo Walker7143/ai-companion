@@ -129,6 +129,22 @@ ai-companion memory rebuild-vector
 ai-companion memory rebuild-vector --bot <bot_id>
 ```
 
+### 数据迁移
+
+在旧机器上打包完整运行时数据：
+
+```bash
+ai-companion migrate export -o ai-companion-migration.zip
+```
+
+在新机器完成安装后恢复：
+
+```bash
+ai-companion migrate import ai-companion-migration.zip
+```
+
+迁移包默认包含 `~/.ai-companion/config/`、`~/.ai-companion/data/`、`.env` 以及平台配对状态文件；默认排除日志、PID、锁文件、源码缓存和旧迁移备份。恢复时如果目标机器已有同名文件，会先自动备份到 `~/.ai-companion/migration-backups/` 再覆盖。迁移包可能包含 API key、聊天记忆和平台凭据，请按私密备份保存。
+
 ### 微信配置
 
 ```bash
