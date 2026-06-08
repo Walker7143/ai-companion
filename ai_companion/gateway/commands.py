@@ -271,6 +271,9 @@ class GatewayCommandHandler:
             f"- 情景记忆条数: {status.get('episodic_count', 0)}",
             f"- 语义记忆事实数: {status.get('fact_count', 0)}",
         ]
+        authority = status.get("memory_authority") or {}
+        if authority:
+            lines.append(f"- 记忆身份策略: 单主人记忆 ({authority.get('owner_user_id') or 'default_user'})")
         relationship = status.get("relationship") or {}
         if relationship:
             lines.append(
@@ -279,6 +282,33 @@ class GatewayCommandHandler:
             )
 
         trust = status.get("memory_trust_view") or {}
+        scene = trust.get("scene_capsule") or status.get("scene_capsule") or {}
+        if scene.get("active"):
+            scene_parts = []
+            if scene.get("location"):
+                scene_parts.append(f"地点={scene.get('location')}")
+            if scene.get("activity"):
+                scene_parts.append(f"活动={scene.get('activity')}")
+            if scene.get("next_action"):
+                scene_parts.append(f"下一步={scene.get('next_action')}")
+            if scene_parts:
+                lines.append(f"- 当前场景: {'；'.join(scene_parts)}")
+
+        layered = status.get("memory_layers") or {}
+        if layered:
+            lines.append("")
+            lines.append("记忆分层:")
+            for key, title in [
+                ("authority", "权威记忆"),
+                ("projection", "派生投影与索引"),
+                ("operations", "整理/维护操作"),
+                ("explainability", "解释与诊断"),
+            ]:
+                item = layered.get(key) or {}
+                summary = item.get("summary") or ""
+                if summary:
+                    lines.append(f"- {title}: {summary}")
+
         anchor = trust.get("relationship_anchor") or {}
         if anchor.get("narrative"):
             lines.append("")

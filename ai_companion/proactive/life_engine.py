@@ -24,11 +24,13 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Any
 
 from ..temporal_guard import (
+    build_generation_time_constraints,
     compatible_templates_for_current_time,
     is_event_visible_at_current_time,
     scenario_has_compatible_template,
 )
 from ..memory.session_state import get_scene_snapshot
+from ..memory.scene_authority import categorize_scene_text
 from ..persona.runtime_profile import (
     dedupe_runtime_items,
     load_runtime_profile,
@@ -36,6 +38,7 @@ from ..persona.runtime_profile import (
     runtime_profile_path_from_persona_dir,
     write_runtime_profile,
 )
+from .life_impact import LifeImpact, LifeImpactEngine
 
 if TYPE_CHECKING:
     from ..model.minimax_adapter import MiniMaxAdapter
@@ -466,6 +469,7 @@ class LifeEngine:
         self._persona_loader = None
         self._personality_type = "默认"
         self._latest_relationship_state: dict[str, Any] = {}
+        self.impact_engine = LifeImpactEngine()
 
     def set_model(self, model: "MiniMaxAdapter"):
         self.model = model
@@ -961,6 +965,7 @@ class LifeEngine:
             self.state.bot_current_activity = self._activity_summary_for_event(event)
             self.state.add_event(event)
             await self._sync_runtime_experience_from_event(event, "daily")
+            await self.apply_life_event_impact(event, major=False)
             self.state.prune_events(self.config.max_events, self.config.max_context_bits)
             await self._index_life_state_memory()
             logger.info(f"[LifeEngine] 生成日常事件: {event.description}")
@@ -1085,6 +1090,7 @@ class LifeEngine:
             self.state.add_major_event(event)
             await self._sync_runtime_experience_from_event(event, "major")
             self._mark_unexpected_event_if_needed(event)
+            await self.apply_life_event_impact(event, major=True)
             await self._apply_major_event(event)
             await self._index_life_state_memory()
             logger.info(f"[LifeEngine] 生成人生大事: {event.description}")
@@ -1219,6 +1225,114 @@ class LifeEngine:
                 f"（{self.state.day_of_week or '周一'}，{time_of_day}）"
             ),
         }
+
+    def build_life_anchor(self, now: Optional[datetime] = None) -> dict:
+        """Return the bot's current self-life anchor for generation."""
+        if self._should_sync_realtime_with_local_time():
+            self._sync_state_to_local_now(persist=False)
+        status = self.get_status()
+        recent_life = status.get("recent_life_events") or []
+        recent_major = status.get("recent_major_life_events") or []
+        recent_impacts = self.state.recent_impacts[-5:]
+        current_activity = status.get("bot_current_activity") or ""
+        bot_mood = status.get("bot_mood") or self.state.bot_mood
+        current_datetime = status.get("current_datetime_text") or ""
+        profile_summary = self._daily_life_profile_summary()
+        summary_parts = [
+            f"时间：{current_datetime}" if current_datetime else "",
+            f"心情：{bot_mood}" if bot_mood else "",
+            f"正在：{current_activity}" if current_activity else "",
+            f"生活画像：{profile_summary}" if profile_summary and profile_summary != "未配置" else "",
+        ]
+        if recent_life:
+            summary_parts.append("近期生活：" + "；".join(str(item.get("description") or "") for item in recent_life[-2:]))
+        if recent_major:
+            summary_parts.append("近期大事：" + "；".join(str(item.get("description") or "") for item in recent_major[-1:]))
+        constraints = build_generation_time_constraints(status)
+        return {
+            "summary": "；".join(item for item in summary_parts if item),
+            "bot_mood": bot_mood,
+            "interaction_mood": status.get("interaction_mood") or "",
+            "bot_current_activity": current_activity,
+            "daily_life_profile": profile_summary,
+            "emotional_state": self.state.emotional_state,
+            "personality_drift": self.state.personality_drift,
+            "life_chapter_summary": self.state.life_chapter_summary,
+            "recent_impacts": recent_impacts,
+            "recent_life_events": recent_life,
+            "recent_major_life_events": recent_major,
+            "current_date": status.get("current_date"),
+            "current_datetime_text": current_datetime,
+            "life_stage": status.get("life_stage"),
+            "time_constraints": constraints,
+            "constraints": [
+                item for item in [
+                    constraints,
+                    "Bot 当前生活锚点只描述 Bot 自己，不代表用户正在做什么。",
+                    "旧生活事件不能覆盖最近真实对话现场。",
+                ] if item
+            ],
+        }
+
+    async def process_turn_impact(
+        self,
+        *,
+        user_input: str,
+        bot_output: str,
+        session_id: str = "",
+        user_id: str = "default_user",
+        relationship_state: dict[str, Any] | None = None,
+        turn_signals: dict[str, Any] | None = None,
+    ) -> dict:
+        """Evaluate and apply how a user turn affects the bot's life state."""
+        impact = self.impact_engine.evaluate_turn_impact(
+            user_input=user_input,
+            bot_output=bot_output,
+            current_mood=self.state.bot_mood,
+            relationship_state=relationship_state or self._latest_relationship_state,
+            session_id=session_id,
+            turn_signals=turn_signals,
+        )
+        return await self.apply_impact(impact, session_id=session_id, user_id=user_id)
+
+    async def apply_life_event_impact(self, event: Any, *, major: bool = False) -> dict:
+        impact = self.impact_engine.evaluate_life_event_impact(event=event, major=major)
+        return await self.apply_impact(
+            impact,
+            session_id=str(getattr(event, "id", "") or ""),
+            user_id=getattr(self.memory, "user_id", "default_user") if self.memory else "default_user",
+        )
+
+    async def apply_impact(
+        self,
+        impact: LifeImpact,
+        *,
+        session_id: str = "",
+        user_id: str = "default_user",
+    ) -> dict:
+        result = await self.impact_engine.apply_impact(
+            impact=impact,
+            life_state=self.state,
+            memory=self.memory,
+            bot_id=self.bot_id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if impact.persona_patch_candidate:
+            self._update_life_chapter_summary(impact)
+        return result
+
+    def _update_life_chapter_summary(self, impact: LifeImpact):
+        summary = str(impact.summary or "").strip()
+        if not summary:
+            return
+        existing = self.state.life_chapter_summary
+        if summary in existing:
+            return
+        if existing:
+            self.state.life_chapter_summary = f"{existing}；{summary}"
+        else:
+            self.state.life_chapter_summary = summary
 
     def _get_season_info(self) -> dict:
         """获取当前季节信息"""
@@ -1463,6 +1577,7 @@ class LifeEngine:
 
         self.state.add_major_event(event)
         await self._sync_runtime_experience_from_event(event, "milestone")
+        await self.apply_life_event_impact(event, major=True)
         await self._apply_major_event(event)
         await self._index_life_state_memory()
         logger.info(f"[LifeEngine] 里程碑事件: {event_description} at age {milestone_age}")
@@ -1508,6 +1623,7 @@ class LifeEngine:
         triggered.append(birthday_key)
         self.state._state["_triggered_birthdays"] = triggered
         self.state.save()
+        await self.apply_life_event_impact(event, major=True)
         await self._index_life_state_memory()
         logger.info(f"[LifeEngine] 生日事件: {age}岁生日")
 

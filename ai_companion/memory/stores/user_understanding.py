@@ -1138,11 +1138,40 @@ _NON_UNDERSTANDING_CATEGORIES = {
 }
 
 
+_STABLE_UNDERSTANDING_CATEGORIES = {
+    "identity",
+    "life_context",
+    "goals",
+    "routines",
+    "preferences",
+    "dislikes",
+    "important_people",
+    "communication_style",
+    "boundaries",
+    "relationship_expectations",
+    *UserUnderstandingStore.SECTIONS,
+    *UserUnderstandingStore.AUTO_DEEP_SECTIONS,
+    *UserUnderstandingStore.RELATIONSHIP_SECTIONS,
+}
+
+
+_AMBIGUOUS_AUTO_FACT_CATEGORIES = {
+    "",
+    "general",
+    "current_context",
+    "open_threads",
+}
+
+
 def _is_auto_projection_noise(category: Any, key: Any, value: Any) -> bool:
     category_text = str(category or "").strip()
     if category_text in _NON_UNDERSTANDING_CATEGORIES:
         return True
-    return _looks_like_time_scoped_directive(f"{key} {value}")
+    if category_text in _STABLE_UNDERSTANDING_CATEGORIES:
+        return False
+    if category_text in _AMBIGUOUS_AUTO_FACT_CATEGORIES:
+        return _looks_like_time_scoped_directive(f"{key} {value}")
+    return False
 
 
 def _looks_like_time_scoped_directive(text: str) -> bool:
@@ -1150,7 +1179,7 @@ def _looks_like_time_scoped_directive(text: str) -> bool:
     if not normalized:
         return False
     temporal = (
-        "今天", "今晚", "明天", "现在", "马上", "等会", "等下", "待会", "一会",
+        "今天", "今晚", "明天", "现在", "马上", "等会", "等下", "待会",
         "这次", "本轮", "刚才", "刚刚", "临时",
     )
     directive = (

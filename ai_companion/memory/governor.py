@@ -94,10 +94,6 @@ class MemoryGovernor:
         session_id: str,
         result: GovernorResult,
     ):
-        if candidate.confidence < self.MIN_FACT_CONFIDENCE:
-            result.skipped.append((candidate, "low_confidence"))
-            return
-
         if self.user_understanding.has_manual_key(candidate.key, candidate.category):
             # User-authored understanding wins. Keep the raw fact out of prompt
             # by archiving it as conflict evidence instead of overwriting.
@@ -114,6 +110,9 @@ class MemoryGovernor:
             result.skipped.append((candidate, decision.skip_reason))
             return
         candidate = decision.candidate
+        if candidate.confidence < self.MIN_FACT_CONFIDENCE:
+            result.skipped.append((candidate, "low_confidence"))
+            return
 
         expires_at = None
         if candidate.ttl_days:

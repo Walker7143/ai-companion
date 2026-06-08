@@ -18,7 +18,6 @@
 import asyncio
 import json
 import logging
-import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +53,7 @@ from .session_state import (
     SessionStateResolver,
     SessionStateStore,
     get_scene_snapshot,
+    extract_scene_summary,
 )
 from ..context.tokenizer import TokenEstimator
 from ..persona.evolution import PersonaEvolutionEngine
@@ -288,14 +288,25 @@ class MemoryEngine:
             session_id=sid,
         )
         logger.info(f"[Memory]  load_context 召回语义记忆: {retrieved.semantic_facts}")
-        retrieved.activation_plan = self.activation_planner.build(retrieved, current_input)
-        conscious = self.conscious_builder.build(retrieved, current_input)
+        awareness = await self.build_awareness(current_input, retrieved=retrieved)
+        retrieved = awareness["retrieved"]
+        conscious = awareness["conscious"]
         suffix, prompt_budget_diagnostics = self.prompt_builder.build_with_diagnostics(retrieved, conscious=conscious)
+        scene_capsule = self._build_scene_capsule(retrieved.session_state)
+        memory_authority = self._build_memory_authority(retrieved, scene_capsule=scene_capsule)
+        memory_decision_trace = self._build_memory_decision_trace(
+            retrieved,
+            conscious=conscious,
+            prompt_budget_diagnostics=prompt_budget_diagnostics,
+            scene_capsule=scene_capsule,
+        )
         diagnostics = self._build_prompt_diagnostics(
             retrieved=retrieved,
             system_suffix=suffix,
             conscious=conscious,
             prompt_budget_diagnostics=prompt_budget_diagnostics,
+            scene_capsule=scene_capsule,
+            memory_decision_trace=memory_decision_trace,
         )
         logger.info("[Memory] prompt diagnostics: %s", diagnostics)
 
@@ -308,11 +319,15 @@ class MemoryEngine:
             "relationship_state": retrieved.relationship_state,
             "daily_context": retrieved.daily_context,
             "session_state": retrieved.session_state,
+            "scene_capsule": scene_capsule,
             "memory_intent": retrieved.intent,
             "user_understanding": self.user_understanding.load(),
+            "memory_authority": memory_authority,
+            "memory_decision_trace": memory_decision_trace,
             "memory_activation_plan": retrieved.activation_plan.to_dict() if retrieved.activation_plan else {},
             "continuity_contract": retrieved.continuity_contract.to_dict() if retrieved.continuity_contract else {},
             "conscious_context": conscious.to_dict(),
+            "memory_awareness": awareness["awareness"],
             "memory_prompt_diagnostics": diagnostics,
             "evolution_diagnostics": self.evolution.get_diagnostics(),
             "evolution_refs": self.evolution.get_link_refs(limit=4),
@@ -323,7 +338,43 @@ class MemoryEngine:
                 "daily_commitments": retrieved.daily_context.get("commitments", []) if isinstance(retrieved.daily_context, dict) else [],
                 "relationship_label": retrieved.relationship_state.get("relationship_label") if isinstance(retrieved.relationship_state, dict) else None,
                 "relationship_status": retrieved.relationship_state.get("relationship_status") if isinstance(retrieved.relationship_state, dict) else None,
+                "scene_capsule": scene_capsule,
             },
+        }
+
+    async def build_awareness(
+        self,
+        current_input: str,
+        *,
+        intent: str | None = None,
+        retrieved=None,
+    ) -> dict[str, Any]:
+        """Build the few memory lines that should feel active this turn."""
+        if retrieved is None:
+            sid = self._session_id or self.working.current_session
+            retrieved = await self.retriever.retrieve(
+                current_input,
+                bot_id=self.bot_id,
+                user_id=self.user_id,
+                session_id=sid,
+                intent=intent,
+            )
+        retrieved.activation_plan = self.activation_planner.build(retrieved, current_input)
+        conscious = self.conscious_builder.build(retrieved, current_input)
+        awareness = {
+            "intent": retrieved.intent,
+            "current_focus": conscious.current_focus,
+            "emotional_read": conscious.emotional_read,
+            "relationship_posture": conscious.relationship_posture,
+            "active_memories": conscious.active_memory_details or conscious.active_memories,
+            "avoid": conscious.avoid,
+            "recall_style": conscious.recall_style,
+            "activation_strategy": retrieved.activation_plan.strategy if retrieved.activation_plan else "",
+        }
+        return {
+            "retrieved": retrieved,
+            "conscious": conscious,
+            "awareness": awareness,
         }
 
     async def on_message(self, user_input: str, llm_output: str, turn_context: MemoryTurnContext | dict | None = None):
@@ -565,7 +616,7 @@ class MemoryEngine:
             user_input=user_input,
             conversation_context=conversation_context,
         )
-        if user_scene_match is not None:
+        if user_scene_match is not None or _has_user_explicit_scene_diff(diff):
             return diff
 
         filtered_upserts = []
@@ -575,6 +626,7 @@ class MemoryEngine:
                 filtered_upserts.append(item)
                 continue
             scope = str(item.get("scope") or "").strip()
+            predicate = str(item.get("predicate") or "").strip()
             if scope == "current_scene" or scope.startswith("current_scene/"):
                 filtered_any = True
                 continue
@@ -712,6 +764,7 @@ class MemoryEngine:
         current_session = self._session_id or self.working.current_session
         if current_session:
             active_session_states = [state.to_dict() for state in await self.session_state.list_active_states(current_session)]
+        scene_capsule = self._build_scene_capsule(active_session_states)
 
         trust_view = self._build_memory_trust_view(
             facts=facts,
@@ -721,6 +774,7 @@ class MemoryEngine:
             fact_history=fact_history,
             lifecycle_events=lifecycle_events,
             session_state=active_session_states,
+            scene_capsule=scene_capsule,
         )
         continuity_contract = self.continuity_contract_builder.build(
             current_input="",
@@ -737,6 +791,31 @@ class MemoryEngine:
         )
         relationship_projection = self.relationship_projection.build_projection(relationship or {})
 
+        memory_layers = self._build_status_memory_layers(
+            working_turns=turn_count,
+            daily_messages=daily_messages,
+            daily_days=daily_days,
+            session_state=active_session_states,
+            fact_count=fact_count,
+            episodic_count=episodic_count,
+            relationship=relationship,
+            vector_count=vector_count,
+            rollup_count=rollup_count,
+            dreaming_status=await self.dreaming.status(),
+            scene_capsule=scene_capsule,
+        )
+        status_authority = {
+            "mode": "single_owner",
+            "owner_user_id": self.user_id or "default_user",
+            "summary": "当前安装按单主人记忆运行；default_user 是 owner profile 的内部标识。",
+            "policy": [
+                "short_term_state_overrides_long_term_recall",
+                "manual_user_understanding_overrides_auto_fact",
+                "committed_relationship_overrides_single_turn_tone",
+                "vector_and_rollup_are_retrieval_hints_not_authority",
+            ],
+        }
+
         return {
             "session_id": sid,
             "working_turns": turn_count,
@@ -752,6 +831,9 @@ class MemoryEngine:
             "daily_open_threads": daily_context.get("open_threads", []) if isinstance(daily_context, dict) else [],
             "daily_commitments": daily_context.get("commitments", []) if isinstance(daily_context, dict) else [],
             "memory_trust_view": trust_view,
+            "memory_layers": memory_layers,
+            "memory_authority": status_authority,
+            "scene_capsule": scene_capsule,
             "continuity_contract": continuity_contract.to_dict(),
             "relationship_projection": relationship_projection,
             "evolution_refs": self.evolution.get_link_refs(limit=4),
@@ -760,7 +842,7 @@ class MemoryEngine:
             "user_understanding_path": str(self.user_understanding.path),
             "user_understanding_auto_facts": self.user_understanding.auto_fact_count(),
             "health": health,
-            "dreaming": await self.dreaming.status(),
+            "dreaming": memory_layers.get("operations", {}).get("dreaming", {}),
         }
 
     def _build_memory_trust_view(
@@ -773,6 +855,7 @@ class MemoryEngine:
         fact_history: list[dict],
         lifecycle_events: list[dict],
         session_state: list[dict],
+        scene_capsule: dict | None = None,
     ) -> dict:
         recent_facts = sorted(
             [fact for fact in facts if not fact.get("archived")],
@@ -867,6 +950,7 @@ class MemoryEngine:
                 }
                 for item in (session_state or [])[:8]
             ],
+            "scene_capsule": scene_capsule or {},
             "pending_confirmation": [_fact_view_item(fact) for fact in pending[:8]],
             "corrected_memories": [
                 {
@@ -890,6 +974,64 @@ class MemoryEngine:
             ],
             "open_threads": list(daily_context.get("open_threads") or [])[:6] if isinstance(daily_context, dict) else [],
             "commitments": list(daily_context.get("commitments") or [])[:6] if isinstance(daily_context, dict) else [],
+        }
+
+    def _build_status_memory_layers(
+        self,
+        *,
+        working_turns: int,
+        daily_messages: int,
+        daily_days: int,
+        session_state: list[dict],
+        fact_count: int,
+        episodic_count: int,
+        relationship: dict,
+        vector_count: int,
+        rollup_count: int,
+        dreaming_status: dict,
+        scene_capsule: dict,
+    ) -> dict:
+        relationship_label = relationship.get("relationship_label") if isinstance(relationship, dict) else ""
+        return {
+            "authority": {
+                "summary": (
+                    f"短期 working={working_turns} 轮，daily={daily_messages} 条/{daily_days} 天，"
+                    f"session_state={len(session_state)} 条；长期 semantic={fact_count} 条，"
+                    f"episodic={episodic_count} 条，relationship={relationship_label or '未标注'}。"
+                ),
+                "short_term": {
+                    "working_turns": working_turns,
+                    "daily_messages": daily_messages,
+                    "daily_days": daily_days,
+                    "session_state_count": len(session_state),
+                    "scene_active": bool(scene_capsule.get("active")),
+                },
+                "long_term": {
+                    "semantic_fact_count": fact_count,
+                    "episodic_count": episodic_count,
+                    "relationship_label": relationship_label,
+                },
+            },
+            "projection": {
+                "summary": f"UserUnderstanding 为长期理解投影，vector={vector_count} 条索引，rollup={rollup_count} 条摘要。",
+                "user_understanding": {
+                    "path": str(self.user_understanding.path),
+                    "auto_fact_count": self.user_understanding.auto_fact_count(),
+                    "role": "editable_projection",
+                },
+                "vector_index": {"count": vector_count, "role": "retrieval_index"},
+                "rollups": {"count": rollup_count, "role": "summary_projection"},
+            },
+            "operations": {
+                "summary": "Governor 写入权威层；Maintenance 做轻量维护；Dreaming 是用户可见整理操作。",
+                "dreaming": dreaming_status or {},
+            },
+            "explainability": {
+                "summary": "Trust View 解释当前状态；Dreaming Report 解释单次整理；Prompt diagnostics 解释本轮注入。",
+                "trust_view": True,
+                "prompt_diagnostics": True,
+                "scene_capsule": bool(scene_capsule.get("active")),
+            },
         }
 
     async def forget_fact(self, key: str):
@@ -1109,7 +1251,117 @@ class MemoryEngine:
             },
         )
 
-    def _build_prompt_diagnostics(self, *, retrieved, system_suffix: str, conscious, prompt_budget_diagnostics: dict | None = None) -> dict:
+    def _build_scene_capsule(self, session_state: list | None) -> dict:
+        scene = extract_scene_summary(session_state or [])
+        if not scene:
+            return {
+                "active": False,
+                "location": "",
+                "activity": "",
+                "next_action": "",
+                "spatial": "",
+                "state_count": 0,
+                "hard_constraint_ready": False,
+            }
+        return {
+            "active": True,
+            "location": scene.get("location") or "",
+            "activity": scene.get("activity") or "",
+            "next_action": scene.get("next_action") or "",
+            "spatial": scene.get("spatial") or "",
+            "states": scene.get("states") or [],
+            "state_count": len(scene.get("states") or []),
+            "hard_constraint_ready": bool(scene.get("should_anchor_generation")),
+        }
+
+    def _build_memory_authority(self, retrieved, *, scene_capsule: dict) -> dict:
+        semantic_items = getattr(retrieved, "semantic_items", []) or []
+        relationship = getattr(retrieved, "relationship_state", {}) or {}
+        return {
+            "mode": "single_owner",
+            "owner_user_id": self.user_id or "default_user",
+            "policy": [
+                "short_term_state_overrides_long_term_recall",
+                "manual_user_understanding_overrides_auto_fact",
+                "committed_relationship_overrides_single_turn_tone",
+                "vector_and_rollup_are_retrieval_hints_not_authority",
+            ],
+            "layers": {
+                "short_term_authority": {
+                    "priority": 1,
+                    "sources": ["working", "daily", "session_state"],
+                    "working_message_count": sum(1 for item in getattr(retrieved, "working_history", []) or [] if isinstance(item, dict) and item.get("role") != "system"),
+                    "daily_recent_message_count": len((getattr(retrieved, "daily_context", {}) or {}).get("recent_messages") or []),
+                    "session_state_count": len(getattr(retrieved, "session_state", []) or []),
+                    "scene_active": bool(scene_capsule.get("active")),
+                },
+                "long_term_authority": {
+                    "priority": 2,
+                    "sources": ["semantic", "relationship", "episodic"],
+                    "semantic_item_count": len(semantic_items),
+                    "relationship_label": relationship.get("relationship_label") if isinstance(relationship, dict) else "",
+                    "episodic_count": len(getattr(retrieved, "episodic_recall", []) or []),
+                },
+                "derived_projection": {
+                    "priority": 3,
+                    "sources": ["user_understanding", "vector_index", "rollups"],
+                    "vector_recall_count": len(getattr(retrieved, "vector_recall", []) or []),
+                    "rollup_count": len(getattr(retrieved, "rollup_recall", []) or []),
+                    "user_understanding_projection": True,
+                },
+                "turn_activation": {
+                    "priority": 4,
+                    "sources": ["activation_plan", "conscious_context", "prompt_builder"],
+                    "active_memory_count": len(getattr(getattr(retrieved, "activation_plan", None), "active_memories", []) or []),
+                },
+            },
+        }
+
+    def _build_memory_decision_trace(
+        self,
+        retrieved,
+        *,
+        conscious,
+        prompt_budget_diagnostics: dict | None,
+        scene_capsule: dict,
+    ) -> dict:
+        activation = getattr(retrieved, "activation_plan", None)
+        active_items = [item.to_dict() for item in getattr(activation, "active_memories", []) or []]
+        background_items = [item.to_dict() for item in getattr(activation, "background_items", []) or []]
+        prompt_blocks = (prompt_budget_diagnostics or {}).get("blocks", {})
+        return {
+            "intent": getattr(retrieved, "intent", ""),
+            "selected_for_prompt": active_items,
+            "background_not_selected": background_items[:8],
+            "source_counts": getattr(activation, "source_counts", {}) if activation else {},
+            "strategy": getattr(activation, "strategy", "") if activation else "",
+            "prompt_blocks": {
+                name: {
+                    "budget_chars": info.get("budget_chars"),
+                    "final_body_chars": info.get("final_body_chars"),
+                    "truncated": bool(info.get("truncated")),
+                }
+                for name, info in prompt_blocks.items()
+                if isinstance(info, dict)
+            },
+            "scene": {
+                "active": bool(scene_capsule.get("active")),
+                "hard_constraint_ready": bool(scene_capsule.get("hard_constraint_ready")),
+                "vector_and_rollup_are_demotable": bool(scene_capsule.get("active")),
+            },
+            "conscious_active_count": len(getattr(conscious, "active_memory_details", []) or []),
+        }
+
+    def _build_prompt_diagnostics(
+        self,
+        *,
+        retrieved,
+        system_suffix: str,
+        conscious,
+        prompt_budget_diagnostics: dict | None = None,
+        scene_capsule: dict | None = None,
+        memory_decision_trace: dict | None = None,
+    ) -> dict:
         daily = retrieved.daily_context or {}
         daily_summaries = daily.get("summaries") if isinstance(daily.get("summaries"), list) else []
         daily_messages = daily.get("recent_messages") if isinstance(daily.get("recent_messages"), list) else []
@@ -1184,7 +1436,15 @@ class MemoryEngine:
             "vector_recall_count": len(getattr(retrieved, "vector_recall", []) or []),
             "vector_recall_sources": _vector_recall_source_counts(getattr(retrieved, "vector_recall", []) or []),
             "vector_recall_top": _vector_recall_top_items(getattr(retrieved, "vector_recall", []) or []),
+            "scene_capsule_active": bool((scene_capsule or {}).get("active")),
+            "scene_hard_constraint_ready": bool((scene_capsule or {}).get("hard_constraint_ready")),
+            "scene_next_action": (scene_capsule or {}).get("next_action") or "",
+            "scene_filter_demotes_vector_rollup": bool((scene_capsule or {}).get("active")),
         }
+        if scene_capsule:
+            diagnostics["scene_capsule"] = scene_capsule
+        if memory_decision_trace:
+            diagnostics["memory_decision_trace"] = memory_decision_trace
         if prompt_budget_diagnostics:
             diagnostics["prompt_budget"] = prompt_budget_diagnostics
             diagnostics["prompt_block_count"] = len(prompt_budget_diagnostics.get("blocks", {}))
@@ -1375,6 +1635,28 @@ def _understanding_sensitivity(section_path: str) -> str:
     if any(cue in path for cue in ("sensitive", "boundaries", "stressors", "trauma", "health")):
         return "sensitive"
     return "normal"
+
+
+def _has_user_explicit_scene_diff(diff: SessionStateDiff) -> bool:
+    for item in diff.upserts:
+        if not isinstance(item, dict):
+            continue
+        scope = str(item.get("scope") or "").strip()
+        if scope != "current_scene" and not scope.startswith("current_scene/"):
+            continue
+        if str(item.get("source_kind") or "").strip() != "user_explicit":
+            continue
+        predicate = str(item.get("predicate") or "").strip()
+        if predicate in {
+            "current_location",
+            "location",
+            "current_activity",
+            "activity_type",
+            "next_action",
+            "spatial_relationship",
+        }:
+            return True
+    return False
 
 
 def _jsonish_list(value: object) -> list[str]:

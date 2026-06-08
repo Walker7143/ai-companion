@@ -11,11 +11,13 @@ import json
 import logging
 import random
 import re
+import inspect
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from ..bot.response_style import ResponseStylePolisher
+from ..generation import GenerationContextBuilder
 from ..memory.retriever import RetrievedMemory
 from ..persona.engine import PersonaEngine
 from ..persona.loader import PersonaLoader
@@ -420,6 +422,15 @@ class ProactiveDecision:
         self.urgency = urgency
 
 
+class _SimpleProactiveMotive:
+    def __init__(self, *, motive_type: str, reason: str):
+        self.type = motive_type
+        self.priority = 0
+        self.reason = reason
+        self.prompt_context = ""
+        self.metadata = {}
+
+
 class ProactiveEngine:
     """主动唤醒引擎"""
 
@@ -439,6 +450,7 @@ class ProactiveEngine:
         self.memory = memory
         self.personality_type = personality_type
         self.response_polisher = ResponseStylePolisher()
+        self.generation_context_builder = GenerationContextBuilder()
         self._scheduler_task = None
         self._platform_sender = None  # 设置为主动消息发送回调
         self._next_record_context: dict | None = None
@@ -1207,6 +1219,9 @@ class ProactiveEngine:
 
     async def _build_aligned_user_memory_context(self, current_input: str, *, motive=None) -> str:
         blocks: list[str] = []
+        contract_text = await self._build_generation_contract_prompt(current_input, motive=motive)
+        if contract_text:
+            blocks.append(contract_text)
         base_context = await self._build_context(
             max_chars=PROACTIVE_GENERATION_CONTEXT_CHARS if motive is None else None
         )
@@ -1224,6 +1239,42 @@ class ProactiveEngine:
             if proactive_context:
                 blocks.append(proactive_context)
         return "\n\n".join(block for block in blocks if block).strip()
+
+    async def _build_generation_contract_prompt(self, current_input: str, *, motive=None) -> str:
+        try:
+            life_anchor = {}
+            life_engine = getattr(self, "life_engine", None)
+            if life_engine is not None and hasattr(life_engine, "build_life_anchor"):
+                life_anchor = life_engine.build_life_anchor()
+
+            relationship_state = {}
+            if self.memory is not None and hasattr(self.memory, "relationship"):
+                relationship_state = await self.memory.relationship.get_state(
+                    bot_id=getattr(self.memory, "bot_id", self.bot_id),
+                    user_id=getattr(self.memory, "user_id", "default_user"),
+                )
+
+            memory_awareness = {}
+            if self.memory is not None and hasattr(self.memory, "build_awareness"):
+                awareness_payload = await self.memory.build_awareness(
+                    current_input or str(getattr(motive, "reason", "") or "主动联系"),
+                    intent="proactive_generation",
+                )
+                memory_awareness = awareness_payload.get("awareness") or {}
+
+            scene_anchor = self._recent_scene_anchor_data()
+            scene_text = self._format_recent_scene_anchor(scene_anchor, for_generation=True)
+            contract = self.generation_context_builder.build_proactive_contract(
+                motive=motive,
+                memory_awareness=memory_awareness,
+                life_anchor=life_anchor,
+                scene_anchor={"summary": scene_text},
+                relationship_state=relationship_state,
+            )
+            return contract.render_for_prompt()
+        except Exception as exc:
+            logger.debug("[ProactiveEngine] 构建主动生成合同失败: %s", exc)
+            return ""
 
     def _task_session_recent_context(self, motive: "ProactiveMotive", *, turns: int = 3) -> list[dict]:
         if not self.memory or not getattr(self.memory, "working", None):
@@ -1301,6 +1352,35 @@ class ProactiveEngine:
         )
 
     def _build_current_life_anchor_context(self) -> str:
+        life_engine = getattr(self, "life_engine", None)
+        if life_engine is not None and hasattr(life_engine, "build_life_anchor"):
+            try:
+                anchor = life_engine.build_life_anchor()
+                lines: list[str] = []
+                summary = str(anchor.get("summary") or "").strip()
+                if summary:
+                    lines.append(summary)
+                time_constraints = str(anchor.get("time_constraints") or "").strip()
+                if time_constraints:
+                    lines.append(time_constraints)
+                recent_impacts = anchor.get("recent_impacts") if isinstance(anchor.get("recent_impacts"), list) else []
+                impact_lines = [
+                    str(item.get("summary") or "")[:80]
+                    for item in recent_impacts[-3:]
+                    if isinstance(item, dict) and item.get("summary")
+                ]
+                if impact_lines:
+                    lines.append("近期影响：" + "；".join(impact_lines))
+                constraints = anchor.get("constraints") if isinstance(anchor.get("constraints"), list) else []
+                for item in constraints:
+                    text = str(item or "").strip()
+                    if text and text not in lines:
+                        lines.append(text)
+                if lines:
+                    return "\n".join(lines)
+            except Exception as exc:
+                logger.debug("[ProactiveEngine] build_life_anchor failed, fallback to profile anchor: %s", exc)
+
         profile = self._current_life_profile()
         if not profile:
             return "未配置；主动消息不要凭空新编具体地点、公司、办公室、同事或客户场景。"
@@ -1585,6 +1665,17 @@ class ProactiveEngine:
             max_chars=PROACTIVE_GENERATION_CONTEXT_CHARS,
             recent_scene_anchor=recent_scene_anchor,
         )
+        contract_text = await self._build_generation_contract_prompt(
+            reason or "想和用户聊天",
+            motive=_SimpleProactiveMotive(
+                motive_type=motive_type,
+                reason=reason or "想和用户聊天",
+            ),
+        )
+        if contract_text:
+            user_memory_context = "\n\n".join(
+                part for part in (contract_text, user_memory_context) if part
+            ).strip()
         shared_suffix = await self._build_shared_memory_suffix(reason or "想和用户聊天")
         if shared_suffix:
             user_memory_context = "\n\n".join(
@@ -1904,11 +1995,22 @@ class ProactiveEngine:
     async def send_contextual_proactive_message(self, motive: "ProactiveMotive") -> bool:
         motive_type = getattr(getattr(motive, "type", None), "value", str(getattr(motive, "type", "")))
         if motive_type in {"idle_ping", "idle_reminder"}:
-            message = await self.generate_message(motive.reason, motive_type=motive_type)
+            message = await self._generate_message_compat(motive.reason, motive_type=motive_type)
         else:
             message = await self.generate_contextual_message(motive)
         target = self._target_with_motive_metadata(motive)
         return await self._send_proactive_message(message, target=target)
+
+    async def _generate_message_compat(self, reason: str, *, motive_type: str = "idle_reminder") -> str:
+        """Call generate_message while tolerating older test/runtime monkeypatches."""
+        generate = self.generate_message
+        try:
+            signature = inspect.signature(generate)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None and "motive_type" not in signature.parameters:
+            return await generate(reason)
+        return await generate(reason, motive_type=motive_type)
 
     def _fallback_contextual_message(self, motive: "ProactiveMotive") -> str:
         motive_type = getattr(getattr(motive, "type", None), "value", str(getattr(motive, "type", "")))
@@ -2345,7 +2447,7 @@ class ProactiveEngine:
             return None
 
         # 生成消息
-        message = await self.generate_message(decision.reason, motive_type="idle_reminder")
+        message = await self._generate_message_compat(decision.reason, motive_type="idle_reminder")
 
         # 发送并更新状态
         sent = await self._send_proactive_message(message)
@@ -2463,6 +2565,18 @@ class ProactiveEngine:
             await self.memory.record_assistant_message(message, turn_context=context)
         except Exception as exc:
             logger.warning("[ProactiveEngine] 主动消息已发送，但写入记忆失败: %s", exc)
+        life_engine = getattr(self, "life_engine", None)
+        if life_engine is not None and hasattr(life_engine, "process_turn_impact"):
+            try:
+                await life_engine.process_turn_impact(
+                    user_input="[Bot 主动发起消息]",
+                    bot_output=message,
+                    session_id=str(context.get("session_id") or ""),
+                    user_id=str(context.get("user_id") or getattr(self.memory, "user_id", "default_user")),
+                    relationship_state={},
+                )
+            except Exception as exc:
+                logger.debug("[ProactiveEngine] 主动消息影响记录失败: %s", exc)
 
     def _record_context_from_target(self, target: dict | None) -> dict | None:
         if not isinstance(target, dict):

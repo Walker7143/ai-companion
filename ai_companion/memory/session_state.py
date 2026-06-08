@@ -402,13 +402,40 @@ class SessionStateStore:
 def extract_scene_summary(active_states: list) -> dict | None:
     """从活跃 session state 中提取当前场景摘要。兼容 SessionStateItem 对象和 dict。"""
     snapshot = get_scene_snapshot(active_states)
-    if not snapshot.should_anchor_generation:
-        return None
-    return {
-        "location": snapshot.location or None,
-        "activity": snapshot.activity or None,
-        "spatial": snapshot.spatial or None,
-    }
+    location = None
+    activity = None
+    next_action = None
+    spatial = None
+    states = []
+    for item in active_states:
+        scope = item.scope if hasattr(item, "scope") else item.get("scope", "")
+        subject = item.subject if hasattr(item, "subject") else item.get("subject", "")
+        predicate = item.predicate if hasattr(item, "predicate") else item.get("predicate", "")
+        value = item.value if hasattr(item, "value") else item.get("value", "")
+        if scope != "current_scene" and not str(scope).startswith("current_scene/"):
+            continue
+        if subject not in {"shared", "assistant", ""}:
+            continue
+        state = item.to_dict() if hasattr(item, "to_dict") else dict(item)
+        states.append(state)
+        if predicate == "current_location":
+            location = value
+        elif predicate == "current_activity":
+            activity = value
+        elif predicate == "next_action":
+            next_action = value
+        elif predicate == "spatial_relationship":
+            spatial = value
+    if location or activity or next_action or spatial:
+        return {
+            "location": location,
+            "activity": activity,
+            "next_action": next_action,
+            "spatial": spatial,
+            "states": states[:8],
+            "should_anchor_generation": snapshot.should_anchor_generation,
+        }
+    return None
 
 
 class SessionStateExtractor:

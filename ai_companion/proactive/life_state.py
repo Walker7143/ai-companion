@@ -87,8 +87,17 @@ class LifeState:
             "scenario_history": {},
             "major_scenario_history": {},
             "bot_mood": "平静",
+            "emotional_state": {
+                "current_mood": "平静",
+                "source": "initial",
+                "intensity": 0.0,
+                "updated_at": None,
+            },
             "bot_current_activity": "在家休息",
             "bot_current_activity_updated_at": None,
+            "recent_impacts": [],
+            "personality_drift": {},
+            "life_chapter_summary": "",
             "bot_age_days": 0,
             "last_daily_tick": None,
             "last_major_tick": None,
@@ -162,6 +171,30 @@ class LifeState:
     @bot_mood.setter
     def bot_mood(self, value: str):
         self._state["bot_mood"] = value
+        emotional = self._state.get("emotional_state")
+        if not isinstance(emotional, dict):
+            emotional = {}
+        emotional["current_mood"] = value
+        emotional["updated_at"] = datetime.now().isoformat()
+        self._state["emotional_state"] = emotional
+        self.save()
+
+    @property
+    def emotional_state(self) -> dict[str, Any]:
+        value = self._state.get("emotional_state")
+        if not isinstance(value, dict):
+            value = {
+                "current_mood": self.bot_mood,
+                "source": "compat",
+                "intensity": 0.0,
+                "updated_at": None,
+            }
+            self._state["emotional_state"] = value
+        return value
+
+    @emotional_state.setter
+    def emotional_state(self, value: dict[str, Any]):
+        self._state["emotional_state"] = dict(value or {})
         self.save()
 
     @property
@@ -346,6 +379,82 @@ class LifeState:
     @initial_age.setter
     def initial_age(self, value: Optional[int]):
         self._state["_initial_age"] = value
+        self.save()
+
+    @property
+    def recent_impacts(self) -> list[dict[str, Any]]:
+        value = self._state.get("recent_impacts")
+        if not isinstance(value, list):
+            value = []
+            self._state["recent_impacts"] = value
+        return value
+
+    @property
+    def personality_drift(self) -> dict[str, Any]:
+        value = self._state.get("personality_drift")
+        if not isinstance(value, dict):
+            value = {}
+            self._state["personality_drift"] = value
+        return value
+
+    @property
+    def life_chapter_summary(self) -> str:
+        return str(self._state.get("life_chapter_summary") or "")
+
+    @life_chapter_summary.setter
+    def life_chapter_summary(self, value: str):
+        self._state["life_chapter_summary"] = str(value or "")
+        self.save()
+
+    def add_impact_record(self, impact: dict[str, Any]):
+        """Persist a bounded record of an experience affecting the bot."""
+        if not isinstance(impact, dict):
+            return
+        records = self.recent_impacts
+        record = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now().isoformat(),
+            "source": impact.get("source"),
+            "summary": impact.get("summary"),
+            "intensity": impact.get("intensity", 0.0),
+            "mood_before": impact.get("mood_before"),
+            "mood_after": impact.get("mood_after"),
+            "relationship_effect": impact.get("relationship_effect"),
+            "persona_patch_candidate": bool(impact.get("persona_patch_candidate")),
+            "reason": impact.get("reason"),
+            "metadata": impact.get("metadata") if isinstance(impact.get("metadata"), dict) else {},
+        }
+        records.append(record)
+        self._state["recent_impacts"] = records[-50:]
+
+        emotional = self.emotional_state
+        if record.get("mood_after"):
+            emotional["current_mood"] = record["mood_after"]
+        emotional["source"] = record.get("source") or "impact"
+        emotional["intensity"] = record.get("intensity", 0.0)
+        emotional["updated_at"] = record["timestamp"]
+        self._state["emotional_state"] = emotional
+
+        if record["persona_patch_candidate"]:
+            drift = self.personality_drift
+            drift["last_candidate_at"] = record["timestamp"]
+            drift["last_candidate_summary"] = record.get("summary") or ""
+            drift["candidate_count"] = int(drift.get("candidate_count", 0) or 0) + 1
+            self._state["personality_drift"] = drift
+
+        if impact.get("life_journal_record"):
+            self._append_journal_record(
+                record_type="impact",
+                description=str(record.get("summary") or ""),
+                metadata={
+                    "source": record.get("source"),
+                    "intensity": record.get("intensity"),
+                    "mood_before": record.get("mood_before"),
+                    "mood_after": record.get("mood_after"),
+                    "relationship_effect": record.get("relationship_effect"),
+                    "persona_patch_candidate": record.get("persona_patch_candidate"),
+                },
+            )
         self.save()
 
     def add_event(self, event: LifeEvent):

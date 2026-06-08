@@ -15,7 +15,8 @@ from ..context.document_reader import (
     split_text_chunks,
 )
 from ..memory.engine import MemoryEngine
-from ..memory.session_state import get_scene_snapshot
+from ..memory.session_state import extract_scene_summary, get_scene_snapshot
+from ..generation import GenerationContextBuilder
 from ..persona.loader import PersonaLoader
 from ..persona.engine import PersonaEngine
 from ..persona.refusal_engine import RefusalEngine
@@ -204,6 +205,7 @@ class BotInstance:
         self.multimodal_sender: Optional[MultimodalSender] = None
         self._channel = None
         self.response_polisher = ResponseStylePolisher()
+        self.generation_context_builder = GenerationContextBuilder()
 
     def _register_skills(self):
         """Register built-in companion capabilities."""
@@ -725,7 +727,9 @@ class BotInstance:
             return None
         location = snapshot.location or ""
         activity = snapshot.activity or ""
-        if not location and not activity:
+        scene = extract_scene_summary(session_states) or {}
+        next_action = scene.get("next_action") or ""
+        if not location and not activity and not next_action:
             return None
         parts = []
         if location and activity:
@@ -734,8 +738,29 @@ class BotInstance:
             parts.append(f"你当前所在的场景：{location}。")
         elif activity:
             parts.append(f"你当前正在：{activity}。")
-        parts.append("你必须保持在这个场景中回复。不要跳到其他地点或活动，不要假设场景已改变。除非用户明确说离开当前场景，否则不要离开。")
+        if next_action:
+            parts.append(f"当前下一步动作：{next_action}。")
+        parts.append("你必须保持在这个场景和下一步动作中回复。不要跳到其他地点或活动，不要假设场景已改变。除非用户明确说离开当前场景或改变安排，否则不要离开。")
         return "【场景硬约束】\n" + " ".join(parts)
+
+    def _scene_constraint_from_session_state(self, session_states: list) -> str:
+        if self.memory is not None and not self.memory.config.get("scene_constraint_enabled", True):
+            return ""
+        if not isinstance(session_states, list) or not session_states:
+            return ""
+        scene = extract_scene_summary(session_states)
+        if not scene:
+            return ""
+        parts = []
+        if scene.get("location"):
+            parts.append(f"地点：{scene.get('location')}")
+        if scene.get("activity"):
+            parts.append(f"活动：{scene.get('activity')}")
+        if scene.get("next_action"):
+            parts.append(f"下一步：{scene.get('next_action')}")
+        if scene.get("spatial"):
+            parts.append(f"空间关系：{scene.get('spatial')}")
+        return "；".join(parts)
 
     def _get_generation_life_context(self) -> dict:
         if self.life_engine:
@@ -783,9 +808,15 @@ class BotInstance:
         daily_context = copy.deepcopy(ctx.get("daily_context", {})) if isinstance(ctx.get("daily_context"), dict) else {}
         user_understanding = copy.deepcopy(ctx.get("user_understanding", {})) if isinstance(ctx.get("user_understanding"), dict) else {}
         conscious_context = copy.deepcopy(ctx.get("conscious_context", {})) if isinstance(ctx.get("conscious_context"), dict) else {}
+        memory_awareness = copy.deepcopy(ctx.get("memory_awareness", {})) if isinstance(ctx.get("memory_awareness"), dict) else {}
+        generation_contract = copy.deepcopy(ctx.get("generation_contract", {})) if isinstance(ctx.get("generation_contract"), dict) else {}
+        life_anchor = copy.deepcopy(ctx.get("life_anchor", {})) if isinstance(ctx.get("life_anchor"), dict) else {}
         prompt_diagnostics = copy.deepcopy(ctx.get("memory_prompt_diagnostics", {})) if isinstance(ctx.get("memory_prompt_diagnostics"), dict) else {}
         continuity_contract = copy.deepcopy(ctx.get("continuity_contract", {})) if isinstance(ctx.get("continuity_contract"), dict) else {}
         evolution_refs = copy.deepcopy(ctx.get("evolution_refs", {})) if isinstance(ctx.get("evolution_refs"), dict) else {}
+        scene_capsule = copy.deepcopy(ctx.get("scene_capsule", {})) if isinstance(ctx.get("scene_capsule"), dict) else {}
+        memory_authority = copy.deepcopy(ctx.get("memory_authority", {})) if isinstance(ctx.get("memory_authority"), dict) else {}
+        memory_decision_trace = copy.deepcopy(ctx.get("memory_decision_trace", {})) if isinstance(ctx.get("memory_decision_trace"), dict) else {}
 
         retrieved_memory = {
             "working_history": working_history,
@@ -797,9 +828,15 @@ class BotInstance:
             "memory_intent": ctx.get("memory_intent", ""),
             "user_understanding": user_understanding,
             "conscious_context": conscious_context,
+            "memory_awareness": memory_awareness,
+            "generation_contract": generation_contract,
+            "life_anchor": life_anchor,
             "memory_prompt_diagnostics": prompt_diagnostics,
             "continuity_contract": continuity_contract,
             "evolution_refs": evolution_refs,
+            "scene_capsule": scene_capsule,
+            "memory_authority": memory_authority,
+            "memory_decision_trace": memory_decision_trace,
             "system_suffix": ctx.get("system_suffix", ""),
         }
         response_style_trace = {
@@ -822,8 +859,14 @@ class BotInstance:
             "response_style_trace": response_style_trace,
             "memory_prompt_diagnostics": prompt_diagnostics,
             "continuity_contract": continuity_contract,
+            "scene_capsule": scene_capsule,
+            "memory_authority": memory_authority,
+            "memory_decision_trace": memory_decision_trace,
             "conscious_context": conscious_context,
             "evolution_refs": evolution_refs,
+            "memory_awareness": memory_awareness,
+            "generation_contract": generation_contract,
+            "life_anchor": life_anchor,
             "active_session_state": copy.deepcopy(ctx.get("session_state", [])) if isinstance(ctx.get("session_state"), list) else [],
             "memory_intent": ctx.get("memory_intent", ""),
             "relationship_state": relationship_state or retrieved_relationship,
@@ -999,10 +1042,25 @@ class BotInstance:
 
             # 2. 加载上下文
             ctx = await self.memory.load_context(effective_user_input)
+            life_anchor = self.life_engine.build_life_anchor() if self.life_engine else {}
+            scene_anchor_text = self._scene_constraint_from_session_state(ctx.get("session_state", []))
+            generation_contract = self.generation_context_builder.build_chat_contract(
+                intent=str(ctx.get("memory_intent") or "casual_chat"),
+                current_input=effective_user_input,
+                memory_awareness=ctx.get("memory_awareness") if isinstance(ctx.get("memory_awareness"), dict) else {},
+                life_anchor=life_anchor,
+                scene_anchor={"summary": scene_anchor_text or ""},
+                relationship_state=relationship_state or ctx.get("relationship_state") or {},
+            )
+            ctx["life_anchor"] = life_anchor
+            ctx["generation_contract"] = generation_contract.to_dict()
 
             # 3. 构建带人格的记忆增强 system prompt
             realtime_status_query = self._is_realtime_status_query(effective_user_input)
             memory_suffix = None if realtime_status_query else self._prepare_generation_suffix(ctx.get("system_suffix"))
+            contract_text = generation_contract.render_for_prompt()
+            if contract_text and not realtime_status_query:
+                memory_suffix = self._merge_memory_suffix(contract_text, memory_suffix)
             if image_context_suffix:
                 memory_suffix = self._merge_memory_suffix(memory_suffix, image_context_suffix)
             if document_context_suffix:
@@ -1062,6 +1120,17 @@ class BotInstance:
                 self.memory.extract_turn_memory(memory_user_input, response, turn_context=recorded_context),
                 name="memory.extract_turn_memory",
             )
+            if self.life_engine:
+                self._track_background_task(
+                    self.life_engine.process_turn_impact(
+                        user_input=memory_user_input,
+                        bot_output=response,
+                        session_id=str(recorded_context.session_id or ""),
+                        user_id=str(recorded_context.user_id or "default_user"),
+                        relationship_state=relationship_state,
+                    ),
+                    name="life.process_turn_impact",
+                )
             if isinstance(self._last_debug_context, dict):
                 self._last_debug_context["response_state_conflicts"] = state_check
         else:

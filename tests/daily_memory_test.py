@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from ai_companion.memory.activation import MemoryActivationPlanner
 from ai_companion.memory.conscious import ConsciousContextBuilder
 from ai_companion.memory.engine import MemoryEngine
 from ai_companion.memory.extractor import MemoryExtractor
@@ -216,6 +217,65 @@ class DailyMemoryTest(unittest.TestCase):
 
         self.assertIn("城市: 杭州", suffix)
         self.assertNotIn("城市: 上海", suffix)
+
+    def test_manual_facts_block_vector_and_activation_shadow_facts(self):
+        from ai_companion.memory.prompt_builder import MemoryPromptBuilder
+
+        retrieved = RetrievedMemory(
+            intent="casual_chat",
+            user_understanding={
+                "manual": {"facts": {"城市": "杭州"}},
+                "layered": {"core": {"facts": {"城市": "杭州"}}},
+            },
+            semantic_items=[
+                {
+                    "key": "城市",
+                    "value": "上海",
+                    "category": "identity",
+                    "confidence": 0.95,
+                }
+            ],
+            vector_recall=[
+                {
+                    "source_type": "semantic_fact",
+                    "source_id": "城市",
+                    "category": "identity",
+                    "text": "[identity] 城市: 上海",
+                    "retrieval_score": 0.91,
+                }
+            ],
+        )
+        retrieved.activation_plan = MemoryActivationPlanner().build(retrieved, "我在哪个城市？")
+
+        suffix = MemoryPromptBuilder(max_chars=2800).build(retrieved)
+        active_text = "\n".join(item.text for item in retrieved.activation_plan.active_memories)
+
+        self.assertIn("城市: 杭州", suffix)
+        self.assertNotIn("城市: 上海", suffix)
+        self.assertNotIn("上海", active_text)
+
+    def test_stable_auto_understanding_survives_directive_like_wording(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="understanding-stable-directive-") as tmp:
+                engine = MemoryEngine("stable_directive_bot", Path(tmp), config={"embedding": "none"})
+                await engine.init()
+                await engine.user_understanding.upsert_auto_item(
+                    key="希望被怎样回应",
+                    value="情绪低落时先陪一会儿，不要立刻讲道理",
+                    category="comfort_strategies",
+                )
+                loaded = engine.user_understanding.load()
+                ctx = await engine.load_context("我今天有点焦虑")
+                await engine.close()
+                return loaded, ctx
+
+        loaded, ctx = asyncio.run(run())
+
+        self.assertIn(
+            "情绪低落时先陪一会儿，不要立刻讲道理",
+            loaded["layered"]["deep"]["comfort_strategies"],
+        )
+        self.assertIn("先陪一会儿", ctx["system_suffix"])
 
     def test_prompt_builder_labels_user_only_session_state_without_activating_scene_mode(self):
         from ai_companion.memory.prompt_builder import MemoryPromptBuilder

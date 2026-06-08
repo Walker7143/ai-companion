@@ -98,10 +98,11 @@ class MemoryActivationPlanner:
         candidates.extend(self._daily_summary_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._relationship_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._understanding_candidates(retrieved, current_input, intent=intent))
-        candidates.extend(self._semantic_candidates(retrieved, current_input, intent=intent))
+        manual_authority = _manual_authority_index(getattr(retrieved, "user_understanding", {}))
+        candidates.extend(self._semantic_candidates(retrieved, current_input, intent=intent, manual_authority=manual_authority))
         candidates.extend(self._episodic_candidates(retrieved, current_input, intent=intent))
         candidates.extend(self._rollup_candidates(retrieved, current_input, intent=intent))
-        candidates.extend(self._vector_candidates(retrieved, current_input, intent=intent))
+        candidates.extend(self._vector_candidates(retrieved, current_input, intent=intent, manual_authority=manual_authority))
         candidates.extend(self._self_memory_candidates(retrieved, current_input, intent=intent))
 
         self._apply_configured_bias(candidates)
@@ -421,7 +422,14 @@ class MemoryActivationPlanner:
                     )
         return candidates
 
-    def _semantic_candidates(self, retrieved: Any, current_input: str, *, intent: str) -> list[ActivatedMemory]:
+    def _semantic_candidates(
+        self,
+        retrieved: Any,
+        current_input: str,
+        *,
+        intent: str,
+        manual_authority: dict[str, Any],
+    ) -> list[ActivatedMemory]:
         candidates: list[ActivatedMemory] = []
         for item in getattr(retrieved, "semantic_items", []) or []:
             if not isinstance(item, dict):
@@ -429,6 +437,8 @@ class MemoryActivationPlanner:
             key = str(item.get("key") or "").strip()
             value = _compact(item.get("value"), 160)
             if not key or not value:
+                continue
+            if _manual_authority_blocks_fact(manual_authority, key=key, value=value, category=str(item.get("category") or "")):
                 continue
             category = str(item.get("category") or "general")
             text = f"语义事实.{category}：{key}={value}"
@@ -465,9 +475,12 @@ class MemoryActivationPlanner:
                 continue
             cue_tags = _list(item.get("cue_tags"))
             relationship_effect = str(item.get("relationship_effect") or "").strip()
-            text = f"共同经历：{summary}"
-            if relationship_effect and relationship_effect != "普通":
+            if sensitivity == "sensitive":
+                text = f"敏感共同经历：{summary}"
+            elif relationship_effect and relationship_effect != "普通":
                 text = f"共同经历（{relationship_effect}）：{summary}"
+            else:
+                text = f"共同经历：{summary}"
             relevance = _cue_overlap(current_input, text, cue_tags)
             score = 0.36 + relevance * 0.16
             if intent in {"recall_past", "relationship_repair", "emotional_support"}:
@@ -479,7 +492,13 @@ class MemoryActivationPlanner:
                     text=text,
                     source="episodic",
                     score=_clamp_score(score),
-                    expression_mode="explicit_recall" if intent == "recall_past" else "light_reference",
+                    expression_mode=(
+                        "ask_before_entering"
+                        if sensitivity == "sensitive"
+                        else "explicit_recall"
+                        if intent == "recall_past"
+                        else "light_reference"
+                    ),
                     reason="共同经历被当前语境联想到",
                     layer="episodic",
                     recency=0.25,
@@ -520,7 +539,14 @@ class MemoryActivationPlanner:
             )
         return candidates
 
-    def _vector_candidates(self, retrieved: Any, current_input: str, *, intent: str) -> list[ActivatedMemory]:
+    def _vector_candidates(
+        self,
+        retrieved: Any,
+        current_input: str,
+        *,
+        intent: str,
+        manual_authority: dict[str, Any],
+    ) -> list[ActivatedMemory]:
         candidates: list[ActivatedMemory] = []
         for item in getattr(retrieved, "vector_recall", []) or []:
             if not isinstance(item, dict):
@@ -529,6 +555,20 @@ class MemoryActivationPlanner:
             if not text_body:
                 continue
             source_type = str(item.get("source_type") or "vector")
+            source_id = str(item.get("source_id") or "").strip()
+            if source_type == "semantic_fact" and _manual_authority_blocks_fact(
+                manual_authority,
+                key=source_id,
+                value=_vector_fact_value(text_body, source_id),
+                category=str(item.get("category") or ""),
+            ):
+                continue
+            if source_type == "user_understanding" and source_id.startswith("auto.") and _manual_authority_blocks_understanding_path(
+                manual_authority,
+                source_id,
+                text_body,
+            ):
+                continue
             text = f"联想背景.{source_type}：{text_body}"
             retrieval_score = _float(item.get("retrieval_score"))
             relevance = max(_cue_overlap(current_input, text), min(1.0, retrieval_score))
@@ -678,6 +718,80 @@ def _list(value: object) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _clean_dict(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        clean_key = str(key).strip()
+        clean_item = str(item).strip()
+        if clean_key and clean_item:
+            result[clean_key] = clean_item
+    return result
+
+
+def _manual_authority_index(understanding: object) -> dict[str, Any]:
+    manual = understanding.get("manual") if isinstance(understanding, dict) and isinstance(understanding.get("manual"), dict) else {}
+    facts = _clean_dict(manual.get("facts"))
+    identity = _clean_dict(manual.get("identity"))
+    lists = {
+        str(key): set(_list(value))
+        for key, value in manual.items()
+        if isinstance(value, list)
+    }
+    return {
+        "facts": facts,
+        "identity": identity,
+        "keys": set(facts) | set(identity),
+        "lists": lists,
+    }
+
+
+def _manual_authority_blocks_fact(
+    authority: dict[str, Any],
+    *,
+    key: str,
+    value: str,
+    category: str,
+) -> bool:
+    key = str(key or "").strip()
+    value = str(value or "").strip()
+    category = str(category or "").strip()
+    if not key and not value:
+        return False
+    if key and key in authority.get("keys", set()):
+        return True
+    if category:
+        manual_items = authority.get("lists", {}).get(category, set())
+        if key in manual_items or value in manual_items:
+            return True
+    return False
+
+
+def _manual_authority_blocks_understanding_path(authority: dict[str, Any], source_id: str, text: str) -> bool:
+    parts = [part for part in str(source_id or "").split(".") if part]
+    if len(parts) < 2:
+        return False
+    section = parts[1]
+    if section in {"facts", "identity"} and len(parts) >= 3:
+        return parts[2] in authority.get("keys", set())
+    manual_items = authority.get("lists", {}).get(section, set())
+    return any(item and item in str(text or "") for item in manual_items)
+
+
+def _vector_fact_value(text: str, source_id: str) -> str:
+    clean = str(text or "").strip()
+    source_id = str(source_id or "").strip()
+    if not clean:
+        return ""
+    marker = f"{source_id}:"
+    if marker in clean:
+        return clean.split(marker, 1)[1].strip()
+    if ":" in clean:
+        return clean.rsplit(":", 1)[1].strip()
+    return clean
 
 
 def _cue_overlap(current_input: str, text: str, cue_tags: list[str] | None = None) -> float:

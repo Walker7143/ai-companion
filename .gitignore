@@ -29,6 +29,7 @@ env/
 # IDE
 .idea/
 .vscode/
+.claude/settings.local.json
 *.swp
 *.swo
 *~
@@ -55,12 +56,14 @@ data/bots/*/proactive_state.json
 data/bots/*/life_state.json
 data/bots/*/persona/
 data/bots/*/life.json
+data/bots/*/runtime/*.lock
 
 # Test files
 test_*.py
 *.log
 .artifacts/
 tests/data/
+.superpowers/
 
 # Temporary files
 *.tmp

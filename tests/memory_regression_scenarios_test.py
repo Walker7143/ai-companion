@@ -202,6 +202,9 @@ class MemoryRegressionScenarioTest(unittest.TestCase):
         self.assertIn("diagnostics", evolution_refs)
         self.assertIn("记忆信任视图", command_text)
         self.assertIn("关系锚点", command_text)
+        self.assertIn("记忆身份策略", command_text)
+        self.assertIn("记忆分层", command_text)
+        self.assertIn("权威记忆", command_text)
 
     def test_gateway_memory_command_is_supported(self):
         parsed = parse_gateway_command("/memory")

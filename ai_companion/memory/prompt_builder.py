@@ -61,13 +61,13 @@ class MemoryPromptBuilder:
         conscious: ConsciousContext | None = None,
     ) -> tuple[str, dict]:
         blocks = self._build_blocks(retrieved, conscious=conscious)
-        parts: list[str] = []
+        rendered_blocks: list[tuple[PromptBlock, str]] = []
         block_diagnostics: dict[str, dict] = {}
         for block in sorted(blocks, key=lambda item: item.priority):
             text = block.render()
             if not text:
                 continue
-            parts.append(text)
+            rendered_blocks.append((block, text))
             block_diagnostics[block.name] = {
                 "budget_chars": block.budget,
                 "raw_body_chars": block.raw_chars,
@@ -79,6 +79,13 @@ class MemoryPromptBuilder:
                 "truncated": block.truncated,
             }
 
+        rendered_blocks, dropped_blocks = self._fit_rendered_blocks(rendered_blocks)
+        if dropped_blocks:
+            for name in dropped_blocks:
+                if name in block_diagnostics:
+                    block_diagnostics[name]["dropped_due_to_total_budget"] = True
+                    block_diagnostics[name]["rendered_chars"] = 0
+        parts = [text for _block, text in rendered_blocks]
         suffix = "\n".join(parts)
         suffix_raw_chars = len(suffix)
         suffix_truncated = False
@@ -92,9 +99,32 @@ class MemoryPromptBuilder:
             "raw_tokens_est": TokenEstimator.estimate("\n".join(parts)),
             "final_tokens_est": TokenEstimator.estimate(suffix),
             "truncated": suffix_truncated,
+            "dropped_blocks": dropped_blocks,
             "blocks": block_diagnostics,
         }
         return suffix, diagnostics
+
+    def _fit_rendered_blocks(self, rendered_blocks: list[tuple[PromptBlock, str]]) -> tuple[list[tuple[PromptBlock, str]], list[str]]:
+        if len("\n".join(text for _block, text in rendered_blocks)) <= self.max_chars:
+            return rendered_blocks, []
+        optional_drop_order = [
+            "rollups",
+            "relationship",
+            "semantic",
+            "vector_recall",
+            "daily",
+        ]
+        result = list(rendered_blocks)
+        dropped: list[str] = []
+        for block_name in optional_drop_order:
+            if len("\n".join(text for _block, text in result)) <= self.max_chars:
+                break
+            next_result = [(block, text) for block, text in result if block.name != block_name]
+            if len(next_result) == len(result):
+                continue
+            result = next_result
+            dropped.append(block_name)
+        return result, dropped
 
     def _build_blocks(self, retrieved: RetrievedMemory, conscious: ConsciousContext | None = None) -> list[PromptBlock]:
         blocks: list[PromptBlock] = []
@@ -770,7 +800,7 @@ class MemoryPromptBuilder:
         for key, title in [
             ("personality_observations", "性格观察"),
             ("emotional_patterns", "观察到的情绪模式"),
-            ("comfort_strategies", "有效的安慰/陪伴方式"),
+            ("comfort_strategies", "有效的安慰/陪伴方式（有效陪伴方式）"),
             ("attachment_and_distance", "亲近与距离模式"),
             ("values_and_principles", "价值观和原则"),
             ("life_context", "用户手动设定的生活背景"),
@@ -1011,6 +1041,11 @@ class MemoryPromptBuilder:
                 continue
             source_type = str(item.get("source_type") or "")
             source_id = str(item.get("source_id") or "")
+            if source_type in {"semantic_fact", "user_understanding"} and _manual_understanding_blocks_vector_item(
+                retrieved.user_understanding,
+                item,
+            ):
+                continue
             marker = (source_type, source_id)
             if marker in seen:
                 continue
@@ -1100,7 +1135,14 @@ class MemoryPromptBuilder:
         for item in retrieved.semantic_items:
             key = item.get("key")
             value = item.get("value")
-            if not key or not value or key in skip_keys or key in known_keys or value in known_values:
+            if (
+                not key
+                or not value
+                or key in skip_keys
+                or key in known_keys
+                or value in known_values
+                or _manual_understanding_blocks_fact(retrieved.user_understanding, item)
+            ):
                 continue
             category = item.get("category") or "general"
             lines.append(f"  - [{category}] {key}: {value}")
@@ -1352,6 +1394,55 @@ def _manual_understanding_blocks_fact(understanding: object, item: dict) -> bool
         if key in manual_items or value in manual_items:
             return True
     return False
+
+
+def _manual_understanding_blocks_vector_item(understanding: object, item: dict) -> bool:
+    if not isinstance(understanding, dict) or not isinstance(item, dict):
+        return False
+    source_type = str(item.get("source_type") or "").strip()
+    source_id = str(item.get("source_id") or "").strip()
+    category = str(item.get("category") or "").strip()
+    text = str(item.get("text") or "").strip()
+    fact_item = {
+        "key": source_id,
+        "value": _vector_fact_value(text, source_id),
+        "category": category,
+    }
+    if source_type == "semantic_fact":
+        return _manual_understanding_blocks_fact(understanding, fact_item)
+    if source_type == "user_understanding" and source_id.startswith("auto."):
+        return _manual_understanding_blocks_understanding_path(understanding, source_id, text)
+    return False
+
+
+def _manual_understanding_blocks_understanding_path(understanding: object, source_id: str, text: str) -> bool:
+    if not isinstance(understanding, dict):
+        return False
+    manual = understanding.get("manual") if isinstance(understanding.get("manual"), dict) else {}
+    parts = [part for part in source_id.split(".") if part]
+    if len(parts) < 2:
+        return False
+    section = parts[1]
+    if section in {"facts", "identity"} and len(parts) >= 3:
+        manual_values = _clean_dict(manual.get(section))
+        return parts[2] in manual_values
+    manual_items = set(_clean_list(manual.get(section)))
+    if not manual_items:
+        return False
+    clean_text = str(text or "")
+    return any(item and item in clean_text for item in manual_items)
+
+
+def _vector_fact_value(text: str, source_id: str) -> str:
+    clean = str(text or "").strip()
+    if not clean:
+        return ""
+    marker = f"{source_id}:"
+    if marker in clean:
+        return clean.split(marker, 1)[1].strip()
+    if ":" in clean:
+        return clean.rsplit(":", 1)[1].strip()
+    return clean
 
 
 def _is_sensitive_fact(item: dict) -> bool:

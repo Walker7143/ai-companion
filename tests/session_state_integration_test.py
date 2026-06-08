@@ -53,6 +53,8 @@ class SessionStateIntegrationTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(loaded_active)
             self.assertEqual("trip/lodging", str(loaded_active[0].get("scope")))
             self.assertEqual("booking_status", str(loaded_active[0].get("predicate")))
+            self.assertIn("memory_authority", loaded)
+            self.assertIn("memory_decision_trace", loaded)
 
             rewritten, check = await engine.ensure_response_state_consistency("也不知道那家客栈还有没有空房。", "s1")
             self.assertFalse(check["consistent"])
@@ -95,6 +97,16 @@ class SessionStateIntegrationTest(unittest.IsolatedAsyncioTestCase):
             slots = {(item.scope, item.predicate): item for item in active}
             self.assertIn(("trip/lodging", "booking_status"), slots)
             self.assertIn(("current_scene", "next_action"), slots)
+
+            loaded = await engine.load_context("然后呢")
+            scene_capsule = loaded.get("scene_capsule") or {}
+            self.assertTrue(scene_capsule.get("active"))
+            self.assertEqual("先去酒店放行李", scene_capsule.get("next_action"))
+            self.assertTrue(loaded.get("memory_prompt_diagnostics", {}).get("scene_capsule_active"))
+            self.assertEqual(
+                "single_owner",
+                (loaded.get("memory_authority") or {}).get("mode"),
+            )
 
             rewritten, check = await engine.ensure_response_state_consistency(
                 "也不知道那家客栈还有没有空房。",

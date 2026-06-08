@@ -798,6 +798,7 @@ class ProactiveEngineContextualMessageTest(unittest.IsolatedAsyncioTestCase):
             message = await engine.generate_message("想随手发一句")
 
             prompt = model.calls[-1]["messages"][-1]["content"]
+            self.assertIn("【统一生成合同】", prompt)
             self.assertIn("【当前生活锚点】", prompt)
             self.assertIn("大理", prompt)
             self.assertIn("客栈", prompt)
