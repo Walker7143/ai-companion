@@ -814,6 +814,38 @@ class MemoryEngine:
                 "committed_relationship_overrides_single_turn_tone",
                 "vector_and_rollup_are_retrieval_hints_not_authority",
             ],
+            "layers": {
+                "short_term_authority": {
+                    "priority": 1,
+                    "sources": ["working", "daily", "session_state"],
+                    "working_turns": turn_count,
+                    "daily_messages": daily_messages,
+                    "daily_days": daily_days,
+                    "session_state_count": len(active_session_states),
+                    "scene_active": bool(scene_capsule.get("active")),
+                },
+                "long_term_authority": {
+                    "priority": 2,
+                    "sources": ["semantic", "relationship", "episodic"],
+                    "semantic_fact_count": fact_count,
+                    "relationship_label": relationship.get("relationship_label") if isinstance(relationship, dict) else "",
+                    "episodic_count": episodic_count,
+                },
+                "derived_projection": {
+                    "priority": 3,
+                    "sources": ["user_understanding", "vector_index", "rollups"],
+                    "user_understanding_auto_facts": self.user_understanding.auto_fact_count(),
+                    "vector_recall_count": vector_count,
+                    "rollup_count": rollup_count,
+                },
+                "turn_activation": {
+                    "priority": 4,
+                    "sources": ["trust_view", "continuity_contract", "prompt_diagnostics"],
+                    "trust_view": True,
+                    "prompt_diagnostics": True,
+                    "scene_capsule": bool(scene_capsule.get("active")),
+                },
+            },
         }
 
         return {

@@ -55,6 +55,8 @@ export interface MemoryTrustView {
   recently_remembered?: MemoryTrustItem[];
   stable_understanding?: MemoryTrustItem[];
   relationship_anchor?: RelationshipAnchor;
+  scene_capsule?: SceneCapsule;
+  session_state?: SessionStateItem[];
   pending_confirmation?: MemoryTrustItem[];
   corrected_memories?: MemoryTrustItem[];
   archived_or_suppressed?: MemoryTrustItem[];
@@ -78,6 +80,9 @@ export interface MemoryTrustPayload {
   bot_id: string;
   user_id?: string;
   memory_trust_view: MemoryTrustView;
+  memory_layers?: MemoryLayersView;
+  memory_authority?: MemoryAuthorityView;
+  scene_capsule?: SceneCapsule;
   evolution_refs?: EvolutionRefsView;
   session_state?: SessionStateItem[];
   recent_lifecycle_events?: MemoryTrustItem[];
@@ -87,6 +92,52 @@ export interface MemoryTrustPayload {
   daily_commitments?: unknown[];
   continuity_contract?: ContinuityContractView | null;
   relationship_projection?: RelationshipProjectionView | null;
+}
+
+export interface SceneCapsule {
+  active?: boolean;
+  location?: string;
+  activity?: string;
+  next_action?: string;
+  spatial?: string;
+  states?: SessionStateItem[];
+  state_count?: number;
+  hard_constraint_ready?: boolean;
+}
+
+export interface MemoryLayerSummary {
+  summary?: string;
+  short_term?: Record<string, unknown>;
+  long_term?: Record<string, unknown>;
+  user_understanding?: Record<string, unknown>;
+  vector_index?: Record<string, unknown>;
+  rollups?: Record<string, unknown>;
+  dreaming?: Record<string, unknown>;
+  trust_view?: boolean;
+  prompt_diagnostics?: boolean;
+  scene_capsule?: boolean;
+  [key: string]: unknown;
+}
+
+export interface MemoryLayersView {
+  authority?: MemoryLayerSummary;
+  projection?: MemoryLayerSummary;
+  operations?: MemoryLayerSummary;
+  explainability?: MemoryLayerSummary;
+}
+
+export interface MemoryAuthorityLayer {
+  priority?: number;
+  sources?: string[];
+  [key: string]: unknown;
+}
+
+export interface MemoryAuthorityView {
+  mode?: string;
+  owner_user_id?: string;
+  summary?: string;
+  policy?: string[];
+  layers?: Record<string, MemoryAuthorityLayer>;
 }
 
 export interface ContinuityContractFact {

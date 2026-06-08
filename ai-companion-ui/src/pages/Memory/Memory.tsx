@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Archive, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, Heart, HelpCircle, Link2, RefreshCw, Search, Star, Trash2, User } from 'lucide-react';
+import { Archive, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, Heart, HelpCircle, Layers3, Link2, MapPin, RefreshCw, Search, ShieldCheck, Star, Trash2, User } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Modal, useToast } from '../../components/ui';
 import { memoryApi } from '../../api';
@@ -12,11 +12,13 @@ import type {
   EpisodicItem,
   Fact,
   MemoryStats,
+  MemoryAuthorityView,
   MemoryTrustItem,
   MemoryTrustPayload,
   Message,
   RelationshipProjectionView,
   SemanticMemory,
+  SceneCapsule,
   SessionStateItem,
   EvolutionRefsView,
   EvolutionTimelineItem,
@@ -100,6 +102,47 @@ function trustDate(value?: string | null) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN');
 }
 
+function humanizePolicy(value: string) {
+  const labels: Record<string, string> = {
+    short_term_state_overrides_long_term_recall: '短期状态优先于旧长期记忆',
+    manual_user_understanding_overrides_auto_fact: '手动理解优先于自动事实',
+    committed_relationship_overrides_single_turn_tone: '稳定关系不被单轮语气推翻',
+    vector_and_rollup_are_retrieval_hints_not_authority: '向量和 rollup 只是辅助召回',
+  };
+  return labels[value] || value;
+}
+
+function humanizeMetricKey(value: string) {
+  const labels: Record<string, string> = {
+    working_message_count: '工作记忆消息',
+    working_turns: '工作记忆轮数',
+    daily_recent_message_count: '日记忆近况',
+    daily_messages: '日记忆消息',
+    daily_days: '覆盖天数',
+    session_state_count: '当前状态',
+    scene_active: '现场激活',
+    semantic_item_count: '语义事实',
+    semantic_fact_count: '语义事实',
+    relationship_label: '关系阶段',
+    episodic_count: '情景记忆',
+    vector_recall_count: '向量召回',
+    rollup_count: 'rollup',
+    user_understanding_projection: '理解投影',
+    user_understanding_auto_facts: '自动理解',
+    active_memory_count: '本轮激活',
+  };
+  return labels[value] || value;
+}
+
+function humanizeUnknown(value: unknown) {
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  if (Array.isArray(value)) return `${value.length} 项`;
+  if (value === null || value === undefined || value === '') return '暂无';
+  if (typeof value === 'object') return '已生成';
+  return String(value);
+}
+
 function RelationshipMetric({ label, value, tone }: { label: string; value: number; tone: string }) {
   const safeValue = Math.max(0, Math.min(100, value));
   return (
@@ -115,9 +158,215 @@ function RelationshipMetric({ label, value, tone }: { label: string; value: numb
   );
 }
 
+function SceneCapsuleCard({ scene }: { scene?: SceneCapsule | null }) {
+  const capsule = scene || {};
+  const active = Boolean(capsule.active);
+  const location = capsule.location || '';
+  const activity = capsule.activity || '';
+  const nextAction = capsule.next_action || '';
+  const spatial = capsule.spatial || '';
+  const stateCount = capsule.state_count ?? (Array.isArray(capsule.states) ? capsule.states.length : 0);
+
+  return (
+    <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+      <CardHeader style={{ padding: '16px 20px 10px', marginBottom: 0, borderBottom: 'none' }}>
+        <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <MapPin style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+          当前现场
+          <Badge variant={active ? 'success' : 'default'}>{active ? '已激活' : '未激活'}</Badge>
+          {capsule.hard_constraint_ready && <Badge variant="info">已进入硬约束</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent style={{ padding: '0 20px 20px', display: 'grid', gap: 12 }}>
+        {!active ? (
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            当前没有足够明确的共享现场状态。没有现场锚点时，系统会更多依赖短期上下文和长期事实。
+          </p>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+              <SceneFact label="地点" value={location || '暂无'} />
+              <SceneFact label="正在做" value={activity || '暂无'} />
+              <SceneFact label="下一步" value={nextAction || '暂无'} />
+              <SceneFact label="空间关系" value={spatial || '暂无'} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Badge>{stateCount} 条现场状态</Badge>
+              <Badge variant="info">{capsule.hard_constraint_ready ? '回复必须承接现场' : '仅作为现场摘要'}</Badge>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SceneFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ padding: 12, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 6 }}>
+      <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{label}</span>
+      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.5 }}>{value}</span>
+    </div>
+  );
+}
+
+function MemoryAuthorityCard({ authority }: { authority?: MemoryAuthorityView | null }) {
+  const policy = Array.isArray(authority?.policy) ? authority?.policy : [];
+  const layers = authority?.layers || {};
+  const hasLayerData = Object.keys(layers).length > 0;
+  const order = [
+    { key: 'short_term_authority', label: '短期权威', tone: 'var(--accent)' },
+    { key: 'long_term_authority', label: '长期权威', tone: 'var(--success)' },
+    { key: 'derived_projection', label: '派生投影', tone: 'var(--warning)' },
+    { key: 'turn_activation', label: '本轮激活', tone: 'var(--info)' },
+  ];
+
+  return (
+    <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+      <CardHeader style={{ padding: '16px 20px 10px', marginBottom: 0, borderBottom: 'none' }}>
+        <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ShieldCheck style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+          本页怎么判断“该信谁”
+          {authority?.mode && <Badge>{authority.mode}</Badge>}
+        </CardTitle>
+      </CardHeader>
+      <CardContent style={{ padding: '0 20px 20px', display: 'grid', gap: 12 }}>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          {authority?.summary || '本轮会先承接当前场景和短期状态，再参考长期事实；派生索引只辅助召回，不覆盖权威记忆。'}
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+          {order.map((item) => (
+            <AuthorityStageCard
+              key={item.key}
+              title={item.label}
+              tone={item.tone}
+              layer={layers[item.key] as Record<string, unknown> | undefined}
+            />
+          ))}
+        </div>
+        {!hasLayerData && (
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+            当前接口还没有返回分层命中明细，页面会继续使用可信视图和各记忆库列表作为诊断依据。
+          </p>
+        )}
+        {policy.length > 0 && (
+          <div style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>裁决规则</span>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {policy.map((item) => (
+                <Badge key={item} variant="info">{humanizePolicy(item)}</Badge>
+              ))}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AuthorityStageCard({
+  title,
+  tone,
+  layer,
+}: {
+  title: string;
+  tone: string;
+  layer?: Record<string, unknown>;
+}) {
+  const sources = Array.isArray(layer?.sources) ? layer?.sources.map(String) : [];
+  const priority = typeof layer?.priority === 'number' ? layer.priority : undefined;
+  const metrics = Object.entries(layer || {})
+    .filter(([key]) => key !== 'sources' && key !== 'priority')
+    .slice(0, 4);
+
+  return (
+    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+        {priority !== undefined && <Badge style={{ backgroundColor: `${tone}18`, color: tone }}>P{priority}</Badge>}
+      </div>
+      {sources.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {sources.map((source) => (
+            <Badge key={source}>{source}</Badge>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'grid', gap: 4 }}>
+        {metrics.length === 0 ? (
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>暂无命中明细</span>
+        ) : (
+          metrics.map(([key, value]) => (
+            <div key={key} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12 }}>
+              <span style={{ color: 'var(--text-muted)' }}>{humanizeMetricKey(key)}</span>
+              <span style={{ color: 'var(--text-secondary)' }}>{humanizeUnknown(value)}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MemoryArchitecturePanel({ payload }: { payload: MemoryTrustPayload | null }) {
+  const layers = payload?.memory_layers || {};
+  const authoritySummary = layers.authority?.summary || '短期状态、长期事实、派生投影和本轮激活现在各有明确职责。';
+  const projectionSummary = layers.projection?.summary || 'UserUnderstanding、向量索引和 rollup 负责帮助理解和召回，但不再被当作真相源。';
+  const operationsSummary = layers.operations?.summary || '整理、维护和写入流程负责把候选记忆变成稳定事实，或把它们留在派生层。';
+  const explainabilitySummary = layers.explainability?.summary || '诊断层解释本轮为什么这样记、为什么这样召回。';
+
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ padding: '16px 20px 10px', marginBottom: 0, borderBottom: 'none' }}>
+          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Layers3 style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+            记忆系统四层结构
+          </CardTitle>
+        </CardHeader>
+        <CardContent style={{ padding: '0 20px 20px', display: 'grid', gap: 12 }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            先判断当前现场和短期状态，再承接长期事实；投影和索引只辅助，不直接盖过真相源。下面四层对应的是“存什么、怎么用、谁说了算”。
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+            <ArchitectureCard title="1. 权威记忆" badges={['Working', 'Daily', 'Session', 'Semantic', 'Relationship']} description={authoritySummary} />
+            <ArchitectureCard title="2. 派生投影与索引" badges={['Understanding', 'Vector', 'Rollup']} description={projectionSummary} />
+            <ArchitectureCard title="3. 整理与维护" badges={['Governor', 'Maintenance', 'Dreaming']} description={operationsSummary} />
+            <ArchitectureCard title="4. 解释与诊断" badges={['Trust View', 'Prompt', 'Trace']} description={explainabilitySummary} />
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ArchitectureCard({
+  title,
+  badges,
+  description,
+}: {
+  title: string;
+  badges: string[];
+  description: string;
+}) {
+  return (
+    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+        {badges.map((item) => (
+          <Badge key={item}>{item}</Badge>
+        ))}
+      </div>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{description}</p>
+    </div>
+  );
+}
+
 function MemoryTrustPanel({ payload, botId }: { payload: MemoryTrustPayload | null; botId: string }) {
   const view = payload?.memory_trust_view || {};
   const evolutionRefs = payload?.evolution_refs;
+  const authority = payload?.memory_authority || {};
+  const scene = payload?.scene_capsule || view.scene_capsule || {};
   const sessionStates = sessionStateItems(payload?.session_state ?? (view as { session_state?: SessionStateItem[] }).session_state);
   const recently = trustItems(view.recently_remembered);
   const stable = trustItems(view.stable_understanding);
@@ -132,93 +381,116 @@ function MemoryTrustPanel({ payload, botId }: { payload: MemoryTrustPayload | nu
   const hasRelationship = Boolean(relationship.label || relationship.status || relationship.narrative || relationship.guidance);
 
   return (
-    <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
-      <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
-        <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Brain style={{ width: 18, height: 18, color: 'var(--accent)' }} />
-          记忆可信视图
-          {payload?.user_id && <Badge>{payload.user_id}</Badge>}
-        </CardTitle>
-      </CardHeader>
-      <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          <TrustSummary icon={<Clock size={16} />} label="最近记住" value={recently.length} tone="var(--accent)" />
-          <TrustSummary icon={<CheckCircle2 size={16} />} label="稳定理解" value={stable.length} tone="var(--success)" />
-          <TrustSummary icon={<HelpCircle size={16} />} label="待确认" value={pending.length} tone="var(--warning)" />
-          <TrustSummary icon={<Archive size={16} />} label="已纠正/归档" value={corrected.length + archived.length} tone="var(--info)" />
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-          <SessionStateSection items={sessionStates} />
-          <TrustSection title="最近会自然想起" items={recently} empty="暂无最近激活的记忆" />
-          <TrustSection title="稳定用户理解" items={stable} empty="暂无高置信用户事实" />
-          <TrustSection title="需要继续确认" items={pending} empty="暂无低置信待确认事实" />
-        </div>
-
-        {hasRelationship && (
-          <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <Heart style={{ width: 16, height: 16, color: 'var(--error)' }} />
-              <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>关系锚点</span>
-              {relationship.label && <Badge variant="success">{relationship.label}</Badge>}
-              {relationship.status && <Badge>{relationship.status}</Badge>}
-              {typeof relationship.score === 'number' && <Badge variant="info">{relationship.score.toFixed(0)}</Badge>}
-            </div>
-            {relationship.narrative && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)' }}>{relationship.narrative}</p>}
-            {relationship.guidance && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{relationship.guidance}</p>}
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
+          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Brain style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+            记忆总览
+            {payload?.user_id && <Badge>{payload.user_id}</Badge>}
+            <Badge variant="info">先看这里，再去删具体记忆</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 16 }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            这块回答三个问题：现在 Bot 正处在什么现场、这轮该优先信哪层记忆、长期与短期有没有明显冲突。先看明白，再去下面的工作记忆 / 日记忆 / 情景记忆 / 语义记忆页签操作。
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <TrustSummary icon={<Clock size={16} />} label="最近记住" value={recently.length} tone="var(--accent)" />
+            <TrustSummary icon={<CheckCircle2 size={16} />} label="稳定理解" value={stable.length} tone="var(--success)" />
+            <TrustSummary icon={<HelpCircle size={16} />} label="待确认" value={pending.length} tone="var(--warning)" />
+            <TrustSummary icon={<Archive size={16} />} label="已纠正/归档" value={corrected.length + archived.length} tone="var(--info)" />
           </div>
-        )}
+        </CardContent>
+      </Card>
 
-        {(contract || relationshipProjection) && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
-            {contract && (
-              <div style={{ display: 'grid', gap: 12 }}>
-                <ContractFactList title="连续性硬事实" items={contract.hard_facts || []} empty="暂无硬事实" />
-                <ContractFactList title="当前约束" items={contract.active_boundaries || []} empty="暂无当前约束" />
-                <ContractFactList title="软语境" items={contract.soft_context || []} empty="暂无软语境" />
-                <ContractFactList title="表达自由" items={contract.style_freedom || []} empty="暂无表达自由" />
-                <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>风险标记</span>
-                    <Badge>{(contract.risk_flags || []).length}</Badge>
-                  </div>
-                  {(contract.risk_flags || []).length === 0 ? (
-                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>暂无风险标记</p>
-                  ) : (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {(contract.risk_flags || []).map((flag) => (
-                        <Badge key={flag} variant="warning">{flag}</Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            <RelationshipProjectionCard projection={relationshipProjection} />
-          </div>
-        )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+        <SceneCapsuleCard scene={scene} />
+        <MemoryAuthorityCard authority={authority} />
+      </div>
 
-        {(openThreads.length > 0 || commitments.length > 0 || corrected.length > 0 || archived.length > 0) && (
+      <MemoryArchitecturePanel payload={payload} />
+
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
+          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ShieldCheck style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+            可信视图细项
+          </CardTitle>
+        </CardHeader>
+        <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 16 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-            {(openThreads.length > 0 || commitments.length > 0) && (
-              <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Link2 style={{ width: 16, height: 16, color: 'var(--accent)' }} />
-                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>未完成线索</span>
-                </div>
-                {[...openThreads, ...commitments].slice(0, 6).map((item, index) => (
-                  <p key={index} style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{trustText(item)}</p>
-                ))}
-              </div>
-            )}
-            <TrustSection title="已纠正的事实" items={corrected} empty="暂无纠正记录" mode="correction" />
-            <TrustSection title="已归档或抑制" items={archived} empty="暂无归档记录" mode="event" />
+            <SessionStateSection items={sessionStates} />
+            <TrustSection title="最近会自然想起" items={recently} empty="暂无最近激活的记忆" />
+            <TrustSection title="稳定用户理解" items={stable} empty="暂无高置信用户事实" />
+            <TrustSection title="需要继续确认" items={pending} empty="暂无低置信待确认事实" />
           </div>
-        )}
 
-        <EvolutionRefsPanel botId={botId} refs={evolutionRefs} />
-      </CardContent>
-    </Card>
+          {hasRelationship && (
+            <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <Heart style={{ width: 16, height: 16, color: 'var(--error)' }} />
+                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>关系锚点</span>
+                {relationship.label && <Badge variant="success">{relationship.label}</Badge>}
+                {relationship.status && <Badge>{relationship.status}</Badge>}
+                {typeof relationship.score === 'number' && <Badge variant="info">{relationship.score.toFixed(0)}</Badge>}
+              </div>
+              {relationship.narrative && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)' }}>{relationship.narrative}</p>}
+              {relationship.guidance && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{relationship.guidance}</p>}
+            </div>
+          )}
+
+          {(contract || relationshipProjection) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+              {contract && (
+                <div style={{ display: 'grid', gap: 12 }}>
+                  <ContractFactList title="连续性硬事实" items={contract.hard_facts || []} empty="暂无硬事实" />
+                  <ContractFactList title="当前约束" items={contract.active_boundaries || []} empty="暂无当前约束" />
+                  <ContractFactList title="软语境" items={contract.soft_context || []} empty="暂无软语境" />
+                  <ContractFactList title="表达自由" items={contract.style_freedom || []} empty="暂无表达自由" />
+                  <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>风险标记</span>
+                      <Badge>{(contract.risk_flags || []).length}</Badge>
+                    </div>
+                    {(contract.risk_flags || []).length === 0 ? (
+                      <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>暂无风险标记</p>
+                    ) : (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {(contract.risk_flags || []).map((flag) => (
+                          <Badge key={flag} variant="warning">{flag}</Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              <RelationshipProjectionCard projection={relationshipProjection} />
+            </div>
+          )}
+
+          {(openThreads.length > 0 || commitments.length > 0 || corrected.length > 0 || archived.length > 0) && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+              {(openThreads.length > 0 || commitments.length > 0) && (
+                <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Link2 style={{ width: 16, height: 16, color: 'var(--accent)' }} />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>未完成线索</span>
+                  </div>
+                  {[...openThreads, ...commitments].slice(0, 6).map((item, index) => (
+                    <p key={index} style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{trustText(item)}</p>
+                  ))}
+                </div>
+              )}
+              <TrustSection title="已纠正的事实" items={corrected} empty="暂无纠正记录" mode="correction" />
+              <TrustSection title="已归档或抑制" items={archived} empty="暂无归档记录" mode="event" />
+            </div>
+          )}
+
+          <EvolutionRefsPanel botId={botId} refs={evolutionRefs} />
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -763,12 +1035,12 @@ export function Memory() {
       <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
         <CardContent style={{ padding: 16, display: 'grid', gap: 12 }}>
           <div style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>如何理解这一页</span>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Badge variant="info">当前与短期：工作记忆、日记忆</Badge>
-              <Badge>长期与关系：语义、情景、关系状态</Badge>
-              <Badge>索引与投影：向量索引、用户长期理解投影</Badge>
-              <Badge>整理与解释：梦境整理、记忆可信视图、诊断</Badge>
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>操作导航</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+              <ActionHint title="刚说过的话接不上" target="工作记忆 / 日记忆" description="先看当前会话和今日上下文，确认短期连续性有没有丢。" />
+              <ActionHint title="Bot 长期把你记错" target="语义记忆" description="这里是结构化长期事实，删除或校准这里才会影响稳定画像。" />
+              <ActionHint title="共同经历被污染" target="情景记忆" description="这里保存长期事件和关键片段，适合清理误抽取的经历。" />
+              <ActionHint title="召回混乱但事实没错" target="重建向量索引" description="向量是派生索引，可重建；它不应该改变权威记忆本身。" />
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1238,6 +1510,26 @@ export function Memory() {
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+function ActionHint({
+  title,
+  target,
+  description,
+}: {
+  title: string;
+  target: string;
+  description: string;
+}) {
+  return (
+    <div style={{ padding: 12, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+        <Badge variant="info">{target}</Badge>
+      </div>
+      <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{description}</p>
     </div>
   );
 }
