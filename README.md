@@ -29,7 +29,40 @@
 - 推荐安装 Node.js + npm（用于管理后台 UI）
 - 至少一个模型提供方的可用配置
 
-### 安装依赖
+### 一键安装
+
+`macOS / Linux（海外网络）`
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install.sh | bash
+```
+
+`macOS / Linux（中国大陆网络）`
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-cn.sh | bash
+```
+
+`Windows PowerShell（海外网络）`
+
+```powershell
+irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-global.ps1 -UseBasicParsing | iex
+```
+
+`Windows PowerShell（中国大陆网络）`
+
+```powershell
+irm https://raw.githubusercontent.com/Walker7143/ai-companion/master/scripts/install-cn.ps1 -UseBasicParsing | iex
+```
+
+安装脚本会自动：
+
+- 创建运行目录和虚拟环境
+- 安装 Python 依赖与 `ai-companion` 命令
+- 安装前端 UI 依赖（若本机已安装 `npm`）
+- 预下载本地 embedding 模型 `all-MiniLM-L6-v2`
+
+### 手动安装
 
 ```bash
 pip install -r requirements.txt

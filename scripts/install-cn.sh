@@ -108,6 +108,14 @@ install_local() {
     echo "✓ AI Companion 已安装"
     register_gateway_autostart "$USER_DIR/.venv/bin/python"
 
+    echo ""
+    echo "📦 预下载本地 embedding 模型..."
+    if "$USER_DIR/.venv/bin/python" -m ai_companion.embedding_setup; then
+        echo "✓ embedding 模型已缓存"
+    else
+        echo "⚠️  embedding 模型预下载失败（首次启动可能会等待模型下载）"
+    fi
+
     # 复制 Bot 模板到数据目录（pip 不打包运行时数据）
     echo ""
     echo "📦 复制 Bot 人格模板..."

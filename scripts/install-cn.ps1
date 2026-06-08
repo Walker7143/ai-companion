@@ -238,6 +238,19 @@ function Install-Local {
         Set-Location $originalDir
     }
 
+    Write-Host ""
+    Write-Host "Preloading local embedding model..." -ForegroundColor Yellow
+    if ($needsVenv) {
+        & $venvPython -m ai_companion.embedding_setup
+    } else {
+        & python -m ai_companion.embedding_setup
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] Embedding model cached" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN] Embedding model preload failed (first startup may wait for model download)" -ForegroundColor Yellow
+    }
+
     # Install frontend UI dependencies (for management dashboard)
     $uiDir = "$ProjectDir\ai-companion-ui"
     if (Test-Path "$uiDir\package.json") {

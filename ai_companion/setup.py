@@ -8,6 +8,10 @@ from rich.console import Console
 from rich.prompt import Prompt, Confirm
 from rich.table import Table
 import yaml
+from ai_companion.embedding_setup import (
+    DEFAULT_EMBEDDING_MODEL,
+    ensure_local_embedding_model,
+)
 
 console = Console()
 
@@ -939,11 +943,23 @@ async def run_setup():
 
     memory_config = dict(models_config.get("memory", {}) if isinstance(models_config.get("memory"), dict) else {})
     memory_config.setdefault("embedding", "local")
-    memory_config.setdefault("embedding_model", "all-MiniLM-L6-v2")
+    memory_config.setdefault("embedding_model", DEFAULT_EMBEDDING_MODEL)
     models_config["memory"] = memory_config
 
     _write_yaml_file(models_config_path, models_config)
     console.print("✓ 模型配置已保存（已保留其他模型和 memory 配置）\n")
+    if memory_config.get("embedding") == "local":
+        console.print("[bold]预下载本地 embedding 模型...[/bold]")
+        ok, message = ensure_local_embedding_model(
+            str(memory_config.get("embedding_model") or DEFAULT_EMBEDDING_MODEL)
+        )
+        if ok:
+            console.print(f"[green]✓ {message}[/green]\n")
+        else:
+            console.print(f"[yellow]⚠ {message}[/yellow]")
+            console.print(
+                "[yellow]  可稍后手动运行 `python -m ai_companion.embedding_setup` 重试。[/yellow]\n"
+            )
 
     # Step 2: 创建 Bot(s)
     console.print("[bold]步骤 2/8:[/bold] 创建 Bot")
