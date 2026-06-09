@@ -2115,6 +2115,11 @@ async def run_gateway(daemon: bool = True):
         print(f"[ERROR] 平台配置无效: {e}")
         sys.exit(1)
 
+    # 尽早拉起前端，避免被模型/记忆初始化阻塞，改善 restart/start 体感。
+    if should_start_ui(default=True):
+        ui_available = _start_ui_server()
+        print()
+
     model_cfg = config.get_model_config()
     provider = model_cfg.get("provider", config.default_provider)
     env_key_map = {
@@ -2324,11 +2329,6 @@ async def run_gateway(daemon: bool = True):
 
     if not connected_adapters:
         print("       管理 API 已启动，可访问 http://localhost:8642")
-
-    # 默认随网关启动 UI；可用 START_UI=false 或 AI_COMPANION_START_UI=false 关闭。
-    if should_start_ui(default=True):
-        ui_available = _start_ui_server()
-        print()
 
     print()
     print("=" * 50)
