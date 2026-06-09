@@ -6,6 +6,7 @@ from pathlib import Path
 from .config.loader import Config
 from .logging_utils import setup_logging
 from .model.factory import ModelFactory
+from .paths import get_user_bots_dir
 
 from .bot.manager import BotManager
 from .bot.instance import BotInstance
@@ -16,7 +17,7 @@ from .skill.config_merge import merge_skill_config
 
 def get_data_dir() -> Path:
     """获取 Bot 数据根目录，优先用户目录 ~/.ai-companion/"""
-    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    user_dir = get_user_bots_dir()
     if user_dir.exists():
         return user_dir
     return Path(__file__).parent.parent.parent / "data" / "bots"
@@ -49,7 +50,7 @@ async def main(bot_filter: str = None):
     setup_logging(bot_name=bot_name_for_log, config=config.config)
 
     # 获取数据目录
-    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    user_dir = get_user_bots_dir()
     if user_dir.exists():
         data_dir = user_dir
     else:

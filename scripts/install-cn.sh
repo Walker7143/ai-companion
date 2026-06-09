@@ -9,6 +9,19 @@
 set -e
 
 INSTALL_MODE="${1:-auto}"
+case "$INSTALL_MODE" in
+    -d|--docker) INSTALL_MODE="docker" ;;
+    -l|--local) INSTALL_MODE="local" ;;
+    ""|auto|docker|local) ;;
+    -h|--help)
+        echo "Usage: bash install-cn.sh [auto|local|docker|--local|--docker]"
+        exit 0
+        ;;
+    *)
+        echo "Unknown install mode: $INSTALL_MODE"
+        exit 1
+        ;;
+esac
 PYTHON_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
 
 echo "═══════════════════════════════════════════"
@@ -39,7 +52,7 @@ check_python() {
     fi
 
     VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
-    if [ "$(echo "$VERSION < 3.11" | bc 2>/dev/null || echo "1")" = "1" ]; then
+    if ! $PYTHON_CMD -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" 2>/dev/null; then
         return 1
     fi
     echo "✓ Python $VERSION"

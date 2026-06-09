@@ -53,6 +53,7 @@ from ai_companion.logging_utils import (
     get_log_max_bytes,
     start_log_limit_maintenance,
 )
+from ai_companion.paths import get_app_home
 from ai_companion.ui_server import (
     UI_PORT,
     UIStartResult,
@@ -1601,7 +1602,7 @@ def get_data_dir() -> Path:
 
 def load_platform_config(platform_name: str) -> dict | None:
     """从 ~/.ai-companion/config/config.yaml 加载单个平台配置。"""
-    config_path = Path.home() / ".ai-companion" / "config" / "config.yaml"
+    config_path = get_app_home() / "config" / "config.yaml"
     if not config_path.exists():
         return None
 

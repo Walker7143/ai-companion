@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
+from ai_companion.paths import get_app_home
+
 
 def user_bots_dir() -> Path:
-    return Path.home() / ".ai-companion" / "data" / "bots"
+    return get_app_home() / "data" / "bots"
 
 
 def project_bots_dir() -> Path:

@@ -222,6 +222,7 @@ function Install-Local {
             Write-Host "System Python is protected, creating virtual environment..." -ForegroundColor Yellow
             python -m venv $venvDir
             $venvPip = "$venvDir\Scripts\pip.exe"
+            $venvPython = "$venvDir\Scripts\python.exe"
             & $venvPip install --upgrade pip -q
             & $venvPip install -r requirements.txt -q
             & $venvPip install -e . -q

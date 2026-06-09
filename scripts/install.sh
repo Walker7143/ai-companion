@@ -12,6 +12,9 @@
 set -e
 
 INSTALL_MODE="auto"
+PROJECT_DIR=""
+TEMP_DIR=""
+ARCHIVE_URL="https://github.com/Walker7143/ai-companion/archive/refs/heads/master.tar.gz"
 
 # 解析参数
 while [[ $# -gt 0 ]]; do
@@ -66,11 +69,7 @@ check_python_quiet() {
         return 1
     fi
 
-    VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
-    if [ "$(echo "$VERSION < 3.11" | bc 2>/dev/null || echo "1")" = "1" ]; then
-        return 1
-    fi
-    return 0
+    $PYTHON_CMD -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" 2>/dev/null
 }
 
 # 检测 pip 是否可用（能正常安装包）
@@ -123,7 +122,7 @@ install_local() {
     fi
 
     VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
-    if [ "$(echo "$VERSION < 3.11" | bc 2>/dev/null || echo "1")" = "1" ]; then
+    if ! $PYTHON_CMD -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" 2>/dev/null; then
         echo "❌ Python 版本过低: $VERSION (需要 3.11+)"
         echo "请升级 Python: https://www.python.org/downloads/"
         exit 1
@@ -155,9 +154,6 @@ install_local() {
 
     # 获取项目目录
     # 使用 readlink -f 兼容 Windows Git Bash/MSYS2 环境下的路径格式（如 file:///C:/Users/...）
-    SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-    PROJECT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
-
     echo ""
     echo "📦 安装 AI Companion..."
     $VENV_PIP install -e "$PROJECT_DIR" -q
@@ -191,8 +187,8 @@ install_local() {
     echo "⚙️  初始化配置..."
     if [ ! -f "$USER_DIR/config/models.yaml" ]; then
         mkdir -p "$USER_DIR/config"
-        cp config/bots.yaml.example "$USER_DIR/config/bots.yaml" 2>/dev/null || true
-        cp config/models.yaml.example "$USER_DIR/config/models.yaml" 2>/dev/null || true
+        cp "$PROJECT_DIR/config/bots.yaml.example" "$USER_DIR/config/bots.yaml" 2>/dev/null || true
+        cp "$PROJECT_DIR/config/models.yaml.example" "$USER_DIR/config/models.yaml" 2>/dev/null || true
         echo "✓ 配置文件已创建"
     fi
 
@@ -228,7 +224,7 @@ install_docker() {
 
     echo ""
     echo "📦 构建 Docker 镜像..."
-    docker build -t ai-companion .
+    docker build -t ai-companion "$PROJECT_DIR"
     echo "✓ 镜像构建完成"
 
     echo ""
@@ -260,6 +256,39 @@ install_docker() {
 }
 
 # 主流程
+prepare_project_dir() {
+    local script_path
+    script_path="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    local candidate
+    candidate="$(cd "$(dirname "$script_path")/.." 2>/dev/null && pwd || true)"
+    if [ -n "$candidate" ] && [ -f "$candidate/setup.py" ]; then
+        PROJECT_DIR="$candidate"
+        return 0
+    fi
+
+    echo "Downloading project archive..."
+    TEMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TEMP_DIR"' EXIT
+    if command -v curl &> /dev/null; then
+        curl -fsSL "$ARCHIVE_URL" -o "$TEMP_DIR/project.tar.gz"
+    elif command -v wget &> /dev/null; then
+        wget -q "$ARCHIVE_URL" -O "$TEMP_DIR/project.tar.gz"
+    else
+        echo "curl or wget is required"
+        exit 1
+    fi
+
+    mkdir -p "$TEMP_DIR/extracted"
+    tar -xzf "$TEMP_DIR/project.tar.gz" -C "$TEMP_DIR/extracted"
+    PROJECT_DIR=$(find "$TEMP_DIR/extracted" -mindepth 1 -maxdepth 1 -type d | head -1)
+    if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/setup.py" ]; then
+        echo "Downloaded project structure is invalid"
+        exit 1
+    fi
+}
+
+prepare_project_dir
+
 case $INSTALL_MODE in
     docker)
         install_docker

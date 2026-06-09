@@ -13,6 +13,7 @@ from rich.console import Console
 
 from ..bot.instance import BotInstance
 from ..config.loader import Config
+from ..paths import get_user_bots_dir
 from ..skill.base import SkillContext
 from ..skill.builtin_manager import BuiltinSkillManager
 from ..skill.command import format_runtime_skill_capabilities, format_skill_result, parse_cli_params
@@ -42,7 +43,7 @@ def create_skill_parser(subparsers: argparse.Action = None) -> Optional[argparse
 
 
 def _get_data_dir() -> Path:
-    user_dir = Path.home() / ".ai-companion" / "data" / "bots"
+    user_dir = get_user_bots_dir()
     if user_dir.exists():
         return user_dir
     return Path(__file__).parent.parent.parent / "data" / "bots"

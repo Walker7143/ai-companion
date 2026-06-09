@@ -1,8 +1,9 @@
 import os
-import sys
 import yaml
 from pathlib import Path
 from typing import Optional
+
+from ai_companion.paths import get_app_home
 
 
 class Config:
@@ -11,10 +12,8 @@ class Config:
     def __init__(self, config_dir: Path = None):
         if config_dir:
             self.config_dir = config_dir
-        elif sys.platform == "win32":
-            self.config_dir = Path.home() / ".ai-companion" / "config"
         else:
-            self.config_dir = Path.home() / ".ai-companion" / "config"
+            self.config_dir = get_app_home() / "config"
 
         self._bots = None
         self._models = None
