@@ -953,6 +953,7 @@ async def _start_admin_api(bot_manager: BotManager, config: Config):
                 "relationship": status.get("relationship") or {},
                 "daily_open_threads": status.get("daily_open_threads") or [],
                 "daily_commitments": status.get("daily_commitments") or [],
+                "active_memory_details": status.get("active_memory_details") or [],
             })
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)

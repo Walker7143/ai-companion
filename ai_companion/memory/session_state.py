@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
@@ -347,6 +348,31 @@ class SessionStateStore:
     async def list_recent_states(self, session_id: str, limit: int = 12) -> list[SessionStateItem]:
         return await self._list_states(session_id=session_id, statuses=None, limit=limit)
 
+    async def get_latest_session_id(self, *, active_only: bool = True) -> str | None:
+        return await asyncio.to_thread(self._get_latest_session_id_sync, active_only)
+
+    def _get_latest_session_id_sync(self, active_only: bool) -> str | None:
+        clauses: list[str] = ["session_id IS NOT NULL", "session_id != ''"]
+        params: list[Any] = []
+        if active_only:
+            clauses.append("status IN (?, ?)")
+            params.extend(["active", "tentative"])
+            clauses.append("(expires_at IS NULL OR expires_at > ?)")
+            params.append(_utcnow())
+        sql = f"""
+            SELECT session_id
+            FROM session_states
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(sql, params).fetchone()
+        if not row:
+            return None
+        session_id = str(row[0] or "").strip()
+        return session_id or None
+
     async def _list_states(
         self,
         *,
@@ -414,7 +440,7 @@ def extract_scene_summary(active_states: list) -> dict | None:
         value = item.value if hasattr(item, "value") else item.get("value", "")
         if scope != "current_scene" and not str(scope).startswith("current_scene/"):
             continue
-        if subject not in {"shared", "assistant", ""}:
+        if subject not in {"shared", "assistant", "user", ""}:
             continue
         state = item.to_dict() if hasattr(item, "to_dict") else dict(item)
         states.append(state)
@@ -428,6 +454,7 @@ def extract_scene_summary(active_states: list) -> dict | None:
             spatial = value
     if location or activity or next_action or spatial:
         return {
+            "subject": subject or "shared",
             "location": location,
             "activity": activity,
             "next_action": next_action,

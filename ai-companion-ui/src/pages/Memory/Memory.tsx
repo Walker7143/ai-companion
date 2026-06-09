@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Archive, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, Heart, HelpCircle, Layers3, Link2, MapPin, RefreshCw, Search, ShieldCheck, Star, Trash2, User } from 'lucide-react';
+import { Archive, ArrowRight, Brain, CalendarDays, CheckCircle2, Clock, Database, Filter, Heart, HelpCircle, Layers3, Link2, MapPin, RefreshCw, Search, ShieldCheck, Star, Trash2, User, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Modal, useToast } from '../../components/ui';
 import { memoryApi } from '../../api';
 import { useBotStore } from '../../stores';
 import type {
+  ActiveMemoryDetail,
   ContinuityContractFact,
   DailyMemoryPayload,
   DreamingDoctorPayload,
@@ -24,7 +25,7 @@ import type {
   EvolutionTimelineItem,
 } from '../../types';
 
-type MemoryTab = 'stats' | 'working' | 'daily' | 'episodic' | 'semantic';
+type MemoryTab = 'overview' | 'working' | 'daily' | 'episodic' | 'semantic' | 'tools';
 type MemoryDeleteType = 'working' | 'daily' | 'episodic' | 'semantic';
 
 interface DeleteTarget {
@@ -33,6 +34,8 @@ interface DeleteTarget {
   label: string;
   detail?: string;
 }
+
+type ActiveMemoryFocusKey = 'active' | 'recent' | 'stable' | 'pending' | 'changes';
 
 function LayerHint({
   title,
@@ -141,6 +144,21 @@ function humanizeUnknown(value: unknown) {
   if (value === null || value === undefined || value === '') return '暂无';
   if (typeof value === 'object') return '已生成';
   return String(value);
+}
+
+function formatMb(value?: number | null) {
+  return `${((value || 0) / 1024).toFixed(2)} MB`;
+}
+
+function humanizeExpressionMode(value?: string) {
+  const labels: Record<string, string> = {
+    explicit_recall: '直接提起',
+    light_reference: '轻描淡写地带出',
+    silent_influence: '只影响语气和分寸',
+    ask_before_entering: '先确认再展开',
+    avoid: '不要主动提',
+  };
+  return labels[value || ''] || value || '未标注';
 }
 
 function RelationshipMetric({ label, value, tone }: { label: string; value: number; tone: string }) {
@@ -362,6 +380,236 @@ function ArchitectureCard({
   );
 }
 
+function MemoryOverviewPanel({
+  memoryStats,
+  memoryTrust,
+  dreamingStatus,
+  onSelectTab,
+  botId,
+}: {
+  memoryStats: MemoryStats | null;
+  memoryTrust: MemoryTrustPayload | null;
+  dreamingStatus: DreamingStatusPayload | null;
+  onSelectTab: (tab: MemoryTab) => void;
+  botId: string;
+}) {
+  const layers = [
+    {
+      tab: 'working' as const,
+      title: '1. 工作记忆',
+      subtitle: '当前会话里刚说过的话',
+      description: '只负责接住最近几轮对话，不会直接变成长期印象。',
+      count: memoryStats?.working_count ?? 0,
+      size: formatMb(memoryStats?.working_size_kb),
+      badge: '短期',
+      tone: 'var(--accent)',
+      icon: Clock,
+    },
+    {
+      tab: 'daily' as const,
+      title: '2. 日记忆',
+      subtitle: '最近几天、跨会话的连续性',
+      description: '帮助 Bot 在不同通道和会话之间继续接住上下文。',
+      count: memoryStats?.daily_count ?? 0,
+      size: formatMb(memoryStats?.daily_size_kb),
+      badge: '短期',
+      tone: 'var(--success)',
+      icon: CalendarDays,
+    },
+    {
+      tab: 'episodic' as const,
+      title: '3. 情景记忆',
+      subtitle: '共同经历与关键事件',
+      description: '保存值得长期记住的片段，适合清理误抽取的经历。',
+      count: memoryStats?.episodic_count ?? 0,
+      size: formatMb(memoryStats?.episodic_size_kb),
+      badge: '长期',
+      tone: 'var(--warning)',
+      icon: Brain,
+    },
+    {
+      tab: 'semantic' as const,
+      title: '4. 语义记忆',
+      subtitle: '稳定事实与关系状态',
+      description: '这里是长期真相源，改这里才是在真正修正长期画像。',
+      count: memoryStats?.semantic_count ?? 0,
+      size: formatMb(memoryStats?.semantic_size_kb),
+      badge: '长期',
+      tone: 'var(--info)',
+      icon: User,
+    },
+  ];
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardContent style={{ padding: 20, display: 'grid', gap: 16 }}>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--accent)' }}>MEMORY MAP</span>
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: 'var(--text-primary)' }}>先看地图，再进单层</h2>
+            <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+              这个页面现在按“短期承接 → 长期沉淀 → 派生维护”的顺序来看。你不用先理解所有卡片，只要先判断问题落在哪一层，再点进去处理。
+            </p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+            <OverviewStep
+              index="01"
+              title="先看现在 Bot 正在承接什么"
+              description="下面的“当前正在生效的记忆”会告诉你这轮回复优先信哪一层。"
+            />
+            <OverviewStep
+              index="02"
+              title="再进对应记忆层"
+              description="刚说过的话去工作/日记忆，长期记错去语义/情景记忆。"
+            />
+            <OverviewStep
+              index="03"
+              title="最后再动维护工具"
+              description="向量、整理和清空全部都放到单独页签，避免和事实层混在一起。"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
+          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Layers3 style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+            记忆层级地图
+            <Badge variant="info">按职责分层</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 12 }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            只有前四层是真正的“记忆库”。向量索引、可信视图、梦境整理都是派生层或维护层，不应该和记忆真相源混为一谈。
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+            {layers.map((layer) => (
+              <LayerEntryCard key={layer.tab} {...layer} onOpen={() => onSelectTab(layer.tab)} />
+            ))}
+            <LayerUtilityCard
+              title="5. 派生层与维护"
+              subtitle="向量索引、可信视图、梦境整理"
+              description="它们负责召回、解释和整理，不直接决定长期真相。"
+              vectorCount={memoryStats?.vector_count ?? 0}
+              dreamingEnabled={dreamingStatus?.enabled ?? false}
+              onOpen={() => onSelectTab('tools')}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <MemoryTrustPanel payload={memoryTrust} botId={botId} />
+    </div>
+  );
+}
+
+function OverviewStep({
+  index,
+  title,
+  description,
+}: {
+  index: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div style={{ padding: 14, borderRadius: 10, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+      <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--accent)' }}>{index}</span>
+      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{description}</p>
+    </div>
+  );
+}
+
+function LayerEntryCard({
+  title,
+  subtitle,
+  description,
+  count,
+  size,
+  badge,
+  tone,
+  icon: Icon,
+  onOpen,
+}: {
+  title: string;
+  subtitle: string;
+  description: string;
+  count: number;
+  size: string;
+  badge: string;
+  tone: string;
+  icon: typeof Clock;
+  onOpen: () => void;
+}) {
+  return (
+    <div style={{ padding: 14, borderRadius: 10, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ display: 'grid', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, backgroundColor: `${tone}18`, color: tone, display: 'grid', placeItems: 'center' }}>
+              <Icon style={{ width: 16, height: 16 }} />
+            </div>
+            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+          </div>
+          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{subtitle}</span>
+        </div>
+        <Badge variant={badge === '长期' ? 'warning' : 'info'}>{badge}</Badge>
+      </div>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{description}</p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Badge>{count} 条</Badge>
+        <Badge>{size}</Badge>
+        {count === 0 && <Badge variant="default">当前为空</Badge>}
+      </div>
+      <Button variant="secondary" size="sm" onClick={onOpen} style={{ justifyContent: 'space-between' }}>
+        查看这一层
+        <ArrowRight style={{ width: 14, height: 14 }} />
+      </Button>
+    </div>
+  );
+}
+
+function LayerUtilityCard({
+  title,
+  subtitle,
+  description,
+  vectorCount,
+  dreamingEnabled,
+  onOpen,
+}: {
+  title: string;
+  subtitle: string;
+  description: string;
+  vectorCount: number;
+  dreamingEnabled: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <div style={{ padding: 14, borderRadius: 10, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 10 }}>
+      <div style={{ display: 'grid', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ width: 30, height: 30, borderRadius: 8, backgroundColor: 'var(--accent-light)', color: 'var(--accent)', display: 'grid', placeItems: 'center' }}>
+            <Wrench style={{ width: 16, height: 16 }} />
+          </div>
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+        </div>
+        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{subtitle}</span>
+      </div>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{description}</p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Badge>向量 {vectorCount} 条</Badge>
+        <Badge variant={dreamingEnabled ? 'success' : 'default'}>{dreamingEnabled ? '整理开启中' : '整理未开启'}</Badge>
+      </div>
+      <Button variant="secondary" size="sm" onClick={onOpen} style={{ justifyContent: 'space-between' }}>
+        打开维护工具
+        <ArrowRight style={{ width: 14, height: 14 }} />
+      </Button>
+    </div>
+  );
+}
+
 function MemoryTrustPanel({ payload, botId }: { payload: MemoryTrustPayload | null; botId: string }) {
   const view = payload?.memory_trust_view || {};
   const evolutionRefs = payload?.evolution_refs;
@@ -378,7 +626,33 @@ function MemoryTrustPanel({ payload, botId }: { payload: MemoryTrustPayload | nu
   const relationshipProjection = payload?.relationship_projection || null;
   const openThreads = Array.isArray(view.open_threads) ? view.open_threads : [];
   const commitments = Array.isArray(view.commitments) ? view.commitments : [];
+  const activeMemoryDetails = Array.isArray(view.active_memory_details)
+    ? view.active_memory_details.filter(Boolean)
+    : Array.isArray(payload?.active_memory_details)
+      ? payload.active_memory_details.filter(Boolean)
+      : [];
   const hasRelationship = Boolean(relationship.label || relationship.status || relationship.narrative || relationship.guidance);
+  const activeInsightCount = activeMemoryDetails.length || (sessionStates.length + recently.length + stable.length + pending.length);
+  const hasAttentionItems = pending.length > 0 || corrected.length > 0 || archived.length > 0 || openThreads.length > 0 || commitments.length > 0;
+  const hasRelationshipInsights = hasRelationship || Boolean(contract) || Boolean(relationshipProjection);
+  const hasCurrentContext = Boolean(scene.active) || sessionStates.length > 0 || recently.length > 0 || stable.length > 0 || activeMemoryDetails.length > 0;
+  const focusOptions = useMemo(() => ([
+    { key: 'active' as const, label: '当前线索', value: activeInsightCount, tone: 'var(--accent)', icon: <Brain size={16} /> },
+    { key: 'recent' as const, label: '最近记住', value: recently.length, tone: 'var(--accent)', icon: <Clock size={16} /> },
+    { key: 'stable' as const, label: '稳定理解', value: stable.length, tone: 'var(--success)', icon: <CheckCircle2 size={16} /> },
+    { key: 'pending' as const, label: '待确认', value: pending.length, tone: 'var(--warning)', icon: <HelpCircle size={16} /> },
+    { key: 'changes' as const, label: '已纠正/归档', value: corrected.length + archived.length, tone: 'var(--info)', icon: <Archive size={16} /> },
+  ]), [activeInsightCount, archived.length, corrected.length, pending.length, recently.length, stable.length]);
+  const [selectedFocus, setSelectedFocus] = useState<ActiveMemoryFocusKey>('active');
+
+  useEffect(() => {
+    const hasSelectedContent = focusOptions.some((item) => item.key === selectedFocus && item.value > 0);
+    if (hasSelectedContent) return;
+    const fallback = focusOptions.find((item) => item.value > 0);
+    if (fallback) {
+      setSelectedFocus(fallback.key);
+    }
+  }, [focusOptions, selectedFocus]);
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
@@ -386,21 +660,37 @@ function MemoryTrustPanel({ payload, botId }: { payload: MemoryTrustPayload | nu
         <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
           <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <Brain style={{ width: 18, height: 18, color: 'var(--accent)' }} />
-            记忆总览
+            当前正在生效的记忆
             {payload?.user_id && <Badge>{payload.user_id}</Badge>}
-            <Badge variant="info">先看这里，再去删具体记忆</Badge>
+            <Badge variant="info">先判断这轮回复在信什么</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 16 }}>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-            这块回答三个问题：现在 Bot 正处在什么现场、这轮该优先信哪层记忆、长期与短期有没有明显冲突。先看明白，再去下面的工作记忆 / 日记忆 / 情景记忆 / 语义记忆页签操作。
+            这里回答三件事：现在 Bot 处在什么现场、这轮优先信哪层记忆、有没有需要你介入的冲突或脏数据。下面只展示正在起作用的内容，没有内容的块会自动收起。
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-            <TrustSummary icon={<Clock size={16} />} label="最近记住" value={recently.length} tone="var(--accent)" />
-            <TrustSummary icon={<CheckCircle2 size={16} />} label="稳定理解" value={stable.length} tone="var(--success)" />
-            <TrustSummary icon={<HelpCircle size={16} />} label="待确认" value={pending.length} tone="var(--warning)" />
-            <TrustSummary icon={<Archive size={16} />} label="已纠正/归档" value={corrected.length + archived.length} tone="var(--info)" />
+            {focusOptions.map((item) => (
+              <TrustSummary
+                key={item.key}
+                icon={item.icon}
+                label={item.label}
+                value={item.value}
+                tone={item.tone}
+                selected={selectedFocus === item.key}
+                onClick={() => setSelectedFocus(item.key)}
+              />
+            ))}
           </div>
+          <SelectedFocusDetail
+            selectedFocus={selectedFocus}
+            activeMemoryDetails={activeMemoryDetails}
+            recently={recently}
+            stable={stable}
+            pending={pending}
+            corrected={corrected}
+            archived={archived}
+          />
         </CardContent>
       </Card>
 
@@ -411,90 +701,115 @@ function MemoryTrustPanel({ payload, botId }: { payload: MemoryTrustPayload | nu
 
       <MemoryArchitecturePanel payload={payload} />
 
-      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
-        <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
-          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <ShieldCheck style={{ width: 18, height: 18, color: 'var(--accent)' }} />
-            可信视图细项
-          </CardTitle>
-        </CardHeader>
-        <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 16 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-            <SessionStateSection items={sessionStates} />
-            <TrustSection title="最近会自然想起" items={recently} empty="暂无最近激活的记忆" />
-            <TrustSection title="稳定用户理解" items={stable} empty="暂无高置信用户事实" />
-            <TrustSection title="需要继续确认" items={pending} empty="暂无低置信待确认事实" />
-          </div>
-
-          {hasRelationship && (
-            <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <Heart style={{ width: 16, height: 16, color: 'var(--error)' }} />
-                <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>关系锚点</span>
-                {relationship.label && <Badge variant="success">{relationship.label}</Badge>}
-                {relationship.status && <Badge>{relationship.status}</Badge>}
-                {typeof relationship.score === 'number' && <Badge variant="info">{relationship.score.toFixed(0)}</Badge>}
-              </div>
-              {relationship.narrative && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)' }}>{relationship.narrative}</p>}
-              {relationship.guidance && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{relationship.guidance}</p>}
+      {hasCurrentContext && (
+        <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+          <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
+            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ShieldCheck style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+              这轮回复最可能用到的线索
+            </CardTitle>
+          </CardHeader>
+          <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+              {activeMemoryDetails.length > 0 && <ActiveMemorySection items={activeMemoryDetails} />}
+              {sessionStates.length > 0 && <SessionStateSection items={sessionStates} />}
+              {recently.length > 0 && <TrustSection title="最近会自然想起" items={recently} empty="暂无最近激活的记忆" />}
+              {stable.length > 0 && <TrustSection title="稳定用户理解" items={stable} empty="暂无高置信用户事实" />}
+              {pending.length > 0 && <TrustSection title="需要继续确认" items={pending} empty="暂无低置信待确认事实" />}
             </div>
-          )}
+          </CardContent>
+        </Card>
+      )}
 
-          {(contract || relationshipProjection) && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
-              {contract && (
-                <div style={{ display: 'grid', gap: 12 }}>
-                  <ContractFactList title="连续性硬事实" items={contract.hard_facts || []} empty="暂无硬事实" />
-                  <ContractFactList title="当前约束" items={contract.active_boundaries || []} empty="暂无当前约束" />
-                  <ContractFactList title="软语境" items={contract.soft_context || []} empty="暂无软语境" />
-                  <ContractFactList title="表达自由" items={contract.style_freedom || []} empty="暂无表达自由" />
-                  <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>风险标记</span>
-                      <Badge>{(contract.risk_flags || []).length}</Badge>
-                    </div>
-                    {(contract.risk_flags || []).length === 0 ? (
-                      <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>暂无风险标记</p>
-                    ) : (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        {(contract.risk_flags || []).map((flag) => (
-                          <Badge key={flag} variant="warning">{flag}</Badge>
-                        ))}
+      {hasRelationshipInsights && (
+        <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+          <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
+            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Heart style={{ width: 18, height: 18, color: 'var(--error)' }} />
+              长期关系与连续性
+            </CardTitle>
+          </CardHeader>
+          <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 16 }}>
+            {hasRelationship && (
+              <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>关系锚点</span>
+                  {relationship.label && <Badge variant="success">{relationship.label}</Badge>}
+                  {relationship.status && <Badge>{relationship.status}</Badge>}
+                  {typeof relationship.score === 'number' && <Badge variant="info">{relationship.score.toFixed(0)}</Badge>}
+                </div>
+                {relationship.narrative && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)' }}>{relationship.narrative}</p>}
+                {relationship.guidance && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{relationship.guidance}</p>}
+              </div>
+            )}
+
+            {(contract || relationshipProjection) && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+                {contract && (
+                  <div style={{ display: 'grid', gap: 12 }}>
+                    <ContractFactList title="连续性硬事实" items={contract.hard_facts || []} empty="暂无硬事实" />
+                    <ContractFactList title="当前约束" items={contract.active_boundaries || []} empty="暂无当前约束" />
+                    <ContractFactList title="软语境" items={contract.soft_context || []} empty="暂无软语境" />
+                    <ContractFactList title="表达自由" items={contract.style_freedom || []} empty="暂无表达自由" />
+                    {(contract.risk_flags || []).length > 0 && (
+                      <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>风险标记</span>
+                          <Badge>{(contract.risk_flags || []).length}</Badge>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {(contract.risk_flags || []).map((flag) => (
+                            <Badge key={flag} variant="warning">{flag}</Badge>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
-                </div>
-              )}
-              <RelationshipProjectionCard projection={relationshipProjection} />
-            </div>
-          )}
+                )}
+                <RelationshipProjectionCard projection={relationshipProjection} />
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
-          {(openThreads.length > 0 || commitments.length > 0 || corrected.length > 0 || archived.length > 0) && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
-              {(openThreads.length > 0 || commitments.length > 0) && (
-                <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Link2 style={{ width: 16, height: 16, color: 'var(--accent)' }} />
-                    <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>未完成线索</span>
+      {(hasAttentionItems || evolutionRefs) && (
+        <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+          <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
+            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Archive style={{ width: 18, height: 18, color: 'var(--warning)' }} />
+              需要你关注的变化
+            </CardTitle>
+          </CardHeader>
+          <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 12 }}>
+            {(openThreads.length > 0 || commitments.length > 0 || corrected.length > 0 || archived.length > 0) && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+                {(openThreads.length > 0 || commitments.length > 0) && (
+                  <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Link2 style={{ width: 16, height: 16, color: 'var(--accent)' }} />
+                      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>未完成线索</span>
+                    </div>
+                    {[...openThreads, ...commitments].slice(0, 6).map((item, index) => (
+                      <p key={index} style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{trustText(item)}</p>
+                    ))}
                   </div>
-                  {[...openThreads, ...commitments].slice(0, 6).map((item, index) => (
-                    <p key={index} style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>{trustText(item)}</p>
-                  ))}
-                </div>
-              )}
-              <TrustSection title="已纠正的事实" items={corrected} empty="暂无纠正记录" mode="correction" />
-              <TrustSection title="已归档或抑制" items={archived} empty="暂无归档记录" mode="event" />
-            </div>
-          )}
+                )}
+                {corrected.length > 0 && <TrustSection title="已纠正的事实" items={corrected} empty="暂无纠正记录" mode="correction" />}
+                {archived.length > 0 && <TrustSection title="已归档或抑制" items={archived} empty="暂无归档记录" mode="event" />}
+              </div>
+            )}
 
-          <EvolutionRefsPanel botId={botId} refs={evolutionRefs} />
-        </CardContent>
-      </Card>
+            <EvolutionRefsPanel botId={botId} refs={evolutionRefs} />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
 
 function EvolutionRefsPanel({ botId, refs }: { botId: string; refs?: EvolutionRefsView }) {
+  if (!refs) return null;
   const timeline = Array.isArray(refs?.timeline_preview) ? refs.timeline_preview : [];
   const diagnostics = refs?.diagnostics;
   const pendingCount = refs?.pending_candidates?.length ?? 0;
@@ -632,9 +947,38 @@ function RelationshipProjectionCard({ projection }: { projection: RelationshipPr
   );
 }
 
-function TrustSummary({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: string }) {
+function TrustSummary({
+  icon,
+  label,
+  value,
+  tone,
+  selected = false,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  tone: string;
+  selected?: boolean;
+  onClick?: () => void;
+}) {
   return (
-    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'flex', alignItems: 'center', gap: 12 }}>
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: 14,
+        borderRadius: 8,
+        backgroundColor: selected ? `${tone}12` : 'var(--bg-tertiary)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        border: selected ? `1px solid ${tone}` : '1px solid var(--border-subtle)',
+        width: '100%',
+        textAlign: 'left',
+        cursor: 'pointer',
+      }}
+    >
       <div style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: `${tone}18`, color: tone, display: 'grid', placeItems: 'center', flex: '0 0 auto' }}>
         {icon}
       </div>
@@ -642,6 +986,107 @@ function TrustSummary({ icon, label, value, tone }: { icon: React.ReactNode; lab
         <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>{value}</div>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{label}</div>
       </div>
+    </button>
+  );
+}
+
+function ActiveMemoryPreview({ items }: { items: ActiveMemoryDetail[] }) {
+  return (
+    <div style={{ padding: 14, borderRadius: 10, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Search style={{ width: 16, height: 16, color: 'var(--accent)' }} />
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>这轮正在用的线索明细</span>
+        </div>
+        <Badge variant="info">{items.length} 条</Badge>
+      </div>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+        下面这些就是“当前正在生效的记忆”的具体内容，不只是条数。
+      </p>
+      {items.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>当前没有可展示的线索明细</p>
+      ) : (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {items.slice(0, 8).map((item, index) => (
+            <div
+              key={`${item.text || item.source || 'preview'}-${index}`}
+              style={{ display: 'grid', gap: 6, paddingTop: 8, borderTop: '1px solid var(--border-subtle)' }}
+            >
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>线索 {index + 1}</span>
+                {item.source && <Badge variant="info">{item.source}</Badge>}
+                {typeof item.score === 'number' && <Badge>{item.score.toFixed(2)}</Badge>}
+                {item.expression_mode && <Badge>{humanizeExpressionMode(item.expression_mode)}</Badge>}
+              </div>
+              {item.text && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6 }}>{item.text}</p>}
+              {item.reason && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>为什么会生效：{item.reason}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SelectedFocusDetail({
+  selectedFocus,
+  activeMemoryDetails,
+  recently,
+  stable,
+  pending,
+  corrected,
+  archived,
+}: {
+  selectedFocus: ActiveMemoryFocusKey;
+  activeMemoryDetails: ActiveMemoryDetail[];
+  recently: MemoryTrustItem[];
+  stable: MemoryTrustItem[];
+  pending: MemoryTrustItem[];
+  corrected: MemoryTrustItem[];
+  archived: MemoryTrustItem[];
+}) {
+  if (selectedFocus === 'active') {
+    return <ActiveMemoryPreview items={activeMemoryDetails} />;
+  }
+  if (selectedFocus === 'recent') {
+    return <TrustSection title="最近记住的内容明细" items={recently} empty="最近没有可展示的激活记忆" />;
+  }
+  if (selectedFocus === 'stable') {
+    return <TrustSection title="稳定理解明细" items={stable} empty="当前没有高置信稳定理解" />;
+  }
+  if (selectedFocus === 'pending') {
+    return <TrustSection title="待确认明细" items={pending} empty="当前没有待确认线索" />;
+  }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+      <TrustSection title="已纠正的事实明细" items={corrected} empty="当前没有已纠正事实" mode="correction" />
+      <TrustSection title="已归档或抑制明细" items={archived} empty="当前没有归档或抑制项" mode="event" />
+    </div>
+  );
+}
+
+function ActiveMemorySection({ items }: { items: ActiveMemoryDetail[] }) {
+  return (
+    <div style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 10, alignContent: 'start' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>本轮激活明细</span>
+        <Badge>{items.length}</Badge>
+      </div>
+      {items.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>当前没有可展示的激活明细</p>
+      ) : (
+        items.slice(0, 8).map((item, index) => (
+          <div key={`${item.text || item.source || 'active'}-${index}`} style={{ display: 'grid', gap: 6, paddingTop: 8, borderTop: '1px solid var(--border-subtle)' }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              {item.source && <Badge variant="info">{item.source}</Badge>}
+              {typeof item.score === 'number' && <Badge>{item.score.toFixed(2)}</Badge>}
+              {item.expression_mode && <Badge>{humanizeExpressionMode(item.expression_mode)}</Badge>}
+            </div>
+            {item.text && <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6 }}>{clipText(item.text, 160)}</p>}
+            {item.reason && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>原因：{item.reason}</span>}
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -693,11 +1138,195 @@ function TrustItemRow({ item, mode }: { item: MemoryTrustItem; mode: 'memory' | 
   );
 }
 
+function MemoryMaintenancePanel({
+  memoryStats,
+  dreamingStatus,
+  dreamingDoctor,
+  rebuildingVector,
+  runningDreaming,
+  doctoringDreaming,
+  deletingDreaming,
+  onRebuildVector,
+  onRunDreaming,
+  onDoctorDreaming,
+  onDeleteDreaming,
+  onClearAll,
+}: {
+  memoryStats: MemoryStats | null;
+  dreamingStatus: DreamingStatusPayload | null;
+  dreamingDoctor: DreamingDoctorPayload | null;
+  rebuildingVector: boolean;
+  runningDreaming: boolean;
+  doctoringDreaming: boolean;
+  deletingDreaming: boolean;
+  onRebuildVector: () => void;
+  onRunDreaming: () => void;
+  onDoctorDreaming: () => void;
+  onDeleteDreaming: () => void;
+  onClearAll: () => void;
+}) {
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardContent style={{ padding: 20, display: 'grid', gap: 12 }}>
+          <div style={{ display: 'grid', gap: 6 }}>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>维护工具只处理“怎么用记忆”</h2>
+            <p style={{ margin: 0, fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+              这里放的是向量索引、梦境整理和整库清理。它们会影响召回、解释和维护流程，但不等于在直接编辑长期事实本身。
+            </p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+            <ActionHint title="回复接不上刚才的话" target="工作记忆 / 日记忆" description="先去短期层排查，不要急着清空整库。" />
+            <ActionHint title="长期把你记错了" target="语义记忆 / 情景记忆" description="先删具体事实或经历，再考虑重建索引。" />
+            <ActionHint title="召回顺序很怪" target="重建向量索引" description="索引是派生层，重建比删真相源更安全。" />
+            <ActionHint title="自动整理结果可疑" target="梦境整理" description="先看最近提升项和诊断结果，再决定是否回滚。" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ paddingBottom: 8 }}>
+          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Database style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+            向量索引
+            <Badge variant={memoryStats?.embedding_enabled ? 'success' : 'default'}>
+              {memoryStats?.embedding_enabled ? '已启用' : '未启用'}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent style={{ paddingTop: 0, display: 'grid', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Badge>索引 {memoryStats?.vector_count ?? 0} 条</Badge>
+            <Badge>目录 {formatMb(memoryStats?.vector_size_kb)}</Badge>
+            {memoryStats?.daily_summary_count !== undefined && <Badge>日摘要 {memoryStats.daily_summary_count} 条</Badge>}
+          </div>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            向量索引是召回辅助层，不是第二份记忆库。重建它适合解决“能记住但找不准”的问题，不适合解决“根本记错了”的问题。
+          </p>
+          <Button variant="secondary" size="sm" onClick={onRebuildVector} loading={rebuildingVector}>
+            <RefreshCw style={{ width: 14, height: 14, marginRight: 4 }} />
+            重建向量索引
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ paddingBottom: 8 }}>
+          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Brain style={{ width: 18, height: 18, color: 'var(--accent)' }} />
+            梦境整理
+            <Badge variant={dreamingStatus?.enabled ? 'success' : 'default'}>
+              {dreamingStatus?.enabled ? '已开启' : '未开启'}
+            </Badge>
+            <Badge>{dreamingStatus?.last_status || '暂无运行'}</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent style={{ paddingTop: 0, display: 'grid', gap: 14 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Badge>候选上限 {dreamingStatus?.max_candidates ?? 0}</Badge>
+            <Badge>提升上限 {dreamingStatus?.max_promotions ?? 0}</Badge>
+            <Badge>报告保留 {dreamingStatus?.report_retention ?? 0}</Badge>
+            <Badge>{dreamingStatus?.auto_run_enabled ? '允许自动运行' : '仅手动运行'}</Badge>
+          </div>
+          <div style={{ display: 'grid', gap: 6 }}>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>最近运行时间：{dreamingStatus?.last_run_at || '暂无'}</span>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>最近错误：{dreamingStatus?.last_error || '无'}</span>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6 }}>
+              {dreamingStatus?.latest_report?.user_summary || dreamingStatus?.last_summary || '最近还没有记忆整理报告。'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button variant="secondary" size="sm" onClick={onRunDreaming} loading={runningDreaming}>
+              <RefreshCw style={{ width: 14, height: 14, marginRight: 4 }} />
+              立即整理一次
+            </Button>
+            <Button variant="secondary" size="sm" onClick={onDoctorDreaming} loading={doctoringDreaming}>
+              <HelpCircle style={{ width: 14, height: 14, marginRight: 4 }} />
+              诊断
+            </Button>
+            <Button variant="danger" size="sm" onClick={onDeleteDreaming} loading={deletingDreaming}>
+              <Trash2 style={{ width: 14, height: 14, marginRight: 4 }} />
+              删除最近整理新增项
+            </Button>
+          </div>
+          {dreamingStatus?.latest_report?.promoted_items?.length ? (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>最近一次提升到长期层的内容</span>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {dreamingStatus.latest_report.promoted_items.slice(0, 6).map((item) => (
+                  <div key={item.candidate_id} style={{ padding: 10, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
+                    <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.summary}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                      来源 {item.source_layer} · 目标 {item.target_store || 'unknown'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {dreamingStatus?.latest_report?.kept_short_term_items?.length ? (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>这次看过，但仍留在短期层的内容</span>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {dreamingStatus.latest_report.kept_short_term_items.slice(0, 6).map((item) => (
+                  <div key={item.candidate_id} style={{ padding: 10, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
+                    <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.summary}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                      来源 {item.source_layer} · {item.reason_tags?.join(' / ') || 'keep_short_term'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {dreamingDoctor && (
+            <div style={{ padding: 12, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+                诊断结果：{dreamingDoctor.ok ? '正常' : '需要关注'}
+              </span>
+              {(dreamingDoctor.issues || []).map((issue) => (
+                <span key={issue} style={{ fontSize: 12, color: 'var(--error)' }}>问题：{issue}</span>
+              ))}
+              {(dreamingDoctor.suggestions || []).map((item) => (
+                <span key={item} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>建议：{item}</span>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+        <CardHeader style={{ paddingBottom: 8 }}>
+          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Trash2 style={{ width: 18, height: 18, color: 'var(--error)' }} />
+            高风险操作
+          </CardTitle>
+        </CardHeader>
+        <CardContent style={{ paddingTop: 0, display: 'grid', gap: 10 }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            只有在确认整个 Bot 的记忆库都需要重置时，才建议使用清空全部。大多数情况下，按关键词删单条会更安全。
+          </p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Badge variant="info">优先删单条</Badge>
+            <Badge>语义事实可删</Badge>
+            <Badge>情景记忆可删</Badge>
+            <Badge>工作/日记忆可删</Badge>
+          </div>
+          <Button variant="danger" size="sm" onClick={onClearAll}>
+            <Trash2 style={{ width: 14, height: 14, marginRight: 4 }} />
+            清空全部
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export function Memory() {
   const { currentBotId } = useBotStore();
   const toast = useToast();
 
-  const [activeTab, setActiveTab] = useState<MemoryTab>('stats');
+  const [activeTab, setActiveTab] = useState<MemoryTab>('overview');
   const [memoryStats, setMemoryStats] = useState<MemoryStats | null>(null);
   const [memoryTrust, setMemoryTrust] = useState<MemoryTrustPayload | null>(null);
   const [workingMemory, setWorkingMemory] = useState<Message[]>([]);
@@ -910,11 +1539,12 @@ export function Memory() {
   );
 
   const tabs: { key: MemoryTab; label: string; count?: number }[] = [
-    { key: 'stats', label: '统计概览' },
+    { key: 'overview', label: '总览' },
     { key: 'working', label: '工作记忆', count: memoryStats?.working_count },
     { key: 'daily', label: '日记忆', count: memoryStats?.daily_count },
     { key: 'episodic', label: '情景记忆', count: memoryStats?.episodic_count },
     { key: 'semantic', label: '语义记忆', count: memoryStats?.semantic_count },
+    { key: 'tools', label: '维护工具' },
   ];
 
   if (loading) {
@@ -939,122 +1569,17 @@ export function Memory() {
         <div style={{ display: 'grid', gap: 6 }}>
           <h1 style={{ fontSize: 24, fontWeight: 700, color: 'var(--text-primary)' }}>记忆管理</h1>
           <p style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
-            这里不只是“看记忆列表”，而是整个记忆系统的操作与解释中心：你可以区分当前/短期、长期/关系、索引/投影，以及整理/诊断这几类能力。
+            现在按“先看当前生效的记忆，再进对应层处理，最后才动维护工具”的顺序来组织，避免几十张卡片同时抢注意力。
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {currentBotId && <Badge>{currentBotId}</Badge>}
           <Button variant="secondary" size="sm" onClick={() => fetchAllData('refresh')} loading={refreshing}>
             <RefreshCw style={{ width: 14, height: 14, marginRight: 4 }} />
             刷新
           </Button>
-          <Button variant="secondary" size="sm" onClick={handleRebuildVector} loading={rebuildingVector}>
-            <Database style={{ width: 14, height: 14, marginRight: 4 }} />
-            重建向量索引
-          </Button>
-          <Button variant="danger" size="sm" onClick={handleClearAll}>
-            <Trash2 style={{ width: 14, height: 14, marginRight: 4 }} />
-            清空全部
-          </Button>
         </div>
       </div>
-
-      <MemoryTrustPanel payload={memoryTrust} botId={currentBotId || ''} />
-
-      {dreamingStatus && (
-        <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
-          <CardHeader style={{ paddingBottom: 8 }}>
-            <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Brain style={{ width: 18, height: 18, color: 'var(--accent)' }} />
-              记忆整理 / 梦境
-              <Badge variant={dreamingStatus.enabled ? 'success' : 'default'}>
-                {dreamingStatus.enabled ? '已开启' : '未开启'}
-              </Badge>
-              <Badge>{dreamingStatus.last_status || '暂无运行'}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent style={{ paddingTop: 0, display: 'grid', gap: 14 }}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Badge>候选上限 {dreamingStatus.max_candidates}</Badge>
-              <Badge>提升上限 {dreamingStatus.max_promotions}</Badge>
-              <Badge>报告保留 {dreamingStatus.report_retention}</Badge>
-              <Badge>{dreamingStatus.auto_run_enabled ? '允许自动运行' : '仅手动运行'}</Badge>
-            </div>
-            <div style={{ display: 'grid', gap: 6 }}>
-              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>最近运行时间：{dreamingStatus.last_run_at || '暂无'}</span>
-              <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>最近错误：{dreamingStatus.last_error || '无'}</span>
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6 }}>
-                {dreamingStatus.latest_report?.user_summary || dreamingStatus.last_summary || '最近还没有记忆整理报告。'}
-              </p>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Button variant="secondary" size="sm" onClick={handleRunDreaming} loading={runningDreaming}>
-                <RefreshCw style={{ width: 14, height: 14, marginRight: 4 }} />
-                立即整理一次
-              </Button>
-              <Button variant="secondary" size="sm" onClick={handleDoctorDreaming} loading={doctoringDreaming}>
-                <HelpCircle style={{ width: 14, height: 14, marginRight: 4 }} />
-                诊断
-              </Button>
-              <Button variant="danger" size="sm" onClick={handleDeleteDreaming} loading={deletingDreaming}>
-                <Trash2 style={{ width: 14, height: 14, marginRight: 4 }} />
-                删除最近整理新增项
-              </Button>
-            </div>
-            {dreamingStatus.latest_report?.promoted_items?.length ? (
-              <div style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>最近一次提升到长期层的内容</span>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  {dreamingStatus.latest_report.promoted_items.slice(0, 6).map((item) => (
-                    <div key={item.candidate_id} style={{ padding: 10, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)' }}>
-                      <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{item.summary}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                        来源 {item.source_layer} · 目标 {item.target_store || 'unknown'}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {dreamingDoctor && (
-              <div style={{ padding: 12, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 6 }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
-                  诊断结果：{dreamingDoctor.ok ? '正常' : '需要关注'}
-                </span>
-                {(dreamingDoctor.issues || []).map((issue) => (
-                  <span key={issue} style={{ fontSize: 12, color: 'var(--error)' }}>问题：{issue}</span>
-                ))}
-                {(dreamingDoctor.suggestions || []).map((item) => (
-                  <span key={item} style={{ fontSize: 12, color: 'var(--text-secondary)' }}>建议：{item}</span>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
-        <CardContent style={{ padding: 16, display: 'grid', gap: 12 }}>
-          <div style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>操作导航</span>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
-              <ActionHint title="刚说过的话接不上" target="工作记忆 / 日记忆" description="先看当前会话和今日上下文，确认短期连续性有没有丢。" />
-              <ActionHint title="Bot 长期把你记错" target="语义记忆" description="这里是结构化长期事实，删除或校准这里才会影响稳定画像。" />
-              <ActionHint title="共同经历被污染" target="情景记忆" description="这里保存长期事件和关键片段，适合清理误抽取的经历。" />
-              <ActionHint title="召回混乱但事实没错" target="重建向量索引" description="向量是派生索引，可重建；它不应该改变权威记忆本身。" />
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Badge variant="info">可编辑</Badge>
-            <Badge>工作记忆可删</Badge>
-            <Badge>日记忆可删</Badge>
-            <Badge>情景记忆可删</Badge>
-            <Badge>语义事实可删</Badge>
-          </div>
-          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-            建议先在对应页签里搜关键词，再删单条。这样比整库清空安全得多，也更符合“结构化真相源 + 派生解释层”的设计。
-          </p>
-        </CardContent>
-      </Card>
 
       <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border-subtle)', overflowX: 'auto' }}>
         {tabs.map((tab) => (
@@ -1079,91 +1604,44 @@ export function Memory() {
         ))}
       </div>
 
-      {activeTab === 'stats' && memoryStats && (
+      {activeTab === 'overview' && (
         <div style={{ display: 'grid', gap: 16 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
-            <LayerHint
-              title="当前与短期"
-              badges={['Working', 'Daily']}
-              description="这一层负责当前会话和最近连续性。它决定 Bot 能不能接住你刚才说的话，不等于长期记忆。"
-            />
-            <LayerHint
-              title="长期与关系"
-              badges={['Semantic', 'Episodic', 'Relationship']}
-              description="这一层是长期真相源，保存稳定事实、共同经历和关系状态。删这里，才是在真正改 Bot 的长期记忆。"
-            />
-            <LayerHint
-              title="索引与投影"
-              badges={['Vector Index', 'Understanding Projection']}
-              description="这一层是派生层：帮助系统召回和表达，不是第二份真相源。索引可重建，长期理解投影可手动校准。"
-            />
-            <LayerHint
-              title="整理与解释"
-              badges={['Dreaming', 'Trust View', 'Doctor']}
-              description="这一层不负责存真相，而是负责整理、解释、诊断和纠错，让系统行为更可见。"
-            />
-          </div>
+          <MemoryOverviewPanel
+            memoryStats={memoryStats}
+            memoryTrust={memoryTrust}
+            dreamingStatus={dreamingStatus}
+            onSelectTab={setActiveTab}
+            botId={currentBotId || ''}
+          />
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
-            {[
-              { label: '工作记忆', value: memoryStats.working_count, icon: Clock, color: 'var(--accent)', size: memoryStats.working_size_kb },
-              { label: '日记忆', value: memoryStats.daily_count ?? 0, icon: CalendarDays, color: 'var(--success)', size: memoryStats.daily_size_kb ?? 0 },
-              { label: '情景记忆', value: memoryStats.episodic_count, icon: Brain, color: 'var(--warning)', size: memoryStats.episodic_size_kb },
-              { label: '语义记忆', value: memoryStats.semantic_count, icon: User, color: 'var(--info)', size: memoryStats.semantic_size_kb },
-              { label: '向量索引', value: memoryStats.vector_count ?? 0, icon: Database, color: 'var(--accent)', size: memoryStats.vector_size_kb ?? 0 },
-            ].map((item) => (
-              <Card key={item.label} style={{ backgroundColor: 'var(--bg-secondary)', borderRadius: 8, border: '1px solid var(--border-subtle)' }}>
-                <CardContent style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
-                  <div style={{ padding: 12, borderRadius: 8, backgroundColor: `${item.color}15` }}>
-                    <item.icon style={{ width: 24, height: 24, color: item.color }} />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2 }}>{item.value}</div>
-                    <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{item.label}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{(item.size / 1024).toFixed(2)} MB</div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
-            <CardContent style={{ padding: 16, display: 'grid', gap: 8 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Filter style={{ width: 14, height: 14, color: 'var(--text-secondary)' }} />
-                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>记忆系统分层提示</span>
-              </div>
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-                如果你是为了“手动删脏记忆”，优先看“语义记忆”和“情景记忆”；前者是结构化事实真相，后者是共同经历真相。工作记忆和日记忆更偏当前/短期连续性。
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
-            <CardContent style={{ padding: 16, display: 'grid', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <Database style={{ width: 16, height: 16, color: 'var(--accent)' }} />
-                  <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>统一向量索引（派生层）</span>
-                  <Badge variant={memoryStats.embedding_enabled ? 'success' : 'default'}>
-                    {memoryStats.embedding_enabled ? '已启用' : '未启用'}
-                  </Badge>
+          {memoryStats && (
+            <Card style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}>
+              <CardHeader style={{ borderBottom: 'none', marginBottom: 0, padding: '16px 20px 8px' }}>
+                <CardTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Filter style={{ width: 16, height: 16, color: 'var(--text-secondary)' }} />
+                  存量一眼看懂
+                </CardTitle>
+              </CardHeader>
+              <CardContent style={{ padding: '8px 20px 20px', display: 'grid', gap: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                  {[
+                    { label: '工作记忆', value: memoryStats.working_count, tone: 'var(--accent)' },
+                    { label: '日记忆', value: memoryStats.daily_count ?? 0, tone: 'var(--success)' },
+                    { label: '情景记忆', value: memoryStats.episodic_count, tone: 'var(--warning)' },
+                    { label: '语义记忆', value: memoryStats.semantic_count, tone: 'var(--info)' },
+                  ].map((item) => (
+                    <div key={item.label} style={{ padding: 14, borderRadius: 8, backgroundColor: 'var(--bg-tertiary)', display: 'grid', gap: 4 }}>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{item.label}</span>
+                      <span style={{ fontSize: 24, fontWeight: 700, color: item.tone }}>{item.value}</span>
+                    </div>
+                  ))}
                 </div>
-                <Button variant="secondary" size="sm" onClick={handleRebuildVector} loading={rebuildingVector}>
-                  <RefreshCw style={{ width: 14, height: 14, marginRight: 4 }} />
-                  重建
-                </Button>
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Badge>索引 {memoryStats.vector_count ?? 0} 条</Badge>
-                <Badge>目录 {((memoryStats.vector_size_kb ?? 0) / 1024).toFixed(2)} MB</Badge>
-                {memoryStats.daily_summary_count !== undefined && <Badge>日摘要 {memoryStats.daily_summary_count} 条</Badge>}
-              </div>
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)' }}>
-                这是召回索引，不是第二份记忆库。索引来源包含语义事实、用户长期理解投影、关系脉络、日摘要和 Bot 人生轨迹；结构化数据库仍是事实源。
-              </p>
-            </CardContent>
-          </Card>
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  如果你是为了清理“长期记错”，优先看语义记忆和情景记忆；如果只是最近几轮没接住，优先看工作记忆和日记忆。
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -1478,6 +1956,23 @@ export function Memory() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {activeTab === 'tools' && (
+        <MemoryMaintenancePanel
+          memoryStats={memoryStats}
+          dreamingStatus={dreamingStatus}
+          dreamingDoctor={dreamingDoctor}
+          rebuildingVector={rebuildingVector}
+          runningDreaming={runningDreaming}
+          doctoringDreaming={doctoringDreaming}
+          deletingDreaming={deletingDreaming}
+          onRebuildVector={handleRebuildVector}
+          onRunDreaming={handleRunDreaming}
+          onDoctorDreaming={handleDoctorDreaming}
+          onDeleteDreaming={handleDeleteDreaming}
+          onClearAll={handleClearAll}
+        />
       )}
 
       <Modal isOpen={deleteModalOpen} onClose={closeDeleteModal} title="确认删除">

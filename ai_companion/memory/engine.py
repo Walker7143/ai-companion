@@ -268,6 +268,34 @@ class MemoryEngine:
         await self.maintenance.run_light(bot_id=self.bot_id, user_id=self.user_id, summarizer=self._summarizer)
         await self.rebuild_vector_index()
 
+    async def resolve_session_id(
+        self,
+        *,
+        prefer_active_scene: bool = False,
+        allow_persisted_fallback: bool = True,
+    ) -> str | None:
+        """Resolve the most relevant session for status/debug surfaces.
+
+        Runtime memory state is preferred during live conversations. When the
+        engine is instantiated just for admin inspection, fall back to the
+        latest persisted session so scene status and dreaming don't go blank.
+        """
+        runtime_session = str(self._session_id or self.working.current_session or "").strip()
+        if runtime_session:
+            has_runtime_content = self.working.has_session_content(runtime_session)
+            if has_runtime_content or not allow_persisted_fallback:
+                return runtime_session
+        if not allow_persisted_fallback:
+            return None
+        if prefer_active_scene:
+            session_id = await self.session_state.get_latest_session_id(active_only=True)
+            if session_id:
+                return session_id
+        session_id = self.working.get_latest_session_id()
+        if session_id:
+            return session_id
+        return await self.session_state.get_latest_session_id(active_only=False)
+
     async def load_context(self, current_input: str) -> dict:
         """
         构建消息上下文，返回 dict：
@@ -730,7 +758,7 @@ class MemoryEngine:
 
     async def get_memory_status(self) -> dict:
         """返回当前记忆状态（供 /memory 命令使用）"""
-        sid = self._session_id or self.working.current_session
+        sid = await self.resolve_session_id(prefer_active_scene=True)
         health = self.working.get_session_health(sid)
         turn_count = self.working.get_turn_count(sid)
         summaries_count = len(self.working.get_summaries(sid))
@@ -761,10 +789,24 @@ class MemoryEngine:
             limit=16,
         )
         active_session_states = []
-        current_session = self._session_id or self.working.current_session
-        if current_session:
-            active_session_states = [state.to_dict() for state in await self.session_state.list_active_states(current_session)]
+        if sid:
+            active_session_states = [state.to_dict() for state in await self.session_state.list_active_states(sid)]
         scene_capsule = self._build_scene_capsule(active_session_states)
+        active_memory_details: list[dict[str, Any]] = []
+        if sid:
+            try:
+                status_retrieved = await self.retriever.retrieve(
+                    "",
+                    bot_id=self.bot_id,
+                    user_id=self.user_id,
+                    session_id=sid,
+                    intent="casual_chat",
+                )
+                status_retrieved.activation_plan = self.activation_planner.build(status_retrieved, "")
+                status_conscious = self.conscious_builder.build(status_retrieved, "")
+                active_memory_details = list(status_conscious.active_memory_details or [])
+            except Exception as exc:
+                logger.debug("[Memory] build status active memories failed: %s", exc)
 
         trust_view = self._build_memory_trust_view(
             facts=facts,
@@ -776,6 +818,7 @@ class MemoryEngine:
             session_state=active_session_states,
             scene_capsule=scene_capsule,
         )
+        trust_view["active_memory_details"] = active_memory_details
         continuity_contract = self.continuity_contract_builder.build(
             current_input="",
             retrieved=type(
@@ -862,6 +905,7 @@ class MemoryEngine:
             "daily_days": daily_days,
             "daily_open_threads": daily_context.get("open_threads", []) if isinstance(daily_context, dict) else [],
             "daily_commitments": daily_context.get("commitments", []) if isinstance(daily_context, dict) else [],
+            "active_memory_details": active_memory_details,
             "memory_trust_view": trust_view,
             "memory_layers": memory_layers,
             "memory_authority": status_authority,

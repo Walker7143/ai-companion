@@ -382,6 +382,46 @@ class WorkingMemoryStore:
         conn.close()
         return count
 
+    def has_session_content(self, session_id: Optional[str] = None) -> bool:
+        """Return whether a session has any persisted messages or summaries."""
+        sid = session_id or self.current_session
+        if not sid:
+            return False
+        conn = sqlite3.connect(self.db_path)
+        try:
+            message_row = conn.execute(
+                "SELECT 1 FROM messages WHERE session_id = ? LIMIT 1",
+                (sid,),
+            ).fetchone()
+            if message_row:
+                return True
+            summary_row = conn.execute(
+                "SELECT 1 FROM summaries WHERE session_id = ? LIMIT 1",
+                (sid,),
+            ).fetchone()
+            return bool(summary_row)
+        finally:
+            conn.close()
+
+    def get_latest_session_id(self) -> Optional[str]:
+        """Return the most recently written session id from persisted messages."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.execute(
+            """
+            SELECT session_id
+            FROM messages
+            WHERE session_id IS NOT NULL AND session_id != ''
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        session_id = str(row[0] or "").strip()
+        return session_id or None
+
     def get_all_messages(self, session_id: Optional[str] = None) -> list[dict]:
         """获取会话所有消息（包括压缩和未压缩的）
 

@@ -51,6 +51,14 @@ export interface RelationshipAnchor {
   open_threads?: unknown[];
 }
 
+export interface ActiveMemoryDetail {
+  text?: string;
+  source?: string;
+  score?: number;
+  expression_mode?: string;
+  reason?: string;
+}
+
 export interface MemoryTrustView {
   recently_remembered?: MemoryTrustItem[];
   stable_understanding?: MemoryTrustItem[];
@@ -62,6 +70,7 @@ export interface MemoryTrustView {
   archived_or_suppressed?: MemoryTrustItem[];
   open_threads?: unknown[];
   commitments?: unknown[];
+  active_memory_details?: ActiveMemoryDetail[];
 }
 
 export interface SessionStateItem {
@@ -92,6 +101,7 @@ export interface MemoryTrustPayload {
   daily_commitments?: unknown[];
   continuity_contract?: ContinuityContractView | null;
   relationship_projection?: RelationshipProjectionView | null;
+  active_memory_details?: ActiveMemoryDetail[];
 }
 
 export interface SceneCapsule {

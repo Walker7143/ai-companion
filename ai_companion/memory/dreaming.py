@@ -449,8 +449,16 @@ class DreamingCandidateCollector:
 
     async def collect(self, *, bot_id: str, user_id: str, max_candidates: int) -> list[DreamingCandidate]:
         candidates: list[DreamingCandidate] = []
+        resolved_session_id = await self.memory_engine.resolve_session_id(prefer_active_scene=True)
 
         daily_context = self.memory_engine.daily.get_recent_context(bot_id=bot_id, user_id=user_id, intent="planning")
+        candidates.extend(
+            self._collect_recent_dialogue_candidates(
+                recent_messages=daily_context.get("recent_messages") if isinstance(daily_context, dict) else [],
+                session_id=resolved_session_id,
+                max_candidates=max_candidates,
+            )
+        )
         for thread in (daily_context.get("open_threads") or [])[: max_candidates]:
             text = _clean_text(thread)
             if not text:
@@ -525,28 +533,6 @@ class DreamingCandidateCollector:
                 )
             )
 
-        recent_episodes = self.memory_engine.episodic.list_recent(limit=max_candidates, bot_id=bot_id, user_id=user_id)
-        for episode in recent_episodes[:max_candidates]:
-            summary = _clean_text(episode.get("summary"))
-            if not summary:
-                continue
-            candidates.append(
-                DreamingCandidate(
-                    candidate_id=f"episodic:{episode.get('id')}",
-                    source_layer="episodic",
-                    source_ref=str(episode.get("id") or ""),
-                    summary=summary,
-                    detail=_clean_text(episode.get("content")),
-                    confidence=float(episode.get("confidence") or 0.72),
-                    importance=float(episode.get("importance") or 0.7),
-                    sensitivity=_clean_text(episode.get("sensitivity") or "normal"),
-                    proposed_target="episodic",
-                    category="shared_experience",
-                    reason_tags=["recent_episode"],
-                    payload=dict(episode),
-                )
-            )
-
         relationship = await self.memory_engine.relationship.get_state(bot_id=bot_id, user_id=user_id)
         for field_name in ("relationship_narrative", "current_posture", "interaction_guidance"):
             text = _clean_text(relationship.get(field_name))
@@ -580,6 +566,109 @@ class DreamingCandidateCollector:
             if len(deduped) >= max_candidates:
                 break
         return deduped
+
+    def _collect_recent_dialogue_candidates(
+        self,
+        *,
+        recent_messages: Any,
+        session_id: str | None,
+        max_candidates: int,
+    ) -> list[DreamingCandidate]:
+        if not isinstance(recent_messages, list):
+            return []
+
+        grouped: list[list[dict[str, Any]]] = []
+        current_group: list[dict[str, Any]] = []
+        current_key: tuple[str, str] | None = None
+
+        for raw in recent_messages[-max_candidates * 3:]:
+            if not isinstance(raw, dict):
+                continue
+            key = (
+                str(raw.get("created_at") or ""),
+                str(raw.get("session_id") or ""),
+            )
+            if current_key is None or key == current_key:
+                current_group.append(raw)
+                current_key = key
+                continue
+            if current_group:
+                grouped.append(current_group)
+            current_group = [raw]
+            current_key = key
+
+        if current_group:
+            grouped.append(current_group)
+
+        candidates: list[DreamingCandidate] = []
+        for group in grouped[-max_candidates:]:
+            user_parts = [
+                _clean_text(item.get("content"))
+                for item in group
+                if str(item.get("role") or "").strip() == "user" and _clean_text(item.get("content"))
+            ]
+            assistant_parts = [
+                _clean_text(item.get("content"))
+                for item in group
+                if str(item.get("role") or "").strip() == "assistant" and _clean_text(item.get("content"))
+            ]
+            if not user_parts and not assistant_parts:
+                continue
+            summary = self._summarize_recent_dialogue(user_parts, assistant_parts)
+            if not summary:
+                continue
+            detail_parts: list[str] = []
+            if user_parts:
+                detail_parts.append(f"用户刚提到：{user_parts[-1]}")
+            if assistant_parts:
+                detail_parts.append(f"助手回应：{assistant_parts[-1]}")
+            detail = " | ".join(detail_parts)
+            combined = " ".join([*user_parts, *assistant_parts])
+            source_ref = f"{group[-1].get('created_at') or ''}:{group[-1].get('session_id') or session_id or ''}"
+            importance = self._recent_dialogue_importance(combined)
+            candidates.append(
+                DreamingCandidate(
+                    candidate_id=f"recent-dialogue:{uuid.uuid4().hex[:10]}",
+                    source_layer="daily_recent",
+                    source_ref=source_ref,
+                    summary=summary,
+                    detail=detail or summary,
+                    confidence=0.74 if user_parts else 0.68,
+                    importance=importance,
+                    sensitivity="normal",
+                    proposed_target="semantic",
+                    category="recent_continuity",
+                    reason_tags=["recent_dialogue"],
+                    payload={
+                        "session_id": group[-1].get("session_id") or session_id,
+                        "created_at": group[-1].get("created_at"),
+                        "user_text": user_parts[-1] if user_parts else "",
+                        "assistant_text": assistant_parts[-1] if assistant_parts else "",
+                    },
+                )
+            )
+        return candidates
+
+    def _summarize_recent_dialogue(self, user_parts: list[str], assistant_parts: list[str]) -> str:
+        if user_parts and assistant_parts:
+            return _truncate(f"用户刚提到“{user_parts[-1]}”，助手回应了相关内容", 96)
+        if user_parts:
+            return _truncate(f"用户刚提到：{user_parts[-1]}", 96)
+        return _truncate(f"助手刚主动提到：{assistant_parts[-1]}", 96)
+
+    def _recent_dialogue_importance(self, text: str) -> float:
+        normalized = _clean_text(text)
+        if not normalized:
+            return 0.0
+        high_signal_cues = (
+            "等我", "到了", "今天", "中午", "晚上", "明天", "下次", "准备", "计划", "答应",
+            "会", "要", "惊喜", "不许", "先", "一起", "去", "来", "安排",
+        )
+        if any(cue in normalized for cue in high_signal_cues):
+            return 0.84
+        if len(normalized) >= 36:
+            return 0.74
+        return 0.64
 
 
 class DreamingPromotionGovernor:
@@ -930,7 +1019,7 @@ class DreamingOrchestrator:
 
     async def should_auto_run(self) -> bool:
         state = await self.run_store.get_state(bot_id=self.memory_engine.bot_id, user_id=self.memory_engine.user_id)
-        current_session = self.memory_engine._session_id or self.memory_engine.working.current_session
+        current_session = await self.memory_engine.resolve_session_id(prefer_active_scene=True)
         current_turns = self.memory_engine.working.get_turn_count(current_session) if current_session else 0
         last_turns = int(state.get("last_working_turns") or 0)
         if current_turns <= 0:
@@ -951,7 +1040,7 @@ class DreamingOrchestrator:
     async def run(self, *, trigger_source: str, trigger_reason: str = "") -> dict[str, Any]:
         run_id = uuid.uuid4().hex
         started_at = _now_iso()
-        current_session = self.memory_engine._session_id or self.memory_engine.working.current_session
+        current_session = await self.memory_engine.resolve_session_id(prefer_active_scene=True)
         current_turns = self.memory_engine.working.get_turn_count(current_session) if current_session else 0
         record = {
             "run_id": run_id,
