@@ -4,6 +4,7 @@ Gateway process management: start, stop, restart, status and logs.
 
 import asyncio
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -171,13 +172,19 @@ def _terminate_process_tree(pid: int, *, force: bool = False) -> None:
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
         return
 
+    # 用 os.kill 替代 psutil 的 kill/terminate，避免 macOS TCC 跨二进制信号拦截
+    # （例如 .venv Python 无法通过 psutil 向 uv 管理的 Python 进程发信号）
     for target in targets:
         try:
+            target_pid = target.pid
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+        try:
             if force:
-                target.kill()
+                os.kill(target_pid, signal.SIGKILL)
             else:
-                target.terminate()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                os.kill(target_pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
             pass
 
 
