@@ -28,6 +28,7 @@ from ..proactive.life_engine import LifeEngine
 from ..proactive.life_scheduler import LifeScheduler
 from ..proactive.runtime_lock import BotSchedulerRuntimeLock
 from ..proactive.conversation_task_store import ConversationTaskStore
+from ..proactive.scenario_tracker import ScenarioStore, ScenarioTracker
 from ..proactive.closeout_analyzer import CloseoutAnalyzer
 from ..proactive.deferred_detector import DeferredReplyDetector
 from ..proactive.motives import ConversationTask, ConversationTaskStatus, ConversationTaskType
@@ -162,11 +163,14 @@ class BotInstance:
             personality_type=self._detect_personality_type(),
         )
         self.conversation_task_store = ConversationTaskStore(self._data_dir / self.id)
+        self.scenario_store = ScenarioStore(self._data_dir / self.id)
+        self.scenario_tracker = ScenarioTracker(self.scenario_store, self.id)
         self.proactive_orchestrator = ProactiveOrchestrator(
             engine=self.proactive_engine,
             task_store=self.conversation_task_store,
         )
         self.proactive_engine.orchestrator = self.proactive_orchestrator
+        self.proactive_orchestrator.scenario_tracker = self.scenario_tracker
         self.proactive_scheduler: Optional[ProactiveScheduler] = None
         self._proactive_platform = None
         self._schedulers_started = False
@@ -931,6 +935,8 @@ class BotInstance:
             or getattr(getattr(self.memory, "working", None), "current_session", "")
             or ""
         )
+        if _session_id and self.scenario_tracker:
+            self.scenario_tracker.on_session_user_message(_session_id)
         if _session_id and self.conversation_task_store:
             cancelled = self.conversation_task_store.cancel_pending_for_session(
                 self.id, _session_id, datetime.now()
@@ -1194,6 +1200,8 @@ class BotInstance:
             role = copied.get("role")
             if role in {"assistant", "system"}:
                 copied["content"] = self.response_polisher.clean_generation_context(str(copied.get("content", "") or ""))
+                copied["content"] = self._strip_self_name_relation_lines(copied["content"])
+                copied["content"] = self._sanitize_self_name_user_address(copied["content"])
             cleaned.append({"role": role, "content": copied.get("content", "")})
             if idx == last_message_index and role == "assistant" and self._is_assistant_initiated_memory(copied):
                 content = str(copied.get("content", "") or "").strip()
@@ -1289,6 +1297,8 @@ class BotInstance:
                 continue
             if role == "assistant":
                 text = self.response_polisher.clean_generation_context(text).strip()
+                text = self._strip_self_name_relation_lines(text)
+                text = self._sanitize_self_name_user_address(text)
                 if not text:
                     continue
             label = "用户" if role == "user" else "Bot"
@@ -1655,7 +1665,10 @@ class BotInstance:
     def _prepare_generation_suffix(self, suffix: str | None) -> str | None:
         if not suffix:
             return suffix
-        return self.response_polisher.clean_generation_context(str(suffix))
+        cleaned = self.response_polisher.clean_generation_context(str(suffix))
+        cleaned = self._strip_self_name_relation_lines(cleaned)
+        cleaned = self._sanitize_self_name_user_address(cleaned)
+        return cleaned or None
 
     def _is_realtime_status_query(self, text: str) -> bool:
         compact = "".join(str(text or "").lower().split())
@@ -1837,6 +1850,20 @@ class BotInstance:
                 self.conversation_task_store.upsert(task)
                 logger.info("[BotInstance] 已记录情绪跟进任务: bot=%s session=%s", self.id, session_id)
 
+        if result.scenarios and self.proactive_config.scenario_progression_enabled:
+            self.scenario_tracker.ingest_closeout_scenarios(
+                session_id=session_id,
+                scenarios_raw=[
+                    {"actor": s.actor, "description": s.description,
+                     "estimated_duration_minutes": s.estimated_duration_minutes,
+                     "progression_hint": s.progression_hint}
+                    for s in result.scenarios
+                ],
+                start_time=now,
+            )
+            logger.info("[BotInstance] 已记录 %d 个时间敏感场景: bot=%s session=%s",
+                        len(result.scenarios), self.id, session_id)
+
     def _build_proactive_task_delivery(self, memory_turn_context: dict | None) -> dict | None:
         context = memory_turn_context if isinstance(memory_turn_context, dict) else {}
         metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
@@ -1955,12 +1982,54 @@ class BotInstance:
 
     def _polish_response(self, response: str, memory_context: dict | None, relationship_state: dict | None) -> str:
         response = self.response_polisher.strip_reasoning_artifacts(response)
-        return self.response_polisher.polish(
+        response = self.response_polisher.polish(
             response,
             intent=(memory_context or {}).get("memory_intent", "casual_chat"),
             relationship_state=relationship_state or {},
             user_understanding=(memory_context or {}).get("user_understanding") or {},
         )
+        return self._sanitize_self_name_user_address(response)
+
+    def _sanitize_self_name_user_address(self, text: str) -> str:
+        content = str(text or "")
+        if not content:
+            return content
+        name = "".join(str(self.name or self.id or "").split())
+        if not name:
+            return content
+
+        patterns: list[tuple[re.Pattern[str], str]] = [
+            (re.compile(rf"{re.escape(name)}(?=[，、,:：]\s*(?:你|今天|要是|别|给我|再|还|把|先|是不是))"), ""),
+            (re.compile(rf"{re.escape(name)}(?=(?:你|今天|要是|别|给我|再|还|把|先|是不是))"), ""),
+            (re.compile(rf"{re.escape(name)}(?=我告诉你)"), ""),
+            (re.compile(rf"(?<=[，。！？!?…~\s]){re.escape(name)}(?=[！!？?。.…]|$)"), "你"),
+        ]
+        for pattern, replacement in patterns:
+            content = pattern.sub(replacement, content)
+        content = re.sub(r"([，、,:：])\1+", r"\1", content)
+        content = re.sub(r"\n{3,}", "\n\n", content)
+        return content.strip()
+
+    def _strip_self_name_relation_lines(self, text: str) -> str:
+        content = str(text or "")
+        if not content:
+            return content
+        name = "".join(str(self.name or self.id or "").split())
+        if not name:
+            return content
+        patterns = (
+            f"用户和{name}",
+            f"用户与{name}",
+            f"与{name}之间",
+            f"{name}和用户",
+            f"{name}与用户",
+        )
+        kept_lines = [
+            line
+            for line in content.splitlines()
+            if not any(pattern in "".join(line.split()) for pattern in patterns)
+        ]
+        return "\n".join(kept_lines).strip()
 
     async def _chat_with_fallback(self, messages: list[dict], system_prompt: str = "", *, temperature: float | None = None) -> Optional[str]:
         """调用模型聊天，失败时返回 None（由调用者处理友好提示）"""

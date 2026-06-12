@@ -105,6 +105,7 @@ class MemoryEngine:
         self.user_id = (config or {}).get("user_id", "default_user")
         self.persona_backstory_path = persona_backstory_path
         self.persona_dir = Path(persona_backstory_path).parent if persona_backstory_path else None
+        self.bot_name = self._load_bot_name()
         self.memory_dir = Path(memory_dir) / bot_id / "memory"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -154,6 +155,7 @@ class MemoryEngine:
         self.user_understanding = UserUnderstandingStore(
             self.memory_dir / "user_understanding.json",
             max_value_chars=self.semantic_char_limit,
+            bot_name=self.bot_name,
         )
         self.semantic = SemanticStore(
             self.memory_dir / "semantic.db",
@@ -161,6 +163,7 @@ class MemoryEngine:
             persona_backstory_path=persona_backstory_path,
             user_understanding=self.user_understanding,
             vector_store=self.vector,
+            bot_name=self.bot_name,
         )
         self.relationship = RelationshipStore(
             self.memory_dir / "relationship.db",
@@ -231,6 +234,16 @@ class MemoryEngine:
             logger.info(f"[MemoryEngine] ContextCompressor 已启用")
         else:
             self._compressor = None
+
+    def _load_bot_name(self) -> str:
+        profile_path = self.persona_dir / "profile.json" if self.persona_dir else None
+        if not profile_path or not profile_path.exists():
+            return self.bot_id
+        try:
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        except Exception:
+            return self.bot_id
+        return str(profile.get("name") or self.bot_id)
 
     def set_summarizer(self, summarizer):
         """注入 LLM 适配器（用于压缩摘要和语义抽取）"""

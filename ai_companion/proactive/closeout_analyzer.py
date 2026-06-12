@@ -16,6 +16,7 @@ CLOSEOUT_ANALYSIS_PROMPT = """\
 1. 延迟回复承诺：Bot 是否明确承诺稍后回复/告知/查找某事，或用户要求 Bot 稍后告诉/提醒/发消息且 Bot 接受？
 2. 未完成话题：对话是否在某个话题中途结束，用户的核心问题未被充分回答？
 3. 情绪关怀需要：用户是否表达了明显的负面情绪（难过/焦虑/压力/生气/沮丧）需要后续关心？
+4. 时间敏感场景：对话中是否提到了有时间限制的活动或状态（比如在吃饭、在逛街、刚睡醒、在陪家人、在上课、在开会等），这些场景在预估时间后会自然结束，之后 Bot 或用户的状态应该已经变化？
 
 【对话内容】
 {conversation}
@@ -30,10 +31,15 @@ CLOSEOUT_ANALYSIS_PROMPT = """\
 - 反问句和修辞性问题不算未完成话题
 - 只有明确的负面情绪才需要情绪跟进，日常吐槽（"今天好累啊"后面接了正常聊天）不算
 - 如果 Bot 已经对情绪做了充分回应和安慰，不需要再跟进
+- 时间敏感场景：提取对话中提到的时间有边界的状态（在吃饭、在逛街、刚醒、在陪家人、在上课/上班、在洗澡、在开车等）。
+  行动者（actor）是谁说/谁的场景就填 "bot" 或 "user"。
+  预估持续时间（estimated_duration_minutes）用常识判断：吃饭 30 分钟、逛街 120 分钟、洗澡 20 分钟、上课 45 分钟、上班到晚上等。
+  如果无法确定预估持续时间，填 null 或 0（此类场景会被忽略）。
+  如果没有时间敏感场景，scenarios 数组为空。
 
 【输出】
 只输出 JSON，不要其他内容：
-{{"deferred_reply": {{"detected": false, "summary": "", "delay_minutes": 0}}, "unresolved_topic": {{"detected": false, "summary": "", "confidence": 0.0}}, "emotion_followup": {{"detected": false, "emotion": "", "summary": ""}}}}
+{{"deferred_reply": {{"detected": false, "summary": "", "delay_minutes": 0}}, "unresolved_topic": {{"detected": false, "summary": "", "confidence": 0.0}}, "emotion_followup": {{"detected": false, "emotion": "", "summary": ""}}, "scenarios": [{{"actor": "bot", "description": "正在吃饭", "estimated_duration_minutes": 30, "progression_hint": "吃完后可以告诉用户吃了什么"}}]}}
 """
 
 
@@ -56,10 +62,23 @@ class EmotionSignal:
 
 
 @dataclass
+class ScenarioSignal:
+    actor: str
+    description: str
+    estimated_duration_minutes: int
+    progression_hint: str
+
+
+@dataclass
 class CloseoutResult:
     deferred_reply: DeferredSignal | None = None
     unresolved_topic: TopicSignal | None = None
     emotion_followup: EmotionSignal | None = None
+    scenarios: list[ScenarioSignal] = None
+
+    def __post_init__(self):
+        if self.scenarios is None:
+            self.scenarios = []
 
 
 class CloseoutAnalyzer:
@@ -100,10 +119,11 @@ class CloseoutAnalyzer:
                         fallback.deferred_reply.summary,
                     )
             logger.info(
-                "[CloseoutAnalyzer] 判定结果 deferred=%s unresolved=%s emotion=%s raw=%s",
+                "[CloseoutAnalyzer] 判定结果 deferred=%s unresolved=%s emotion=%s scenarios=%s raw=%s",
                 bool(result.deferred_reply),
                 bool(result.unresolved_topic),
                 bool(result.emotion_followup),
+                len(result.scenarios),
                 str(response or "").strip()[:500],
             )
             return result
@@ -167,6 +187,35 @@ class CloseoutAnalyzer:
                 emotion=str(ef.get("emotion", "")),
                 summary=str(ef.get("summary", "")),
             )
+
+        # Parse scenarios
+        scenarios_raw = data.get("scenarios")
+        if isinstance(scenarios_raw, list):
+            for sc_raw in scenarios_raw:
+                if not isinstance(sc_raw, dict):
+                    continue
+                actor = str(sc_raw.get("actor") or "").strip().lower()
+                if actor not in ("bot", "user"):
+                    continue
+                description = str(sc_raw.get("description") or "").strip()
+                if not description:
+                    continue
+                duration = sc_raw.get("estimated_duration_minutes")
+                if duration is None:
+                    continue
+                try:
+                    duration = int(duration)
+                except (TypeError, ValueError):
+                    continue
+                if duration <= 0:
+                    continue
+                progression_hint = str(sc_raw.get("progression_hint") or "").strip()
+                result.scenarios.append(ScenarioSignal(
+                    actor=actor,
+                    description=description,
+                    estimated_duration_minutes=duration,
+                    progression_hint=progression_hint,
+                ))
 
         return result
 

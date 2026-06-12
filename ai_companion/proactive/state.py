@@ -52,6 +52,7 @@ class ProactiveState:
             "last_emotion_trigger_time": None,
             "cooldowns": {},
             "last_opening_style": "",  # 开场白 rotation
+            "idle_ping_count_today": 0,  # idle_ping 独立每日计数
             # 多维情绪模型
             "miss_level": 5,              # 想念程度 0-10
             "insecurity_level": 3,        # 不安全感 0-10
@@ -81,6 +82,7 @@ class ProactiveState:
         last_reset = self._state.get("last_reset_date")
         if last_reset != today:
             self._state["today_proactive_count"] = 0
+            self._state["idle_ping_count_today"] = 0
             self._state["last_reset_date"] = today
             logger.info(f"[ProactiveState] 每日计数已重置: {today}")
 
@@ -139,6 +141,17 @@ class ProactiveState:
     @last_opening_style.setter
     def last_opening_style(self, value: str):
         self._state["last_opening_style"] = str(value or "")
+        self.save()
+
+    @property
+    def idle_ping_count_today(self) -> int:
+        self._check_daily_reset()
+        return self._state.get("idle_ping_count_today", 0)
+
+    def increment_idle_ping(self):
+        """增加 idle_ping 独立计数（不影响全局 proactive 计数）"""
+        self._check_daily_reset()
+        self._state["idle_ping_count_today"] = self._state.get("idle_ping_count_today", 0) + 1
         self.save()
 
     @property

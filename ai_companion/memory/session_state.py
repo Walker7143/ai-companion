@@ -154,6 +154,46 @@ def _is_assistant_only_current_scene_state(item: dict[str, Any]) -> bool:
     )
 
 
+_ALLOWED_SESSION_STATE_SOURCE_KINDS = {
+    "user_explicit",
+    "joint_inference",
+    "bot_commitment_confirmed",
+    "assistant_explicit",
+}
+
+
+def _is_non_sessional_scope(scope: object) -> bool:
+    normalized = str(scope or "").strip().lower()
+    return (
+        "personal_history" in normalized
+        or "|memory" in normalized
+        or normalized.endswith("/memory")
+        or "/memory/" in normalized
+    )
+
+
+def _normalize_session_state_source_kind(value: object) -> str | None:
+    source_kind = str(value or "").strip() or "user_explicit"
+    if source_kind in _ALLOWED_SESSION_STATE_SOURCE_KINDS:
+        return source_kind
+    return None
+
+
+def is_generation_relevant_session_state(item: "SessionStateItem" | dict[str, Any]) -> bool:
+    """Keep session_state focused on short-lived world state for generation.
+
+    Historical memory notes or personal-history corrections should not be
+    promoted as current hard constraints in the prompt.
+    """
+
+    scope = item.scope if hasattr(item, "scope") else item.get("scope", "")
+    predicate = item.predicate if hasattr(item, "predicate") else item.get("predicate", "")
+    value = item.value if hasattr(item, "value") else item.get("value", "")
+    if not str(scope or "").strip() or not str(predicate or "").strip() or not str(value or "").strip():
+        return False
+    return not _is_non_sessional_scope(scope)
+
+
 @dataclass
 class SessionStateItem:
     state_id: str
@@ -428,6 +468,8 @@ class SessionStateStore:
 def extract_scene_summary(active_states: list) -> dict | None:
     """从活跃 session state 中提取当前场景摘要。兼容 SessionStateItem 对象和 dict。"""
     snapshot = get_scene_snapshot(active_states)
+    if snapshot.scope_mode == "user_only" and not snapshot.should_anchor_generation:
+        return None
     location = None
     activity = None
     next_action = None
@@ -517,6 +559,7 @@ class SessionStateExtractor:
 - 这是 diff，不是重写整份状态。
 - 如果没有足够证据，请输出 no_change=true。
 - 不要编造用户未明确建立的状态。
+- 不要写 personal_history、memory 纠错、记忆混淆这类“历史备注”状态；session_state 只记录当前短时世界状态。
 """
 
     def __init__(self, summarizer: object | None = None):
@@ -622,7 +665,29 @@ class SessionStateResolver:
             predicate = str(item.get("predicate") or "").strip()
             subject = str(item.get("subject") or "shared").strip() or "shared"
             value = _clean_text(item.get("value"), 200)
+            if _is_non_sessional_scope(scope):
+                await store.append_event(
+                    session_id,
+                    "rejected_non_sessional_scope",
+                    {
+                        "item": item,
+                        "reason": "non_sessional_scope",
+                    },
+                )
+                continue
             if not scope or not predicate or not value:
+                continue
+            source_kind = _normalize_session_state_source_kind(item.get("source_kind"))
+            if source_kind is None:
+                await store.append_event(
+                    session_id,
+                    "rejected_invalid_source_kind",
+                    {
+                        "item": item,
+                        "reason": "invalid_source_kind",
+                        "allowed": sorted(_ALLOWED_SESSION_STATE_SOURCE_KINDS),
+                    },
+                )
                 continue
             slot = (scope, predicate)
             current = active_by_slot.get(slot)
@@ -657,7 +722,7 @@ class SessionStateResolver:
                 status="active",
                 effective_at=now,
                 expires_at=expires_at,
-                source_kind=str(item.get("source_kind") or "user_explicit"),
+                source_kind=source_kind,
                 evidence_turn_ids=[evidence_turn_id],
                 supersedes_state_ids=supersedes_state_ids,
                 metadata={

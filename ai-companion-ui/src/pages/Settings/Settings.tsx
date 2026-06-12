@@ -292,6 +292,16 @@ const defaultProactive: ProactiveConfig = {
   emotion_followup_expires_hours: 24,
   life_event_motive_enabled: true,
   idle_ping_enabled: true,
+  idle_ping_requires_scene_anchor: false,
+  idle_ping_contact_probability: 0.5,
+  idle_ping_cooldown_minutes: 180,
+  idle_ping_max_daily: 2,
+  idle_ping_allow_question: true,
+  idle_reminder_contact_probability: 0.5,
+  scenario_progression_enabled: true,
+  scenario_progression_max_daily: 3,
+  scenario_progression_priority: 45,
+  contact_probability: 0.3,
   closeout_analyzer_enabled: true,
   closeout_analyzer_max_tokens: 200,
   closeout_analyzer_fallback_to_regex: true,
@@ -1020,11 +1030,42 @@ export function Settings() {
               <Toggle checked={draft.proactive.life_event_motive_enabled} onChange={(event) => patchProactive({ life_event_motive_enabled: event.target.checked })} />
               <FieldHint text="允许 Bot 分享自己生活里具体发生的事。" />
             </div>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>普通陪伴问候</div>
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-secondary)' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>普通陪伴问候（idle_ping）</div>
               <Toggle checked={draft.proactive.idle_ping_enabled} onChange={(event) => patchProactive({ idle_ping_enabled: event.target.checked })} />
-              <FieldHint text={`最低优先级。关闭后，没有具体动机时 Bot 不会只发“在吗”。`} />
+              <FieldHint text="空闲超过阈值后，Bot 轻轻冒个泡，像熟人顺手发来的一句话。无现场参考时也能发送通用陪伴消息。" />
             </div>
+            <Input label="idle_ping 触发概率" type="number" min="0" max="1" step="0.05" value={draft.proactive.idle_ping_contact_probability} onChange={(event) => patchProactive({ idle_ping_contact_probability: Number(event.target.value) })} />
+            <FieldHint text="每次 tick 选中 idle_ping 后通过概率门的概率。默认 0.5。" />
+            <Input label="idle_ping 冷却（分钟）" type="number" min="1" value={draft.proactive.idle_ping_cooldown_minutes} onChange={(event) => patchProactive({ idle_ping_cooldown_minutes: Number(event.target.value) })} />
+            <FieldHint text="两次 idle_ping 之间的最小间隔。默认 180 分钟。" />
+            <Input label="idle_ping 每日上限" type="number" min="0" max="20" value={draft.proactive.idle_ping_max_daily} onChange={(event) => patchProactive({ idle_ping_max_daily: Number(event.target.value) })} />
+            <FieldHint text="idle_ping 每天独立的最大发送次数。默认 2 次。注意：此计数器独立于全局每日上限。" />
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>idle_ping 要求现场锚点</div>
+              <Toggle checked={draft.proactive.idle_ping_requires_scene_anchor} onChange={(event) => patchProactive({ idle_ping_requires_scene_anchor: event.target.checked })} />
+              <FieldHint text="开启后，idle_ping 要求 memory 中有最近非主动对话现场；关闭后无现场也能发通用陪伴。默认关闭。" />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>idle_ping 允许发问句</div>
+              <Toggle checked={draft.proactive.idle_ping_allow_question} onChange={(event) => patchProactive({ idle_ping_allow_question: event.target.checked })} />
+              <FieldHint text="关闭后 idle_ping 不会生成反问/盘问类语句，只发陈述或挂念。" />
+            </div>
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-secondary)' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>兜底提醒（idle_reminder）</div>
+              <FieldHint text="最低优先级的纯陪伴兜底。当所有其他动机均不可用时才触发。有作息线索时会轻轻提醒，无线索时仅表达存在感。" />
+            </div>
+            <Input label="idle_reminder 触发概率" type="number" min="0" max="1" step="0.05" value={draft.proactive.idle_reminder_contact_probability} onChange={(event) => patchProactive({ idle_reminder_contact_probability: Number(event.target.value) })} />
+            <FieldHint text="idle_reminder 每次 tick 的概率门。默认 0.5。" />
+            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-secondary)' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>场景递进（scenario_progression）</div>
+              <Toggle checked={draft.proactive.scenario_progression_enabled} onChange={(event) => patchProactive({ scenario_progression_enabled: event.target.checked })} />
+              <FieldHint text="对话中提到时间敏感场景（在吃饭、在逛街、刚醒等）后，Bot 会在预估时间后自然跟进。由 LLM 判断场景类型和时长，不写死关键词。" />
+            </div>
+            <Input label="场景递进每日上限" type="number" min="0" max="10" value={draft.proactive.scenario_progression_max_daily} onChange={(event) => patchProactive({ scenario_progression_max_daily: Number(event.target.value) })} />
+            <FieldHint text="每天最多通过场景递进发送几条消息。默认 3。" />
+            <Input label="场景递进优先级" type="number" min="1" max="100" value={draft.proactive.scenario_progression_priority} onChange={(event) => patchProactive({ scenario_progression_priority: Number(event.target.value) })} />
+            <FieldHint text="在候选动机中的排序权重。默认 45（介于生活事件 60 和陪伴问候 20 之间）。" />
             <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border-secondary)' }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>智能分析（LLM）</div>
               <Toggle checked={draft.proactive.closeout_analyzer_enabled} onChange={(event) => patchProactive({ closeout_analyzer_enabled: event.target.checked })} />
@@ -1045,9 +1086,12 @@ export function Settings() {
           <Input label="最小间隔（小时）" type="number" step="0.1" value={draft.proactive.min_interval_hours} onChange={(event) => patchProactive({ min_interval_hours: Number(event.target.value) })} />
           <Input label="每日最大次数" type="number" value={draft.proactive.max_daily} onChange={(event) => patchProactive({ max_daily: Number(event.target.value) })} />
           <Input label="最长沉默天数" type="number" value={draft.proactive.max_idle_days} onChange={(event) => patchProactive({ max_idle_days: Number(event.target.value) })} />
+          <Input label="全局矜持概率" type="number" min="0" max="1" step="0.05" value={draft.proactive.contact_probability} onChange={(event) => patchProactive({ contact_probability: Number(event.target.value) })} />
+          <FieldHint text="legacy idle_reminder 回退路径的通过概率。默认 0.3。注意：idle_ping 和 idle_reminder 各有独立概率门，不受此值影响。" />
           <Select label="投递平台" options={[{ value: 'cli', label: 'CLI' }, { value: 'feishu', label: '飞书' }, { value: 'weixin', label: '微信' }, { value: 'webhook', label: 'Webhook' }]} value={draft.proactive.platform_type} onChange={(event) => patchProactive({ platform_type: event.target.value })} />
           <Input label="Webhook URL" value={draft.proactive.webhook_url} onChange={(event) => patchProactive({ webhook_url: event.target.value })} />
           <Input label="主动发送目标频道" value={draft.proactive.home_channel} onChange={(event) => patchProactive({ home_channel: event.target.value })} />
+          <FieldHint text="仅对飞书/微信网关生效，指定主动消息的投递频道。CLI 平台忽略此字段。" />
           <Input label="情绪延迟（分钟）" type="number" value={draft.proactive.emotion_response_delay_minutes} onChange={(event) => patchProactive({ emotion_response_delay_minutes: Number(event.target.value) })} />
         </div>
         <div style={{ marginTop: 16 }}>

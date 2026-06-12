@@ -70,8 +70,18 @@ class ProactiveConfig:
                 "enabled": True,
                 "cooldown_minutes": 180,
                 "max_daily": 2,
-                "requires_scene_anchor": True,
+                "requires_scene_anchor": False,
                 "allow_question": True,
+                "contact_probability": 0.5,
+            },
+            "idle_reminder": {
+                "enabled": True,
+                "contact_probability": 0.5,
+            },
+            "scenario_progression": {
+                "enabled": True,
+                "max_daily": 3,
+                "priority": 45,
             },
             "closeout_analyzer": {
                 "enabled": True,
@@ -345,6 +355,33 @@ class ProactiveConfig:
         return bool(self._continuity_section("idle_ping").get("allow_question", True))
 
     @property
+    def idle_ping_contact_probability(self) -> float:
+        val = self._continuity_section("idle_ping").get("contact_probability", 0.5)
+        try:
+            return max(0.0, min(1.0, float(val)))
+        except (TypeError, ValueError):
+            return 0.5
+
+    @property
+    def idle_reminder_contact_probability(self) -> float:
+        val = self._continuity_section("idle_reminder").get("contact_probability", 0.5)
+        try:
+            return max(0.0, min(1.0, float(val)))
+        except (TypeError, ValueError):
+            return 0.5
+
+    @property
+    def scenario_progression_enabled(self) -> bool:
+        return bool(self._continuity_section("scenario_progression").get("enabled", True))
+
+    @property
+    def scenario_progression_max_daily(self) -> int:
+        return int(self._continuity_section("scenario_progression").get("max_daily", 3))
+
+    @property
+    def scenario_progression_priority(self) -> int:
+        return int(self._continuity_section("scenario_progression").get("priority", 45))
+
     def closeout_analyzer_enabled(self) -> bool:
         return bool(self._continuity_section("closeout_analyzer").get("enabled", True))
 

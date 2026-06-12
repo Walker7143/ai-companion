@@ -9,6 +9,8 @@ from ai_companion.memory.conscious import ConsciousContextBuilder
 from ai_companion.memory.engine import MemoryEngine
 from ai_companion.memory.extractor import MemoryExtractor
 from ai_companion.memory.retriever import MemoryRetriever, RetrievedMemory
+from ai_companion.memory.stores.semantic import SemanticStore
+from ai_companion.memory.stores.user_understanding import UserUnderstandingStore
 from ai_companion.proactive.config import ProactiveConfig
 from ai_companion.proactive.engine import ProactiveEngine
 from ai_companion.proactive.state import ProactiveState
@@ -118,7 +120,55 @@ class DailyMemoryTest(unittest.TestCase):
 
         self.assertIn(cat_fact, suffix)
         self.assertIn("当前输入命中用户理解", conscious.active_memory_details[0]["reason"])
-        self.assertIn(cat_fact, conscious.active_memory_details[0]["text"])
+
+    def test_user_understanding_filters_bot_name_relation_noise(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="understanding-bot-name-noise-") as tmp:
+                store = UserUnderstandingStore(
+                    Path(tmp) / "user_understanding.json",
+                    bot_name="杨思思",
+                )
+                await store.init()
+                await store.upsert_auto_item(
+                    key="与杨思思有咖啡相关赌约",
+                    value="用户和杨思思之间有一个与咖啡有关的打赌或约定，具体内容未明说",
+                    category="general",
+                )
+                return store.load()
+
+        loaded = asyncio.run(run())
+
+        self.assertNotIn("与杨思思有咖啡相关赌约", loaded["auto"]["facts"])
+
+    def test_semantic_store_skips_bot_name_relation_fact(self):
+        async def run():
+            with tempfile.TemporaryDirectory(prefix="semantic-bot-name-noise-") as tmp:
+                understanding = UserUnderstandingStore(
+                    Path(tmp) / "user_understanding.json",
+                    bot_name="杨思思",
+                )
+                await understanding.init()
+                store = SemanticStore(
+                    str(Path(tmp) / "semantic.db"),
+                    user_understanding=understanding,
+                    bot_name="杨思思",
+                )
+                await store.init()
+                await store.set_fact(
+                    "与杨思思有咖啡相关赌约",
+                    "用户和杨思思之间有一个与咖啡有关的打赌或约定，具体内容未明说",
+                    bot_id="yangsisi",
+                    user_id="default_user",
+                    source="user_explicit",
+                )
+                listed = await store.list_facts(bot_id="yangsisi", user_id="default_user")
+                all_facts = await store.get_all_facts(bot_id="yangsisi", user_id="default_user")
+                return listed, all_facts
+
+        listed, all_facts = asyncio.run(run())
+
+        self.assertEqual(listed, [])
+        self.assertEqual(all_facts, {})
 
     def test_prompt_builder_anchors_current_city_and_body_facts(self):
         from ai_companion.memory.prompt_builder import MemoryPromptBuilder

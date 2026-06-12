@@ -680,6 +680,16 @@ export interface ProactiveConfig {
   emotion_followup_expires_hours: number;
   life_event_motive_enabled: boolean;
   idle_ping_enabled: boolean;
+  idle_ping_requires_scene_anchor: boolean;
+  idle_ping_contact_probability: number;
+  idle_ping_cooldown_minutes: number;
+  idle_ping_max_daily: number;
+  idle_ping_allow_question: boolean;
+  idle_reminder_contact_probability: number;
+  scenario_progression_enabled: boolean;
+  scenario_progression_max_daily: number;
+  scenario_progression_priority: number;
+  contact_probability: number;
   closeout_analyzer_enabled: boolean;
   closeout_analyzer_max_tokens: number;
   closeout_analyzer_fallback_to_regex: boolean;

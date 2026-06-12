@@ -9,7 +9,7 @@ from typing import Any
 from .activation import MemoryActivationPlan
 from .continuity import ContinuityContract, ContinuityContractBuilder
 from .scene_authority import is_memory_compatible_with_scene
-from .session_state import get_scene_snapshot
+from .session_state import get_scene_snapshot, is_generation_relevant_session_state
 
 
 @dataclass
@@ -125,7 +125,12 @@ class MemoryRetriever:
         )
         session_state = []
         if self.session_state_store is not None and session_id:
-            session_state = [item.to_dict() for item in await self.session_state_store.list_active_states(session_id)]
+            active_states = await self.session_state_store.list_active_states(session_id)
+            session_state = [
+                item.to_dict()
+                for item in active_states
+                if is_generation_relevant_session_state(item)
+            ]
         daily_context = {}
         if self.daily is not None:
             daily_context = self.daily.get_recent_context(

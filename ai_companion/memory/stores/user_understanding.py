@@ -179,9 +179,10 @@ class UserUnderstandingStore:
         "identity",
     }
 
-    def __init__(self, path: str | Path, max_value_chars: int = 4400):
+    def __init__(self, path: str | Path, max_value_chars: int = 4400, bot_name: str = ""):
         self.path = Path(path)
         self.max_value_chars = max_value_chars
+        self.bot_name = str(bot_name or "").strip()
         self.relationship_projection = RelationshipProjectionService()
 
     async def init(self):
@@ -291,7 +292,7 @@ class UserUnderstandingStore:
         manual = data.setdefault("manual", self._empty_section())
         auto = data.setdefault("auto", self._empty_section(include_refresh=True))
         category = str(category or "general")
-        if _is_auto_projection_noise(category, key, value):
+        if _is_auto_projection_noise(category, key, value, bot_name=self.bot_name):
             return
 
         if category in self.SECTIONS or category in self.AUTO_DEEP_SECTIONS:
@@ -347,7 +348,7 @@ class UserUnderstandingStore:
             confidence = _float(fact.get("confidence"), 0.7)
             if not key or not value or key in self.INTERNAL_KEYS:
                 continue
-            if _is_auto_projection_noise(category, key, value):
+            if _is_auto_projection_noise(category, key, value, bot_name=self.bot_name):
                 continue
             if key in manual_fact_keys:
                 meta["contradictions"].append(
@@ -677,14 +678,14 @@ class UserUnderstandingStore:
                 if include_refresh:
                     items = [
                         item for item in items
-                        if not _is_auto_projection_noise(key, key, item)
+                        if not _is_auto_projection_noise(key, key, item, bot_name=self.bot_name)
                     ]
                 section[key] = items
             if include_refresh:
                 section["facts"] = {
                     key: fact_value
                     for key, fact_value in section["facts"].items()
-                    if not _is_auto_projection_noise("general", key, fact_value)
+                    if not _is_auto_projection_noise("general", key, fact_value, bot_name=self.bot_name)
                 }
             for key, raw in value.items():
                 if key not in section and (include_refresh or key != "last_refresh_at"):
@@ -1163,8 +1164,10 @@ _AMBIGUOUS_AUTO_FACT_CATEGORIES = {
 }
 
 
-def _is_auto_projection_noise(category: Any, key: Any, value: Any) -> bool:
+def _is_auto_projection_noise(category: Any, key: Any, value: Any, *, bot_name: str = "") -> bool:
     category_text = str(category or "").strip()
+    if _looks_like_bot_name_relation_noise(key, value, bot_name=bot_name):
+        return True
     if category_text in _NON_UNDERSTANDING_CATEGORIES:
         return True
     if category_text in _STABLE_UNDERSTANDING_CATEGORIES:
@@ -1187,6 +1190,23 @@ def _looks_like_time_scoped_directive(text: str) -> bool:
         "换", "改", "吃点别的", "别吃",
     )
     return any(item in normalized for item in temporal) and any(item in normalized for item in directive)
+
+
+def _looks_like_bot_name_relation_noise(key: Any, value: Any, *, bot_name: str = "") -> bool:
+    text = "".join(f"{key} {value}".split())
+    if not text:
+        return False
+    name = "".join(str(bot_name or "").split())
+    if not name:
+        return False
+    patterns = (
+        f"用户和{name}",
+        f"用户与{name}",
+        f"与{name}之间",
+        f"{name}和用户",
+        f"{name}与用户",
+    )
+    return any(pattern in text for pattern in patterns)
 
 
 _SENSITIVE_KEYWORDS = (

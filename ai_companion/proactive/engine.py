@@ -165,7 +165,7 @@ GENERATE_MESSAGE_PROMPT = """【角色】
 - 任何生活细节都必须服从“Bot 时间线”里的当前时间一致性约束；当前还没到晚上时，不要说今天晚饭、晚饭后、夜宵或睡前活动已经发生
 - 称呼必须服从“用户记忆与最近上下文”；如果用户最近否认或纠正过某个名字/称呼，不要继续使用那个被否定的称呼
 - 人格档案里的条件式旧称呼只有在用户本轮或近期明确确认代入对应角色时才可使用，不要当作默认昵称
-- 最近现场优先级高于摘要、长期记忆、旧背景；如果刚聊过用户正在陪家人、已经安排晚上活动、已经吃过饭或已经在上班，不要反着提醒
+- 最近现场优先级高于摘要、长期记忆、旧背景；如果刚聊过用户已经在某个地方（如在客栈、在洱海、已经到达大理）、已经辞职或离职、已经在一起面对面，就不要用旧的事实编造用户还在上班、在别的城市、还没到等相反场景
 - 不要把用户已在进行中的安排写成“我也不知道你在干嘛”或“你不会又……吧”
 - 如果上一条未回复主动消息已经在催同一件事，这次要么换成承接/吐槽/轻轻带过，要么不要再提，绝不能复读催饭、催睡、催上班
 
@@ -613,9 +613,21 @@ class ProactiveEngine:
         return clipped + "\n...（上下文已截断，只保留最相关部分）"
 
     def _get_latest_session_id(self) -> str | None:
-        """获取最新的活跃会话 ID"""
+        """获取最新的活跃会话 ID，跳过临时会话优先找真实对话会话。"""
         if not self.memory:
             return None
+        # 优先使用当前绑定的 session（仅限真实用户会话格式）
+        current = getattr(self.memory, "_session_id", None)
+        if current and current.startswith("gw_"):
+            return current
+        # 如果没有真实会话，尝试从数据库找最新的
+        try:
+            sessions = self.memory.working.list_sessions(limit=1)
+            if sessions:
+                return sessions[0].get("session_id")
+        except Exception:
+            pass
+        return None
         # 优先使用当前绑定的 session
         current = getattr(self.memory, "_session_id", None) or getattr(self.memory.working, "current_session", None)
         if current:
@@ -668,7 +680,7 @@ class ProactiveEngine:
         if not session_id:
             return data
         try:
-            recent_messages = list(self.memory.working.get_recent(session_id=session_id, turns=6))
+            recent_messages = list(self.memory.working.get_recent(session_id=session_id, turns=10))
         except Exception as exc:
             logger.warning(f"[ProactiveEngine] 获取最近主动现场失败: {exc}")
             return data
@@ -753,7 +765,7 @@ class ProactiveEngine:
         if state is None:
             return True
         max_daily = int(getattr(self.config, "idle_ping_max_daily", 2) or 0)
-        today_count = int(getattr(state, "today_proactive_count", 0) or 0)
+        today_count = int(getattr(state, "idle_ping_count_today", 0) or 0)
         if max_daily >= 0 and today_count >= max_daily:
             return False
         cooldown_minutes = int(getattr(self.config, "idle_ping_cooldown_minutes", 180) or 0)
@@ -1018,7 +1030,7 @@ class ProactiveEngine:
                     recent = list(recent_scene_anchor.get("non_proactive_recent") or [])
                 else:
                     session_id = self._get_latest_session_id()
-                    recent = self.memory.working.get_recent(session_id=session_id, turns=5)
+                    recent = self.memory.working.get_recent(session_id=session_id, turns=10)
                 if recent:
                     lines.append("最近对话：")
                     for msg in reversed(recent[:10]):
@@ -1046,12 +1058,41 @@ class ProactiveEngine:
                 if hasattr(self.memory, "user_understanding"):
                     known_keys = self.memory.user_understanding.known_fact_keys()
                 facts = {k: v for k, v in facts.items() if k not in known_keys}
+
+                # 只保留最近更新的 N 条事实，避免大量陈旧事实淹没最近对话上下文。
+                # get_all_facts 已经按 updated_at DESC 排序，取前 N 条即可。
+                facts = dict(list(facts.items())[:30])
+
                 if facts:
-                    lines.append("\n用户的事实/偏好补充：")
+                    lines.append("")
+                    lines.append("用户的事实/偏好补充（仅含近期相关记录）：")
                     for k, v in facts.items():
                         lines.append(f"  {k}：{v}")
             except Exception:
                 pass
+        
+        # 注入 Session State：从 session_state 中提取当前场景锚点
+        try:
+            session_id = recent_scene_anchor.get("session_id") if recent_scene_anchor else None
+            if not session_id:
+                session_id = self._get_latest_session_id()
+            if session_id and self.memory and hasattr(self.memory, "session_state"):
+                active_states = await self.memory.session_state.list_active_states(str(session_id))
+                if active_states:
+                    scene_lines = []
+                    for item in active_states[:12]:
+                        scope = str(getattr(item, "scope", "") or "").strip()
+                        predicate = str(getattr(item, "predicate", "") or "").strip()
+                        value = str(getattr(item, "value", "") or "").strip()
+                        if scope and predicate and value:
+                            scene_lines.append(f"  - {scope} / {predicate}: {value}")
+                    if scene_lines:
+                        # 插入到最近对话和用户理解之间
+                        lines.append("")
+                        lines.append("【当前场景状态】")
+                        lines.extend(scene_lines)
+        except Exception:
+            pass
 
         context = "\n".join(lines) if lines else "最近没什么特别的对话"
         if max_chars is not None:
@@ -1635,7 +1676,7 @@ class ProactiveEngine:
             logger.error(f"[ProactiveEngine] LLM 判断失败: {e}")
             return ProactiveDecision(False, f"LLM错误: {e}")
 
-    async def generate_message(self, reason: str = "", *, motive_type: str = "idle_reminder") -> str:
+    async def generate_message(self, reason: str = "", *, motive_type: str = "idle_reminder", prompt_context: str = "") -> str:
         """让 LLM 生成主动消息"""
         # 判断场景
         has_topic = False
@@ -1686,6 +1727,10 @@ class ProactiveEngine:
                     "使用方式：这些内容只用来影响你的语气、承接方式和分寸，不要像翻资料或复述档案。",
                 ) if part
             ).strip()
+
+        if prompt_context:
+            user_memory_context = prompt_context + "\n\n" + user_memory_context
+
 
         # 获取 Bot 可分享的生活事件
         bot_life_context = ""
@@ -1995,13 +2040,13 @@ class ProactiveEngine:
     async def send_contextual_proactive_message(self, motive: "ProactiveMotive") -> bool:
         motive_type = getattr(getattr(motive, "type", None), "value", str(getattr(motive, "type", "")))
         if motive_type in {"idle_ping", "idle_reminder"}:
-            message = await self._generate_message_compat(motive.reason, motive_type=motive_type)
+            message = await self._generate_message_compat(motive.reason, motive_type=motive_type, prompt_context=getattr(motive, "prompt_context", ""))
         else:
             message = await self.generate_contextual_message(motive)
         target = self._target_with_motive_metadata(motive)
         return await self._send_proactive_message(message, target=target)
 
-    async def _generate_message_compat(self, reason: str, *, motive_type: str = "idle_reminder") -> str:
+    async def _generate_message_compat(self, reason: str, *, motive_type: str = "idle_reminder", prompt_context: str = "") -> str:
         """Call generate_message while tolerating older test/runtime monkeypatches."""
         generate = self.generate_message
         try:
@@ -2009,7 +2054,7 @@ class ProactiveEngine:
         except (TypeError, ValueError):
             signature = None
         if signature is not None and "motive_type" not in signature.parameters:
-            return await generate(reason)
+            return await generate(reason, prompt_context=prompt_context)
         return await generate(reason, motive_type=motive_type)
 
     def _fallback_contextual_message(self, motive: "ProactiveMotive") -> str:
@@ -2024,6 +2069,11 @@ class ProactiveEngine:
             return "刚才路过窗边的时候想起你了，就冒个泡。"
         if motive_type == "idle_reminder":
             return "想起你今天还有事要忙，就顺手戳你一下。"
+        if motive_type == "scenario_progression":
+            motive_meta = getattr(motive, "metadata", None) or {}
+            if motive_meta.get("scenario_actor") == "bot":
+                return "刚才那件事忙完了，顺手来找你一下。"
+            return "刚才的事情怎么样了呀？我就随口问问。"
         return self._get_fallback_message("with_topic")
 
     def _target_with_motive_metadata(self, motive: "ProactiveMotive") -> dict | None:
@@ -2532,6 +2582,8 @@ class ProactiveEngine:
             return False
 
         self.state.increment_proactive()
+        if motive_kind == "idle_ping":
+            self.state.increment_idle_ping()
         # Bot 主动发消息后，用户没回复则增加未回复计数
         self.state.unreplied_count = self.state.unreplied_count + 1
 

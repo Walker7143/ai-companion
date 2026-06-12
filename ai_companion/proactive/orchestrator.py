@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from datetime import datetime
 
 from ..temporal_guard import build_local_time_context, is_event_visible_at_current_time
@@ -15,23 +16,49 @@ class ProactiveOrchestrator:
         self.engine = engine
         self.config = engine.config
         self.task_store = task_store
+        self.last_tick_diagnostics: dict = {}
+        self.scenario_tracker = None
 
     async def tick(self, now: datetime | None = None) -> bool:
         now = now or datetime.now()
+        self.last_tick_diagnostics = {
+            "now": now.isoformat(),
+            "continuity_active": self._is_continuity_active(),
+            "candidate_types": [],
+            "selected_type": None,
+            "selected_reason": "",
+            "dispatch_allowed": False,
+            "dispatch_block_reason": "",
+            "idle_hours": self._idle_hours_value(),
+            "idle_threshold_hours": float(getattr(self.config, "idle_threshold_hours", 24)),
+            "legacy_idle_fallback_allowed": False,
+        }
         if not self._is_continuity_active():
             return False
         if self.task_store is not None:
             self.task_store.expire_overdue(now)
         motive = self._select_motive(now)
         if motive is None:
+            self.last_tick_diagnostics["dispatch_block_reason"] = "no_motive_selected"
+            self.last_tick_diagnostics["legacy_idle_fallback_allowed"] = self.should_fallback_to_legacy_idle()
             return False
-        if not self._can_dispatch(motive, now):
+        self.last_tick_diagnostics["selected_type"] = self._motive_type_value(motive)
+        self.last_tick_diagnostics["selected_reason"] = str(getattr(motive, "reason", "") or "")
+        can_dispatch, block_reason = self._can_dispatch(motive, now)
+        self.last_tick_diagnostics["dispatch_allowed"] = can_dispatch
+        self.last_tick_diagnostics["dispatch_block_reason"] = block_reason
+        if not can_dispatch:
+            self.last_tick_diagnostics["legacy_idle_fallback_allowed"] = self.should_fallback_to_legacy_idle()
             return False
         sent = await self.engine.send_contextual_proactive_message(motive)
         if sent and motive.task:
             self.task_store.mark_completed(motive.task.id, completed_at=now)
         if sent and motive.type == ProactiveMotiveType.LIFE_EVENT:
             self._mark_life_event_shared(motive, now)
+        if sent and motive.type == ProactiveMotiveType.SCENARIO_PROGRESSION:
+            self._mark_scenario_progressed(motive, now)
+        self._tick_scenario_cleanup(now)
+        self.last_tick_diagnostics["legacy_idle_fallback_allowed"] = False
         return bool(sent)
 
     def _select_motive(self, now: datetime) -> ProactiveMotive | None:
@@ -39,12 +66,21 @@ class ProactiveOrchestrator:
         life = self._life_event_motive(now)
         if life:
             candidates.append(life)
+        scenario_motives = self._scenario_progression_motives(now)
+        candidates.extend(scenario_motives)
         idle_ping = self._idle_ping_motive(now)
         if idle_ping:
             candidates.append(idle_ping)
         idle_reminder = self._idle_reminder_motive(now)
         if idle_reminder:
             candidates.append(idle_reminder)
+        self.last_tick_diagnostics["candidate_types"] = [self._motive_type_value(item) for item in candidates]
+        logger.debug(
+            "[ProactiveOrchestrator] motive candidates=%s idle_hours=%.2f threshold=%.2f",
+            self.last_tick_diagnostics["candidate_types"],
+            self.last_tick_diagnostics["idle_hours"],
+            self.last_tick_diagnostics["idle_threshold_hours"],
+        )
         if not candidates:
             return None
         return sorted(candidates, key=lambda m: (-m.priority, m.task.due_at if m.task else now))[0]
@@ -54,17 +90,17 @@ class ProactiveOrchestrator:
             getattr(self.config, "is_active", True)
         )
 
-    def _can_dispatch(self, motive: ProactiveMotive, now: datetime) -> bool:
+    def _can_dispatch(self, motive: ProactiveMotive, now: datetime) -> tuple[bool, str]:
         if not getattr(self.config, "is_active", True):
             logger.debug("[ProactiveOrchestrator] 跳过主动 motive：Bot 非 active 模式")
-            return False
+            return False, "bot_not_active"
 
         state = getattr(self.engine, "state", None)
         if state is not None:
             annoyance_level = self._safe_int(getattr(state, "annoyance_level", 0), default=0)
             if annoyance_level >= 9:
                 logger.info("[ProactiveOrchestrator] 跳过主动 motive：用户反感度过高")
-                return False
+                return False, "annoyance_too_high"
 
             max_daily = self._safe_int(getattr(self.config, "max_daily", 5), default=5)
             today_count = self._safe_int(getattr(state, "today_proactive_count", 0), default=0)
@@ -75,23 +111,40 @@ class ProactiveOrchestrator:
                     today_count,
                     max_daily,
                 )
-                return False
+                return False, "max_daily_reached"
 
             if self._is_cooldown_active(state, now):
                 logger.info(
                     "[ProactiveOrchestrator] 跳过主动 motive：仍在最小间隔冷却中 type=%s",
                     self._motive_type_value(motive),
                 )
-                return False
+                return False, "min_interval_cooldown"
+
+            # Probability gates for idle_ping and idle_reminder
+            if motive.type == ProactiveMotiveType.IDLE_PING:
+                prob = self._safe_float(getattr(self.config, "idle_ping_contact_probability", 0.5), default=0.5)
+                if prob < 1.0 and random.random() > prob:
+                    logger.debug("[ProactiveOrchestrator] idle_ping 未通过概率门控 prob=%.2f", prob)
+                    return False, "idle_ping_probability_gate"
+            elif motive.type == ProactiveMotiveType.IDLE_REMINDER:
+                prob = self._safe_float(getattr(self.config, "idle_reminder_contact_probability", 0.5), default=0.5)
+                if prob < 1.0 and random.random() > prob:
+                    logger.debug("[ProactiveOrchestrator] idle_reminder 未通过概率门控 prob=%.2f", prob)
+                    return False, "idle_reminder_probability_gate"
+            elif motive.type == ProactiveMotiveType.SCENARIO_PROGRESSION:
+                prob = self._safe_float(getattr(self.config, "scenario_progression_contact_probability", 0.7), default=0.7)
+                if prob < 1.0 and random.random() > prob:
+                    logger.debug("[ProactiveOrchestrator] scenario_progression 未通过概率门控 prob=%.2f", prob)
+                    return False, "scenario_progression_probability_gate"
 
         if not self._is_preferred_contact_time(now):
             logger.info(
                 "[ProactiveOrchestrator] 跳过主动 motive：不在可主动联系时段 type=%s",
                 self._motive_type_value(motive),
             )
-            return False
+            return False, "outside_preferred_contact_time"
 
-        return True
+        return True, ""
 
     def _is_cooldown_active(self, state, now: datetime) -> bool:
         min_interval_hours = self._safe_float(getattr(self.config, "min_interval_hours", 0.0), default=0.0)
@@ -252,17 +305,24 @@ class ProactiveOrchestrator:
             return None
         if not self._idle_hours_reached():
             return None
+        if not getattr(self.engine, "can_send_idle_ping_now", lambda _now: True)(now):
+            return None
         scene_anchor_checker = getattr(self.engine, "has_scene_anchor_for_idle_ping", None)
         has_scene_anchor = bool(scene_anchor_checker()) if callable(scene_anchor_checker) else False
-        if not has_scene_anchor and getattr(self.config, "idle_ping_requires_scene_anchor", True):
-            return None
-        if not getattr(self.engine, "can_send_idle_ping_now", lambda _now: True)(now):
+        if has_scene_anchor:
+            return ProactiveMotive(
+                type=ProactiveMotiveType.IDLE_PING,
+                priority=20,
+                reason="想轻轻冒个泡，顺着最近的关系温度和现场发一句",
+                prompt_context="这是一条轻量陪伴型主动消息。像熟人顺手发来的一句话，不催生活安排，不强行盘问状态。",
+            )
+        if getattr(self.config, "idle_ping_requires_scene_anchor", False):
             return None
         return ProactiveMotive(
             type=ProactiveMotiveType.IDLE_PING,
-            priority=20,
-            reason="想轻轻冒个泡，顺着最近的关系温度和现场发一句",
-            prompt_context="这是一条轻量陪伴型主动消息。像熟人顺手发来的一句话，不催生活安排，不强行盘问状态。",
+            priority=18,
+            reason="没有最近现场参考，发一条通用陪伴消息",
+            prompt_context="这是一条无现场参考的通用陪伴消息。没有最近对话可以参照，不要假装知道对方在做什么，只能根据关系温度和你的性格自然地轻轻冒个泡，表达存在感和一点挂念。",
         )
 
     def _idle_reminder_motive(self, now: datetime) -> ProactiveMotive | None:
@@ -272,30 +332,110 @@ class ProactiveOrchestrator:
             return None
         grounded_scene = bool(getattr(self.engine, "has_grounded_idle_reminder_scene", lambda: False)())
         recent_scene_anchor = bool(getattr(self.engine, "has_scene_anchor_for_idle_ping", lambda: False)())
-        if not grounded_scene and not recent_scene_anchor:
-            return None
         if grounded_scene:
             reason = "最近现场里有明确的作息/安排线索，可以做一条低频兜底提醒"
             prompt_context = "这是一条最后兜底的提醒型主动消息。只有在最近现场已经明确出现作息、吃饭、上班、休息等线索时，才允许轻轻提醒一次。"
-        else:
+        elif recent_scene_anchor:
             reason = "虽然最近没有明确作息线索，但刚发生过真实对话，可以发一条低频的承接式问候"
             prompt_context = "这是一条低频兜底的承接型主动消息。最近已经有过真实对话，但没有明确作息安排，不要装作知道对方在做什么，只能顺着最近聊天留下的温度轻轻接一句。"
+        else:
+            reason = "没有任何现场参考，仅表达纯粹的存在感和陪伴"
+            prompt_context = "这是一条纯陪伴兜底消息。没有最近对话现场可以参照，只根据关系温度和你的性格自然地发一句话，不要假装知道对方在做什么或催问状态。"
         return ProactiveMotive(
             type=ProactiveMotiveType.IDLE_REMINDER,
-            priority=10,
+            priority=8,
             reason=reason,
             prompt_context=prompt_context,
         )
 
-    def _idle_hours_reached(self) -> bool:
-        calc = getattr(self.engine, "_calc_idle_hours", None)
-        if calc is None:
-            return False
+    def _scenario_progression_motives(self, now: datetime) -> list[ProactiveMotive]:
+        if not getattr(self.config, "scenario_progression_enabled", False):
+            return []
+        if self.scenario_tracker is None:
+            return []
+        progressed = self.scenario_tracker.list_progressed(now)
+        motives = []
+        max_daily = getattr(self.config, "scenario_progression_max_daily", 3)
+        priority = getattr(self.config, "scenario_progression_priority", 45)
+        for entry in progressed[:max_daily]:
+            actor_label = "你" if entry.actor == "bot" else "对方"
+            prompt_context = (
+                f"【场景递进】\n"
+                f"之前{actor_label}提到：{entry.description}\n"
+                f"现在已经过了约{entry.estimated_duration_minutes}分钟，这个场景应该已经结束或进入下一阶段。\n"
+            )
+            if entry.progression_hint:
+                prompt_context += f"演进提示：{entry.progression_hint}\n"
+            prompt_context += (
+                "要求：自然承接，像熟人顺手关心一句，不要像系统提醒或查岗。"
+            )
+            motives.append(ProactiveMotive(
+                type=ProactiveMotiveType.SCENARIO_PROGRESSION,
+                priority=priority,
+                reason=f"之前{'你' if entry.actor == 'bot' else '对方'}提到「{entry.description}」，现在应该已经结束了",
+                prompt_context=prompt_context,
+                bypass_idle_threshold=True,
+                metadata={"scenario_id": entry.id, "scenario_actor": entry.actor},
+            ))
+        return motives
+
+    def _mark_scenario_progressed(self, motive: ProactiveMotive, now: datetime) -> None:
+        scenario_id = (motive.metadata or {}).get("scenario_id")
+        if not scenario_id or self.scenario_tracker is None:
+            return
         try:
-            idle_hours = float(calc())
-        except Exception:
+            self.scenario_tracker.store.mark_progressed(str(scenario_id))
+        except Exception as exc:
+            logger.warning("[ProactiveOrchestrator] 标记场景已跟进失败: %s", exc)
+
+    def _tick_scenario_cleanup(self, now: datetime) -> None:
+        if self.scenario_tracker is None:
+            return
+        try:
+            self.scenario_tracker.tick_cleanup(now)
+        except Exception as exc:
+            logger.warning("[ProactiveOrchestrator] 场景清理失败: %s", exc)
+
+    def _idle_hours_reached(self) -> bool:
+        idle_hours = self._idle_hours_value()
+        if idle_hours is None:
             return False
         return idle_hours >= float(getattr(self.config, "idle_threshold_hours", 24))
+
+    def _idle_hours_value(self) -> float | None:
+        calc = getattr(self.engine, "_calc_idle_hours", None)
+        if calc is None:
+            return None
+        try:
+            return float(calc())
+        except Exception:
+            return None
+
+    def should_fallback_to_legacy_idle(self) -> bool:
+        if not getattr(self.config, "idle_reminder_enabled", True):
+            return False
+        if self.last_tick_diagnostics.get("candidate_types"):
+            return False
+        if self.last_tick_diagnostics.get("selected_type"):
+            return False
+        if self.last_tick_diagnostics.get("dispatch_allowed"):
+            return False
+        block_reason = str(self.last_tick_diagnostics.get("dispatch_block_reason") or "")
+        if block_reason not in {"", "no_motive_selected"}:
+            return False
+        idle_hours = self._idle_hours_value()
+        if idle_hours is None:
+            return False
+        threshold = float(getattr(self.config, "idle_threshold_hours", 24))
+        effective_threshold = max(threshold, 3.0)
+        if idle_hours < effective_threshold:
+            return False
+        logger.info(
+            "[ProactiveOrchestrator] 允许 legacy idle 兜底：idle_hours=%.2f effective_threshold=%.2f",
+            idle_hours,
+            effective_threshold,
+        )
+        return True
 
     def _context_for_life_event(self, event) -> str:
         lines = [

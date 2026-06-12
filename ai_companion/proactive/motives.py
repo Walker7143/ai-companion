@@ -26,6 +26,7 @@ class ProactiveMotiveType(str, Enum):
     LIFE_EVENT = "life_event"
     IDLE_PING = "idle_ping"
     IDLE_REMINDER = "idle_reminder"
+    SCENARIO_PROGRESSION = "scenario_progression"
 
 
 def _parse_dt(value: str | datetime | None) -> datetime | None:

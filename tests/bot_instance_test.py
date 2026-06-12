@@ -559,6 +559,7 @@ class PersonaEngineDefaultStyleTest(unittest.TestCase):
         self.assertIn("严格区分用户和你的视角", prompt)
         self.assertIn("倒计时", prompt)
         self.assertIn("不要把它改写成你自己的内心活动", prompt)
+        self.assertIn("不要把你自己的名字当成用户称呼", prompt)
 
     def test_turn_prompt_derives_action_guidance_from_persona(self):
         with TemporaryDirectory(prefix="persona-action-guidance-") as td:
@@ -744,6 +745,48 @@ class ResponseStyleEmbodiedActionPolishTest(unittest.TestCase):
         self.assertIn("（小声）", polished)
         self.assertIn("我在。", polished)
         self.assertIn("你慢慢讲。", polished)
+
+
+class BotInstanceIdentitySanitizationTest(unittest.TestCase):
+    def test_prepare_generation_messages_sanitizes_self_name_user_address(self):
+        bot = BotInstance({"id": "yangsisi", "name": "杨思思"}, model=EchoModel(), refusal_enabled=False)
+
+        messages = bot._prepare_generation_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": "好啊杨思思，你今天要是敢把猫放我被子上，我就把你的陆巡钥匙藏起来！",
+                }
+            ]
+        )
+
+        self.assertEqual(
+            messages[-1]["content"],
+            "好啊，你今天要是敢把猫放我被子上，我就把你的陆巡钥匙藏起来！",
+        )
+
+    def test_prepare_generation_suffix_drops_bot_name_relation_noise(self):
+        bot = BotInstance({"id": "yangsisi", "name": "杨思思"}, model=EchoModel(), refusal_enabled=False)
+
+        suffix = bot._prepare_generation_suffix(
+            "【你对用户的理解】\n"
+            "- 与杨思思有咖啡相关赌约: 用户和杨思思之间有一个与咖啡有关的打赌或约定，具体内容未明说\n"
+            "- 用户喜欢微甜拿铁"
+        )
+
+        self.assertNotIn("与杨思思有咖啡相关赌约", suffix)
+        self.assertIn("用户喜欢微甜拿铁", suffix)
+
+    def test_polish_response_sanitizes_self_name_user_address(self):
+        bot = BotInstance({"id": "yangsisi", "name": "杨思思"}, model=EchoModel(), refusal_enabled=False)
+
+        polished = bot._polish_response(
+            "宣示主权？杨思思我告诉你，你这叫公开耍赖。",
+            {},
+            {},
+        )
+
+        self.assertEqual(polished, "宣示主权？我告诉你，你这叫公开耍赖。")
 
 
 class BotInstanceEmbodiedPromptTest(unittest.IsolatedAsyncioTestCase):

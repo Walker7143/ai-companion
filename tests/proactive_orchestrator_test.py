@@ -366,6 +366,58 @@ class ProactiveOrchestratorTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(engine.sent[0].type.value, "idle_reminder")
             self.assertIn("真实对话", engine.sent[0].reason)
 
+    async def test_idle_gap_without_motive_allows_legacy_fallback(self):
+        from ai_companion.proactive.conversation_task_store import ConversationTaskStore
+        from ai_companion.proactive.orchestrator import ProactiveOrchestrator
+
+        class Config:
+            continuity_enabled = True
+            is_active = True
+            deferred_reply_enabled = False
+            topic_continuation_enabled = False
+            emotion_followup_enabled = False
+            life_event_motive_enabled = False
+            idle_ping_enabled = False
+            idle_reminder_enabled = True
+            idle_threshold_hours = 3
+            preferred_contact_times = ["00:00-23:59"]
+            max_daily = 10
+            min_interval_hours = 0
+
+        class State:
+            today_proactive_count = 0
+            annoyance_level = 0
+
+            def get_cooldown(self, trigger_name):
+                return None
+
+        class Engine:
+            bot_id = "bot-a"
+            config = Config()
+            state = State()
+
+            async def send_contextual_proactive_message(self, motive):
+                raise AssertionError("should not send contextual motive")
+
+            def has_scene_anchor_for_idle_ping(self):
+                return False
+
+            def has_grounded_idle_reminder_scene(self):
+                return False
+
+            def _calc_idle_hours(self):
+                return 6
+
+        with TemporaryDirectory(prefix="proactive-legacy-idle-fallback-") as td:
+            engine = Engine()
+            orchestrator = ProactiveOrchestrator(engine=engine, task_store=ConversationTaskStore(td))
+
+            sent = await orchestrator.tick(now=datetime(2026, 5, 9, 10, 0, 0))
+
+            self.assertFalse(sent)
+            self.assertTrue(orchestrator.should_fallback_to_legacy_idle())
+            self.assertEqual(orchestrator.last_tick_diagnostics["dispatch_block_reason"], "no_motive_selected")
+
     async def test_life_event_motive_marks_event_shared_after_send(self):
         from ai_companion.proactive.conversation_task_store import ConversationTaskStore
         from ai_companion.proactive.life_state import LifeEvent, LifeState
@@ -1104,6 +1156,64 @@ class ProactiveSchedulerFallbackGuardTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(engine.orchestrator.calls, 1)
         self.assertEqual(engine.legacy_calls, 0)
+
+    async def test_scheduler_can_fallback_to_legacy_idle_when_orchestrator_allows_it(self):
+        from ai_companion.proactive.scheduler import ProactiveScheduler
+
+        class Config:
+            is_active = True
+            idle_reminder_enabled = True
+            check_interval = 60
+            preferred_contact_times = ["00:00-23:59"]
+            timezone = "Asia/Shanghai"
+
+        class State:
+            def __init__(self):
+                self._state = {}
+
+            def save(self):
+                return None
+
+        class Orchestrator:
+            def __init__(self):
+                self.calls = 0
+                self.last_tick_diagnostics = {
+                    "candidate_types": [],
+                    "selected_type": None,
+                    "dispatch_allowed": False,
+                    "dispatch_block_reason": "no_motive_selected",
+                    "idle_hours": 6,
+                    "legacy_idle_fallback_allowed": True,
+                }
+
+            async def tick(self):
+                self.calls += 1
+                return False
+
+            def should_fallback_to_legacy_idle(self):
+                return True
+
+        class Engine:
+            bot_id = "bot-a"
+            config = Config()
+
+            def __init__(self):
+                self.state = State()
+                self.orchestrator = Orchestrator()
+                self.legacy_calls = 0
+
+            async def check_and_maybe_remind(self):
+                self.legacy_calls += 1
+                return "legacy message"
+
+        engine = Engine()
+        scheduler = ProactiveScheduler(engine)
+        scheduler._is_golden_hour = lambda: True
+
+        await scheduler._tick()
+
+        self.assertEqual(engine.orchestrator.calls, 1)
+        self.assertEqual(engine.legacy_calls, 1)
 
 
 if __name__ == "__main__":

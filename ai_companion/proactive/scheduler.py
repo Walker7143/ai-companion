@@ -87,8 +87,20 @@ class ProactiveScheduler:
             if sent:
                 logger.info("[ProactiveScheduler] 已通过 motive orchestrator 发送主动消息")
             else:
-                logger.debug("[ProactiveScheduler] 已启用 motive orchestrator，本轮不再回退到旧 idle_reminder 路径")
-            return
+                diag = getattr(orchestrator, "last_tick_diagnostics", {}) or {}
+                logger.info(
+                    "[ProactiveScheduler] motive orchestrator 未发送: candidates=%s selected=%s allowed=%s block=%s idle_hours=%s legacy_fallback=%s",
+                    diag.get("candidate_types"),
+                    diag.get("selected_type"),
+                    diag.get("dispatch_allowed"),
+                    diag.get("dispatch_block_reason"),
+                    diag.get("idle_hours"),
+                    diag.get("legacy_idle_fallback_allowed"),
+                )
+                if not getattr(orchestrator, "should_fallback_to_legacy_idle", lambda: False)():
+                    logger.debug("[ProactiveScheduler] 已启用 motive orchestrator，本轮不再回退到旧 idle_reminder 路径")
+                    return
+                logger.info("[ProactiveScheduler] motive orchestrator 本轮无可发内容，回退到 legacy idle_reminder 兜底")
 
         # 老 idle_reminder 只保留为向后兼容兜底；默认风格由 motive 层统一控制。
         if self.config.idle_reminder_enabled and self.config.is_active:

@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .user_understanding import UserUnderstandingStore
+from .user_understanding import UserUnderstandingStore, _looks_like_bot_name_relation_noise
 from .vector import VectorMemoryDocument, VectorMemoryStore
 from ...persona.runtime_profile import (
     load_runtime_profile,
@@ -130,13 +130,15 @@ class SemanticStore:
     def __init__(self, db_path: str, max_chars: int = 4400,
                  persona_backstory_path: str = None,
                  user_understanding: Optional[UserUnderstandingStore] = None,
-                 vector_store: Optional[VectorMemoryStore] = None):
+                 vector_store: Optional[VectorMemoryStore] = None,
+                 bot_name: str = ""):
         self.db_path = db_path
         self.max_chars = max_chars  # 单条事实的最大字符数（可配置）
         self._summarizer: Optional[object] = None
         self._persona_backstory_path = persona_backstory_path
         self._user_understanding = user_understanding
         self._vector_store = vector_store
+        self.bot_name = str(bot_name or "").strip()
 
     def set_summarizer(self, summarizer):
         """注入 LLM 适配器（用于事实抽取）"""
@@ -325,6 +327,9 @@ class SemanticStore:
         注意：SQLite 中 NULL 不等于 NULL，因此 session_id=None 的多条记录会共存。
         对于 attitude_score 等跨会话共享的事实，写入时应确保先删除旧记录。
         """
+        if _looks_like_bot_name_relation_noise(key, value, bot_name=self.bot_name):
+            logger.info("[Semantic] 跳过 bot 自名第三方事实: key=%s value=%s", key, value)
+            return
         value = self._trim_value(value)
         now = datetime.now().isoformat()
         category = category or self._infer_category(key, value)
@@ -712,6 +717,8 @@ class SemanticStore:
             rows = await cursor.fetchall()
             result = {}
             for key, value in rows:
+                if _looks_like_bot_name_relation_noise(key, value, bot_name=self.bot_name):
+                    continue
                 # Rows are newest first; keep the freshest value for duplicate keys
                 # across sessions instead of letting older rows overwrite it.
                 if key not in result:
@@ -755,6 +762,8 @@ class SemanticStore:
             rows = await cursor.fetchall()
         result = []
         for row in rows:
+            if _looks_like_bot_name_relation_noise(row[1], row[2], bot_name=self.bot_name):
+                continue
             result.append({
                 "id": row[0],
                 "key": row[1],

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ai_companion.memory.session_state import (
     ResponseStateConsistencyChecker,
+    SessionStateItem,
     SessionStateDiff,
     SessionStateResolver,
     SessionStateStore,
@@ -753,6 +754,107 @@ class SessionStateMemoryTest(unittest.IsolatedAsyncioTestCase):
         active = await self.store.list_active_states("assistant-scene")
         self.assertFalse(result["written"])
         self.assertFalse(active)
+
+    async def test_resolver_rejects_non_sessional_personal_history_scope(self):
+        result = await self.resolver.apply_diff(
+            store=self.store,
+            session_id="assistant-history",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "assistant/personal_history",
+                        "subject": "assistant",
+                        "predicate": "pet_ownership_fact",
+                        "value": "用户记忆中的宠物饲养被助手否认",
+                        "confidence": 0.95,
+                        "source_kind": "joint_inference",
+                    }
+                ]
+            ),
+            evidence_turn_id="t-history",
+        )
+        active = await self.store.list_active_states("assistant-history")
+        self.assertFalse(result["written"])
+        self.assertFalse(active)
+
+    async def test_resolver_rejects_unknown_source_kind(self):
+        result = await self.resolver.apply_diff(
+            store=self.store,
+            session_id="invalid-source-kind",
+            diff=SessionStateDiff(
+                upserts=[
+                    {
+                        "scope": "trip/lodging",
+                        "subject": "shared",
+                        "predicate": "booking_status",
+                        "value": "酒店已订好",
+                        "confidence": 0.95,
+                        "source_kind": "bot_explicit",
+                    }
+                ]
+            ),
+            evidence_turn_id="t-invalid-source-kind",
+        )
+        active = await self.store.list_active_states("invalid-source-kind")
+        self.assertFalse(result["written"])
+        self.assertFalse(active)
+
+    async def test_memory_engine_filters_non_sessional_state_from_generation_context(self):
+        from ai_companion.memory.engine import MemoryEngine
+
+        td = tempfile.mkdtemp(prefix="session-state-generation-filter-")
+        try:
+            engine = MemoryEngine("session_filter_bot", Path(td), config={"embedding": "none"})
+            await engine.init()
+            engine.start_session("s-filter")
+            now = datetime.now().isoformat()
+            await engine.session_state.upsert_state(
+                SessionStateItem(
+                    state_id="bad-state",
+                    session_id="s-filter",
+                    scope="assistant/personal_history",
+                    subject="assistant",
+                    predicate="pet_ownership_fact",
+                    value="用户记忆中的宠物饲养被助手否认",
+                    confidence=1.0,
+                    status="active",
+                    effective_at=now,
+                    source_kind="joint_inference",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await engine.session_state.upsert_state(
+                SessionStateItem(
+                    state_id="good-state",
+                    session_id="s-filter",
+                    scope="trip/lodging",
+                    subject="assistant",
+                    predicate="arrival_time_expectation_mismatch",
+                    value="助手误以为用户明天到，实际今天已抵达，属于时间认知错误",
+                    confidence=0.95,
+                    status="active",
+                    effective_at=now,
+                    source_kind="user_explicit",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+            ctx = await engine.load_context("我都到大理了")
+
+            rendered_states = ctx.get("session_state") or []
+            self.assertTrue(rendered_states)
+            self.assertTrue(all(item.get("scope") != "assistant/personal_history" for item in rendered_states))
+            self.assertIn("arrival_time_expectation_mismatch", str(rendered_states))
+            self.assertNotIn("用户记忆中的宠物饲养被助手否认", ctx.get("system_suffix", ""))
+            self.assertIn("助手误以为用户明天到", ctx.get("system_suffix", ""))
+
+            await engine.close()
+            del engine
+            gc.collect()
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
 
     async def test_rule_checker_blocks_copresent_action_when_user_is_remote(self):
         checker = ResponseStateConsistencyChecker()
